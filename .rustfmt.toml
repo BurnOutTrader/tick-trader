@@ -1,0 +1,7 @@
+# rustfmt (stable) configuration for this workspace
+# Note: Enforcing exactly one blank line between items is only supported via unstable options
+# (blank_lines_lower_bound/upper_bound) on nightly rustfmt. On stable, these options are ignored
+# with warnings, so we omit them to keep CI clean.
+
+# Add other stable options here as needed. For now we keep the default behavior.
+edition = "2024"
