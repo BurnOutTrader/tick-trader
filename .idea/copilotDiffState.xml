@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="CopilotDiffPersistence">
+    <option name="pendingDiffs">
+      <map>
+        <entry key="$PROJECT_DIR$/crates/tt-types/Cargo.toml">
+          <value>
+            <PendingDiffInfo>
+              <option name="filePath" value="$PROJECT_DIR$/crates/tt-types/Cargo.toml" />
+              <option name="originalContent" value="[package]&#10;name = &quot;tt-types&quot;&#10;version = &quot;0.1.0&quot;&#10;edition = &quot;2024&quot;&#10;&#10;[dependencies]&#10;chrono = { workspace = true}&#10;rust_decimal = { workspace = true }&#10;serde = { workspace = true }&#10;strum_macros = {workspace = true}&#10;anyhow = { workspace = true }&#10;thiserror = { workspace = true }&#10;tracing = { workspace = true }&#10;once_cell = { workspace = true }&#10;ustr = { workspace = true }&#10;rkyv = { workspace = true}&#10;nonzero = &quot;0.2.0&quot;&#10;futures = &quot;0.3.31&quot;&#10;[features]&#10;default = []&#10;&#10;[dev-dependencies]&#10;proptest = &quot;1.8.0&quot;&#10;rstest = { workspace = true }&#10;&#10;" />
+              <option name="updatedContent" value="[package]&#10;name = &quot;tt-types&quot;&#10;version = &quot;0.1.0&quot;&#10;edition = &quot;2024&quot;&#10;&#10;[dependencies]&#10;chrono = { workspace = true}&#10;rust_decimal = { workspace = true }&#10;serde = { workspace = true }&#10;strum_macros = {workspace = true}&#10;anyhow = { workspace = true }&#10;thiserror = { workspace = true }&#10;tracing = { workspace = true }&#10;once_cell = { workspace = true }&#10;ustr = { workspace = true }&#10;rkyv = { workspace = true}&#10;nonzero = &quot;0.2.0&quot;&#10;futures = &quot;0.3.31&quot;&#10;# Added for rate limiter impl&#10;_tokio = { workspace = true, package = &quot;tokio&quot; }&#10;dashmap = { workspace = true }&#10;[features]&#10;default = []&#10;&#10;[dev-dependencies]&#10;proptest = &quot;1.8.0&quot;&#10;rstest = { workspace = true }" />
+            </PendingDiffInfo>
+          </value>
+        </entry>
+      </map>
+    </option>
+  </component>
+</project>
