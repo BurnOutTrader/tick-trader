@@ -14,10 +14,14 @@ tracing = { workspace = true }
 once_cell = { workspace = true }
 ustr = { workspace = true }
 rkyv = { workspace = true}
+nonzero = "0.2.0"
+futures = "0.3.31"
+# Added for rate limiter impl
+_tokio = { workspace = true, package = "tokio" }
+dashmap = { workspace = true }
 [features]
 default = []
 
 [dev-dependencies]
 proptest = "1.8.0"
 rstest = { workspace = true }
-

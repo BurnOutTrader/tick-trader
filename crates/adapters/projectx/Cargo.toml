@@ -8,6 +8,7 @@ edition = "2024"
 name = "projectx"
 
 [dependencies]
+tt-types = { path = "../../tt-types" }
 ahash = { workspace = true }
 anyhow = { workspace = true }
 async-stream = { workspace = true }

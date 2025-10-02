@@ -39,7 +39,6 @@ use tracing::{error, info};
 
 use crate::common::{
     consts::PROJECT_X_VENUE,
-    futures_helpers::{extract_root, parse_symbol_from_contract_id},
 };
 // ---------------- Enums ----------------
 
@@ -228,38 +227,12 @@ pub struct GatewayTrade {
     pub volume: i64,
 }
 
-// ---------------- Message bus ----------------
-
-/// Standardized messages emitted by the ProjectX websocket client data stream
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", content = "data")]
-pub enum NautilusWsMessage {
-    Data(Vec<Data>),
-    Deltas(OrderBookDeltas),
-    Instrument(Box<InstrumentAny>),
-    AccountUpdate(AccountState),
-    OrderRejected(OrderRejected),
-    OrderCancelRejected(OrderCancelRejected),
-    OrderModifyRejected(OrderModifyRejected),
-    ExecutionReports(Vec<ExecutionReport>),
-    Error(PxWebSocketError),
-    Raw(Value),
-    Reconnected,
-}
 
 /// A minimal ProjectX websocket error payload for surfacing client/server errors
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PxWebSocketError {
     pub code: Option<String>,
     pub message: String,
-}
-
-/// Execution report wrapper using Nautilus standard report types
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "report")]
-pub enum ExecutionReport {
-    Order(OrderStatusReport),
-    Fill(FillReport),
 }
 
 // ---------------- Client scaffold ----------------
@@ -291,11 +264,6 @@ pub struct PxWebSocketClient {
     signal: Arc<AtomicBool>,
     /// Monotonic counter for tracking outbound requests/messages
     request_id_counter: Arc<AtomicU64>,
-
-    /// Internal receiver used to feed data to Nautilus via `stream()`
-    rx: Option<Arc<UnboundedReceiver<NautilusWsMessage>>>,
-    /// Internal sender used by callbacks to emit messages into the stream
-    tx: Option<Arc<UnboundedSender<NautilusWsMessage>>>,
 
     // ---- User hub subscriptions ----
     /// Whether the broadcast "accounts" stream is subscribed
@@ -342,7 +310,7 @@ pub struct PxWebSocketClient {
     positions: Arc<DashMap<InstrumentId, GatewayUserPosition>>,
 
     // ---- Orders ----
-    pending_orders: Arc<DashMap<InstrumentId, GatewayUserOrder>>,
+    pending_orders: Arc<DashMap<Sy, GatewayUserOrder>>,
 
     trades: Arc<DashMap<InstrumentId, Vec<GatewayUserTrade>>>,
 }
@@ -350,7 +318,6 @@ pub struct PxWebSocketClient {
 impl PxWebSocketClient {
     /// Create a new websocket client with optional bearer token
     pub fn new(base_url: impl Into<String>, bearer_token: Option<String>, firm: String) -> Self {
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<NautilusWsMessage>();
         Self {
             firm,
             base_url: base_url.into(),
@@ -359,8 +326,6 @@ impl PxWebSocketClient {
             market_connected: Arc::new(AtomicBool::new(false)),
             signal: Arc::new(AtomicBool::new(false)),
             request_id_counter: Arc::new(AtomicU64::new(1)),
-            rx: Some(Arc::new(rx)),
-            tx: Some(Arc::new(tx)),
             user_accounts_subscribed: Arc::new(AtomicBool::new(false)),
             user_orders_subs: Arc::new(DashMap::new()),
             user_positions_subs: Arc::new(DashMap::new()),
