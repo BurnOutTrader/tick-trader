@@ -1,9 +1,6 @@
-
 use std::{num::NonZeroU32, prelude::v1::*, time::Duration};
 use nonzero::nonzero;
-use nonzero_ext::nonzero;
 
-use super::nanos::Nanos;
 
 /// A rate-limiting quota.
 ///
@@ -161,10 +158,8 @@ impl Quota {
     ///
     /// Panics if the division result is 0 or exceeds `u32::MAX`.
     pub(crate) fn from_gcra_parameters(t: u64, tau: u64) -> Self {
-
         // Validate division won't be zero or overflow
         assert!(t != 0, "Invalid GCRA parameter: t cannot be zero");
-
         let division_result = tau / t;
         assert!(
             division_result != 0,
@@ -174,11 +169,10 @@ impl Quota {
             u32::try_from(division_result).is_ok(),
             "Invalid GCRA parameters: tau/t exceeds u32::MAX"
         );
-
         // We've verified the result is non-zero and fits in u32
         let max_burst = NonZeroU32::new(division_result as u32)
             .expect("Division result should be non-zero after validation");
-        let replenish_1_per = t.into();
+        let replenish_1_per = std::time::Duration::from_nanos(t);
         Self {
             max_burst,
             replenish_1_per,
@@ -186,39 +180,82 @@ impl Quota {
     }
 }
 
-////////////////////////////////////////////////////////////////////////////////
-// Tests
-////////////////////////////////////////////////////////////////////////////////
-// #[cfg(test)]
-// mod test {
-//     use nonzero_ext::nonzero;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::num::NonZeroU32;
+    use std::time::Duration;
 
-//     use super::*;
-//     use rstest::rstest;
+    #[test]
+    fn test_per_second() {
+        let q = Quota::per_second(NonZeroU32::new(5).unwrap());
+        assert_eq!(q.burst_size(), NonZeroU32::new(5).unwrap());
+        assert_eq!(q.replenish_interval(), Duration::from_millis(200));
+    }
 
-//     #[rstest]
-//     fn time_multiples() {
-//         let hourly = Quota::per_hour(nonzero!(1u32));
-//         let minutely = Quota::per_minute(nonzero!(1u32));
-//         let secondly = Quota::per_second(nonzero!(1u32));
+    #[test]
+    fn test_per_minute() {
+        let q = Quota::per_minute(NonZeroU32::new(60).unwrap());
+        assert_eq!(q.burst_size(), NonZeroU32::new(60).unwrap());
+        assert_eq!(q.replenish_interval(), Duration::from_secs(1));
+    }
 
-//         assert_eq!(
-//             hourly.replenish_interval() / 60,
-//             minutely.replenish_interval()
-//         );
-//         assert_eq!(
-//             minutely.replenish_interval() / 60,
-//             secondly.replenish_interval()
-//         );
-//     }
+    #[test]
+    fn test_per_hour() {
+        let q = Quota::per_hour(NonZeroU32::new(3600).unwrap());
+        assert_eq!(q.burst_size(), NonZeroU32::new(3600).unwrap());
+        assert_eq!(q.replenish_interval(), Duration::from_secs(1));
+    }
 
-//     #[rstest]
-//     fn period_error_cases() {
-//         assert!(Quota::with_period(Duration::from_secs(0)).is_none());
+    #[test]
+    fn test_with_period_zero() {
+        assert!(Quota::with_period(Duration::from_secs(0)).is_none());
+    }
 
-//         #[allow(deprecated)]
-//         {
-//             assert!(Quota::new(nonzero!(1u32), Duration::from_secs(0)).is_none());
-//         }
-//     }
-// }
+    #[test]
+    fn test_with_period_nonzero() {
+        let q = Quota::with_period(Duration::from_secs(10)).unwrap();
+        assert_eq!(q.burst_size(), NonZeroU32::new(1).unwrap());
+        assert_eq!(q.replenish_interval(), Duration::from_secs(10));
+    }
+
+    #[test]
+    fn test_allow_burst() {
+        let q = Quota::per_second(NonZeroU32::new(1).unwrap()).allow_burst(NonZeroU32::new(10).unwrap());
+        assert_eq!(q.burst_size(), NonZeroU32::new(10).unwrap());
+    }
+
+    #[test]
+    fn test_burst_size_replenished_in() {
+        let q = Quota::per_second(NonZeroU32::new(2).unwrap());
+        assert_eq!(q.burst_size_replenished_in(), Duration::from_secs(1));
+    }
+
+    #[test]
+    fn test_from_gcra_parameters_valid() {
+        let t = 1_000_000_000; // 1 second in nanos
+        let tau = 5_000_000_000; // 5 seconds in nanos
+        let q = Quota::from_gcra_parameters(t, tau);
+        assert_eq!(q.burst_size(), NonZeroU32::new(5).unwrap());
+        assert_eq!(q.replenish_interval(), Duration::from_nanos(1_000_000_000));
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_from_gcra_parameters_zero_t() {
+        Quota::from_gcra_parameters(0, 1);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_from_gcra_parameters_zero_division() {
+        Quota::from_gcra_parameters(2, 1);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_from_gcra_parameters_overflow() {
+        // tau/t > u32::MAX
+        Quota::from_gcra_parameters(1, (u32::MAX as u64 + 1) * 2);
+    }
+}

@@ -2692,6 +2692,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "dashmap",
  "futures",
  "nonzero",
  "once_cell",
@@ -2702,6 +2703,7 @@ dependencies = [
  "serde",
  "strum_macros",
  "thiserror",
+ "tokio",
  "tracing",
  "ustr",
 ]
