@@ -46,9 +46,12 @@ impl From<DecimalDef> for rust_decimal::Decimal {
     }
 }
 
-// Note: Decimal fields that are wrapped in other containers (e.g., Option, Vec) work
-// with #[rkyv(with = DecimalDef)] directly for the inner type, and containers are handled
-// by rkyv generically.
+// Note on containers (Vec/Option/etc):
+// These adapters implement ArchiveWith/SerializeWith/DeserializeWith for the bare types
+// (Decimal and DateTime<Utc>) only. In rkyv 0.8, you cannot apply the adapter directly to a
+// container like Vec<Decimal> or Option<DateTime<Utc>>. If you need container support, adapt
+// the element type (e.g., define a new wrapper type for the element) or create a container-
+// specific adapter. The types in this crate use the adapters on direct fields.
 
 // For convenience re-export common names if needed by callers
 pub use DecimalDef as RkyvDecimal;
