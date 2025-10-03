@@ -21,7 +21,7 @@ The backtest engine will bypass the api client and will instead run internally, 
 We will support
 Ticks,
 Quotes,
-Depth10,
+Depth,
 Bars1s,
 Bars1m,
 Bars1h,

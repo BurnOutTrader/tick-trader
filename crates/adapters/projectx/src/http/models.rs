@@ -1,10 +1,13 @@
 use std::str::FromStr;
 use chrono::{DateTime, Utc};
+use rust_decimal::Decimal;
+use rust_decimal::prelude::FromPrimitive;
 use serde::{Deserialize, Serialize};
 use tokio::{sync::watch, task::JoinHandle};
 use tt_types::base_data::{Candle, Exchange, Resolution};
 use tt_types::securities::futures_helpers::extract_root;
-use tt_types::maps::get_symbol_info;
+use tt_types::securities::market_hours::hours_for_exchange;
+use tt_types::securities::symbols::Instrument;
 
 #[allow(unused)]
 #[derive(Debug, Serialize)]
@@ -122,55 +125,50 @@ impl RetrieveBarsResponse {
     /// - size_precision: desired size precision for the instrument
     pub fn to_engine_candles(
         &self,
-        instrument_id: String,
+        instrument: Instrument,
+        resolution: Resolution,
+        exchange: Exchange,
     ) -> anyhow::Result<Vec<Candle>> {
-        let root = extract_root(&instrument_id);
-        let symbol_info = get_symbol_info(&root)
-            .ok_or_else(|| anyhow::anyhow!("unknown symbol info for root {}", root))?;
-
+        self.bars.iter().map(|bar| Self::bar_to_candle(bar, instrument.clone(), resolution, exchange)).collect()
     }
 
     pub fn bar_to_candle(
-        &self,
         bar: &PxApiBar,
-        instrument_id: String,
+        instrument: Instrument,
         resolution: Resolution,
         exchange: Exchange,
     ) -> anyhow::Result<Candle> {
         let time_start = DateTime::<Utc>::from_str(&bar.t)?;
         let time_end = match resolution {
             Resolution::Daily => {
-                let market_hours = get_m
+                let _market_hours = hours_for_exchange(exchange);
+                todo!()
             }
-            Resolution::Weekly => {}
+            Resolution::Weekly => {
+                let _market_hours = hours_for_exchange(exchange);
+                todo!()
+            }
             _ => time_start + resolution.as_duration()
         };
-    }
+        let root = extract_root(&instrument);
         let candle = Candle {
-            symbol: instrument_id,
+            symbol: root,
+            instrument,
             exchange,
-            time_start: Default::default(),
-            time_end: Default::default(),
-            open: Default::default(),
-            high: Default::default(),
-            low: Default::default(),
-            close: Default::default(),
-            volume: Default::default(),
+            time_start,
+            time_end,
+            open: Decimal::from_f64(bar.o).unwrap_or_default(),
+            high: Decimal::from_f64(bar.h).unwrap_or_default(),
+            low: Decimal::from_f64(bar.l).unwrap_or_default(),
+            close: Decimal::from_f64(bar.c).unwrap_or_default(),
+            volume: Decimal::from_i64(bar.v).unwrap_or_default(),
             ask_volume: Default::default(),
             bid_volume: Default::default(),
-            resolution: Resolution::Ticks,
-        }
+            resolution,
+        };
 
-
-        Ok(Candle {
-            instrument_id: instrument_id.clone(),
-            timestamp: bar.t.clone(),
-            open,
-            high,
-            low,
-            close,
-            volume,
-        })
+        Ok(candle)
+    }
 }
 
 // ---------------- Contract Available ----------------
@@ -439,31 +437,6 @@ pub struct PositionInfo {
     pub type_: i32,
     pub size: i64,
     pub average_price: f64,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub enum OrderStatus {
-    None = 0,
-    Open = 1,
-    Filled = 2,
-    Cancelled = 3,
-    Expired = 4,
-    Rejected = 5,
-    Pending = 6,
-}
-impl OrderStatus {
-    pub fn from_i32(num: i32) -> Self {
-        match num {
-            0 => OrderStatus::None,
-            1 => OrderStatus::Open,
-            2 => OrderStatus::Filled,
-            3 => OrderStatus::Cancelled,
-            4 => OrderStatus::Expired,
-            5 => OrderStatus::Rejected,
-            6 => OrderStatus::Pending,
-            _ => panic!("unknown order status {}", num),
-        }
-    }
 }
 
 #[derive(Debug, Deserialize, Clone)]

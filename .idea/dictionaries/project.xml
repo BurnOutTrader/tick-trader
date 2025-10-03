@@ -2,9 +2,17 @@
   <dictionary name="project">
     <words>
       <w>eurex</w>
+      <w>fdax</w>
+      <w>fdxm</w>
+      <w>fdxs</w>
+      <w>fesb</w>
+      <w>fesx</w>
+      <w>fsxe</w>
+      <w>fxxp</w>
       <w>globex</w>
       <w>iceeu</w>
       <w>iceus</w>
+      <w>mjnk</w>
       <w>mnqz</w>
       <w>nymex</w>
     </words>

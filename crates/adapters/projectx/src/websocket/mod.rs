@@ -19,14 +19,15 @@
 //! stub client API that documents the intended usage and subscription surface.
 //! A full SignalR/WebSocket implementation will be added in a follow-up change.
 
+use std::str::FromStr;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
-use chrono::Utc;
+use chrono::{DateTime, ParseResult, Utc};
 use dashmap::DashMap;
-use futures_util::{Stream, StreamExt};
+use futures_util::{Stream, StreamExt, SinkExt};
 use log::warn;
 use serde::{Deserialize, Serialize};
 use serde_json::{Error, Value};
@@ -36,10 +37,66 @@ use tokio::{
 };
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{error, info};
+use tt_types::securities::symbols::{get_symbol_info, Instrument, SymbolInfo};
 
-use crate::common::{
-    consts::PROJECT_X_VENUE,
-};
+// Minimal WebSocket client used by PxWebSocketClient
+use futures_util::stream::BoxStream;
+use rust_decimal::Decimal;
+use rust_decimal::prelude::FromPrimitive;
+use rust_decimal_macros::dec;
+use tokio_tungstenite::{connect_async, WebSocketStream};
+use tokio_tungstenite::tungstenite;
+use tokio::net::TcpStream;
+use tokio_tungstenite::MaybeTlsStream;
+use tt_types::accounts::account::{AccountId, AccountName, AccountSnapShot};
+use tt_types::base_data::{Price, Side, Tick, Volume};
+use tt_types::orders::{OrderEventType, OrderType};
+use tt_types::securities::futures_helpers::extract_root;
+
+#[derive(Debug, Clone)]
+pub struct WebSocketConfig {
+    pub url: String,
+    pub headers: Vec<(String, String)>,
+    pub message_handler: Option<()>,
+    pub heartbeat: Option<u64>,
+    pub heartbeat_msg: Option<String>,
+    pub ping_handler: Option<()>,
+    pub reconnect_timeout_ms: Option<u64>,
+    pub reconnect_delay_initial_ms: Option<u64>,
+    pub reconnect_delay_max_ms: Option<u64>,
+    pub reconnect_backoff_factor: Option<f64>,
+    pub reconnect_jitter_ms: Option<u64>,
+}
+
+#[derive(Debug)]
+pub struct WebSocketClient {
+    write: Arc<tokio::sync::Mutex<futures_util::stream::SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>>>,
+}
+
+impl WebSocketClient {
+    pub async fn connect_stream(
+        config: WebSocketConfig,
+        _protocols: Vec<String>,
+        _proxy: Option<()>,
+        _tls: Option<()>,
+    ) -> anyhow::Result<(
+        BoxStream<'static, Result<Message, tungstenite::Error>>,
+        WebSocketClient,
+    )> {
+        // Note: we currently ignore custom headers in config to avoid extra dependencies.
+        // If necessary, this can be extended to build a Request with headers.
+        let (ws_stream, _response) = connect_async(&config.url).await?;
+        let (write, read) = ws_stream.split();
+        let client = WebSocketClient { write: Arc::new(tokio::sync::Mutex::new(write)) };
+        let reader: BoxStream<'static, Result<Message, tungstenite::Error>> = Box::pin(read);
+        Ok((reader, client))
+    }
+
+    pub async fn send_text(&self, data: String, _request_id: Option<u64>) -> anyhow::Result<()> {
+        let mut write = self.write.lock().await;
+        write.send(Message::Text(data.into())).await.map_err(|e| anyhow::anyhow!(e))
+    }
+}
 // ---------------- Enums ----------------
 
 /// DOM type for depth/DOM events
@@ -58,41 +115,6 @@ pub enum DomType {
     NewBestBid = 9,
     NewBestAsk = 10,
     Fill = 11,
-}
-
-/// Order side for orders and trades
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Serialize, Deserialize)]
-#[repr(i32)]
-pub enum OrderSide {
-    Bid = 0,
-    Ask = 1,
-}
-
-/// Order type for orders
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Serialize, Deserialize)]
-#[repr(i32)]
-pub enum OrderType {
-    Unknown = 0,
-    Limit = 1,
-    Market = 2,
-    StopLimit = 3,
-    Stop = 4,
-    TrailingStop = 5,
-    JoinBid = 6,
-    JoinAsk = 7,
-}
-
-/// Order status for orders
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Serialize, Deserialize)]
-#[repr(i32)]
-pub enum OrderStatus {
-    None = 0,
-    Open = 1,
-    Filled = 2,
-    Cancelled = 3,
-    Expired = 4,
-    Rejected = 5,
-    Pending = 6,
 }
 
 /// Trade log type for market trades
@@ -235,6 +257,29 @@ pub struct PxWebSocketError {
     pub message: String,
 }
 
+fn map_order_type(order_type: i32) -> OrderType {
+    match order_type {
+        1 | 6 | 7 => OrderType::Limit,
+        2 => OrderType::Market,
+        4 => OrderType::StopMarket,
+        5 => OrderType::TrailingStopMarket,
+        _ => OrderType::Unknown,
+    }
+}
+
+pub fn map_status(status: i32) -> OrderEventType {
+    match status {
+        0 => OrderEventType::Initialized,
+        1 => OrderEventType::Accepted,
+        2 => OrderEventType::Filled,
+        3 => OrderEventType::Canceled,
+        4 => OrderEventType::Expired,
+        5 => OrderEventType::Rejected,
+        6 => OrderEventType::PendingUpdate,
+        _ => OrderEventType::Initialized,
+    }
+}
+
 // ---------------- Client scaffold ----------------
 
 #[allow(unused)]
@@ -297,22 +342,17 @@ pub struct PxWebSocketClient {
     user_reader_task: Arc<tokio::sync::Mutex<Option<JoinHandle<()>>>>,
     market_ws: Arc<tokio::sync::Mutex<Option<WebSocketClient>>>,
     market_reader_task: Arc<tokio::sync::Mutex<Option<JoinHandle<()>>>>,
-
-    // ---- Order book state ----
-    /// Persisted 10-level books per instrument (updated in-place on depth events)
-    market_books: Arc<DashMap<nautilus_model::identifiers::InstrumentId, Box<OrderBookDepth10>>>,
-    /// Mapping from contract_id -> instrument_id to facilitate cleanup on unsubscribe
-    contract_to_instrument: Arc<DashMap<String, nautilus_model::identifiers::InstrumentId>>,
+    
 
     precisions: Arc<DashMap<String, u8>>,
 
     // ---- Positions ----
-    positions: Arc<DashMap<InstrumentId, GatewayUserPosition>>,
+    positions: Arc<DashMap<Instrument, GatewayUserPosition>>,
 
     // ---- Orders ----
-    pending_orders: Arc<DashMap<Sy, GatewayUserOrder>>,
+    pending_orders: Arc<DashMap<Instrument, GatewayUserOrder>>,
 
-    trades: Arc<DashMap<InstrumentId, Vec<GatewayUserTrade>>>,
+    trades: Arc<DashMap<Instrument, Vec<GatewayUserTrade>>>,
 }
 
 impl PxWebSocketClient {
@@ -322,6 +362,7 @@ impl PxWebSocketClient {
             firm,
             base_url: base_url.into(),
             bearer_token,
+            bus: tt_bus::MessageBus::new(),
             user_connected: Arc::new(AtomicBool::new(false)),
             market_connected: Arc::new(AtomicBool::new(false)),
             signal: Arc::new(AtomicBool::new(false)),
@@ -341,8 +382,6 @@ impl PxWebSocketClient {
             user_reader_task: Arc::new(tokio::sync::Mutex::new(None)),
             market_ws: Arc::new(tokio::sync::Mutex::new(None)),
             market_reader_task: Arc::new(tokio::sync::Mutex::new(None)),
-            market_books: Arc::new(DashMap::new()),
-            contract_to_instrument: Arc::new(DashMap::new()),
             precisions: Arc::new(DashMap::new()),
             positions: Arc::new(Default::default()),
             pending_orders: Arc::new(Default::default()),
@@ -455,10 +494,7 @@ impl PxWebSocketClient {
                     }
                     Ok(Message::Frame(_)) => {}
                     Err(err) => {
-                        this.emit_error(PxWebSocketError {
-                            code: Some("reader".into()),
-                            message: format!("user reader error: {err}"),
-                        });
+                        log::warn!("user reader error: {}", err);
                         break;
                     }
                 }
@@ -545,10 +581,7 @@ impl PxWebSocketClient {
                     }
                     Ok(Message::Frame(_)) => {}
                     Err(err) => {
-                        this.emit_error(PxWebSocketError {
-                            code: Some("reader".into()),
-                            message: format!("market reader error: {err}"),
-                        });
+                        log::error!("market reader error: {}", err);
                         break;
                     }
                 }
@@ -561,68 +594,6 @@ impl PxWebSocketClient {
 
         self.market_connected.store(true, Ordering::SeqCst);
         Ok(())
-    }
-
-    /// Send a message into the internal stream if the sender is available
-    fn send(&self, msg: NautilusWsMessage) {
-        if let Some(tx) = &self.tx {
-            let _ = tx.send(msg);
-        }
-    }
-
-    /// Emit a reconnection signal to downstream consumers
-    pub fn emit_reconnected(&self) {
-        self.send(NautilusWsMessage::Reconnected);
-    }
-
-    /// Emit standardized market data payloads
-    pub fn emit_data(&self, data: Vec<Data>) {
-        self.send(NautilusWsMessage::Data(data));
-    }
-
-    /// Emit standardized order book deltas
-    pub fn emit_deltas(&self, deltas: OrderBookDeltas) {
-        self.send(NautilusWsMessage::Deltas(deltas));
-    }
-
-    /// Emit a discovered/updated instrument
-    pub fn emit_instrument(&self, instrument: InstrumentAny) {
-        self.send(NautilusWsMessage::Instrument(Box::new(instrument)));
-    }
-
-    /// Emit a standardized account update
-    pub fn emit_account_update(&self, state: AccountState) {
-        self.send(NautilusWsMessage::AccountUpdate(state));
-    }
-
-    /// Emit standardized rejection events
-    pub fn emit_order_rejected(&self, evt: OrderRejected) {
-        self.send(NautilusWsMessage::OrderRejected(evt));
-    }
-    pub fn emit_order_cancel_rejected(&self, evt: OrderCancelRejected) {
-        self.send(NautilusWsMessage::OrderCancelRejected(evt));
-    }
-    pub fn emit_order_modify_rejected(&self, evt: OrderModifyRejected) {
-        self.send(NautilusWsMessage::OrderModifyRejected(evt));
-    }
-
-    /// Emit execution reports (status/fill)
-    pub fn emit_execution_reports(&self, reports: Vec<ExecutionReport>) {
-        self.send(NautilusWsMessage::ExecutionReports(reports));
-    }
-
-    /// Emit an error or raw payload
-    pub fn emit_error(&self, error: PxWebSocketError) {
-        self.send(NautilusWsMessage::Error(error));
-    }
-    pub fn emit_raw(&self, value: Value) {
-        self.send(NautilusWsMessage::Raw(value));
-    }
-
-    /// Clear all persisted order books and contract mapping (e.g., on disconnect)
-    pub fn clear_books(&self) {
-        self.market_books.clear();
-        self.contract_to_instrument.clear();
     }
 
     async fn send_market_text(&self, data: String) -> anyhow::Result<()> {
@@ -650,12 +621,13 @@ impl PxWebSocketClient {
     }
 
     fn handle_signalr_message(&self, val: Value) {
-        // Basic handling: surface raw messages and emit reconnection event on ping/completion as needed
-        // We expect market hub to send Invocation messages with targets like GatewayQuote, GatewayTrade, GatewayDepth
+        use tt_types::base_data::Bbo;
+        use tt_types::keys::Topic;
+        use tt_types::wire::{QuoteBatch, TickBatch};
+
         if let Some(t) = val.get("type").and_then(|v| v.as_i64()) {
             match t {
                 1 => {
-                    // Invocation todo finish this instead of raw
                     if let Some(target) = val.get("target").and_then(|v| v.as_str()) {
                         match target {
                             // Market hub events
@@ -669,76 +641,37 @@ impl PxWebSocketClient {
                                     } else {
                                         args.get(0).unwrap_or(&Value::Null)
                                     };
-                                    if let Ok(px_quote) =
-                                        serde_json::from_value::<GatewayQuote>(data_val.clone())
-                                    {
-                                        use nautilus_core::{
-                                            UnixNanos, datetime::iso8601_to_unix_nanos,
-                                        };
-                                        use nautilus_model::{
-                                            identifiers::{InstrumentId, Symbol},
-                                            types::{Price, Quantity},
-                                        };
-
-                                        use crate::common::consts::PROJECT_X_VENUE;
-                                        // Build instrument ID from symbol + venue
-                                        if let Ok(symbol) =
-                                            Symbol::new_checked(px_quote.symbol.clone())
-                                        {
-                                            let instrument_id =
-                                                InstrumentId::new(symbol, *PROJECT_X_VENUE);
-                                            let prec = *self
-                                                .precisions
-                                                .entry(extract_root(&px_quote.symbol))
-                                                .or_insert_with(|| {
-                                                    crate::common::root_specs::get_precision(
-                                                        &extract_root(&px_quote.symbol),
-                                                    )
-                                                    .unwrap_or(6)
-                                                });
-                                            // Prices: use bestBid/bestAsk; ProjectX quote payload does not include bid/ask sizes -> default to 0
-                                            let bid_price = Price::new(px_quote.best_bid, prec);
-                                            let ask_price = Price::new(px_quote.best_ask, prec);
-                                            let bid_size = Quantity::new(0.0, 0);
-                                            let ask_size = Quantity::new(0.0, 0);
-                                            // Timestamps: prefer timestamp, fallback to lastUpdated; default to 0 on parse error
-                                            let ts_evt =
-                                                iso8601_to_unix_nanos(px_quote.timestamp.clone())
-                                                    .or_else(|_| {
-                                                        iso8601_to_unix_nanos(
-                                                            px_quote.last_updated.clone(),
-                                                        )
-                                                    })
-                                                    .unwrap_or_else(|_| UnixNanos::from(0));
-                                            let ts_init = UnixNanos::from(
-                                                std::time::SystemTime::now()
-                                                    .duration_since(std::time::UNIX_EPOCH)
-                                                    .map(|d| d.as_nanos() as u64)
-                                                    .unwrap_or(0),
-                                            );
-                                            let quote = QuoteTick {
-                                                instrument_id,
-                                                bid_price,
-                                                ask_price,
+                                    if let Ok(px_quote) = serde_json::from_value::<GatewayQuote>(data_val.clone()) {
+                                        if let Ok(instrument) = Instrument::from_str(px_quote.symbol.as_str()) {
+                                            let symbol = extract_root(&instrument);
+                                            let bid = Price::from_f64(px_quote.best_bid).unwrap_or_default();
+                                            let ask = Price::from_f64(px_quote.best_ask).unwrap_or_default();
+                                            let bid_size = Volume::from(0);
+                                            let ask_size = Volume::from(0);
+                                            // prefer timestamp then last_updated
+                                            let time = DateTime::<Utc>::from_str(px_quote.timestamp.as_str())
+                                                .or_else(|_| DateTime::<Utc>::from_str(px_quote.last_updated.as_str()))
+                                                .unwrap_or_else(|_| Utc::now());
+                                            let bbo = tt_types::base_data::Bbo {
+                                                symbol,
+                                                instrument,
+                                                bid,
                                                 bid_size,
+                                                ask,
                                                 ask_size,
-                                                ts_event: ts_evt,
-                                                ts_init,
+                                                time,
+                                                bid_orders: None,
+                                                ask_orders: None,
+                                                venue_seq: None,
+                                                is_snapshot: Some(false),
                                             };
-                                            info!("{}", quote);
-                                            self.emit_data(vec![Data::from(quote)]);
+                                            info!(target: "projectx.ws", "BBO: {:?}", bbo);
                                         } else {
-                                            // If symbol invalid for InstrumentId, emit raw for debugging
-                                            info!(target: "projectx.ws", "GatewayQuote (invalid symbol): {}", data_val);
-                                            self.emit_raw(val);
+                                            info!(target: "projectx.ws", "GatewayQuote (invalid instrument): {}", px_quote.symbol);
                                         }
                                     } else {
-                                        // If deserialization fails, emit raw for debugging
                                         info!(target: "projectx.ws", "GatewayQuote (unparsed): {}", data_val);
-                                        self.emit_raw(val);
                                     }
-                                } else {
-                                    self.emit_raw(val);
                                 }
                             }
                             "GatewayTrade" => {
@@ -752,594 +685,62 @@ impl PxWebSocketClient {
                                     };
                                     match serde_json::from_value::<GatewayTrade>(data_val.clone()) {
                                         Ok(px_trade) => {
-                                            use nautilus_core::{
-                                                UnixNanos, datetime::iso8601_to_unix_nanos,
-                                            };
-                                            use nautilus_model::{
-                                                identifiers::{InstrumentId, Symbol},
-                                                types::{Price, Quantity},
-                                            };
-
-                                            use crate::common::consts::PROJECT_X_VENUE;
-
                                             // Build instrument id from symbolId
-                                            if let Ok(symbol) =
-                                                Symbol::new_checked(px_trade.symbol_id.clone())
+                                            if let Ok(instrument) = Instrument::from_str(px_trade.symbol_id.as_str())
                                             {
-                                                let instrument_id =
-                                                    InstrumentId::new(symbol, *PROJECT_X_VENUE);
-                                                // Map types
-                                                let prec = *self
-                                                    .precisions
-                                                    .entry(extract_root(&px_trade.symbol_id))
-                                                    .or_insert_with(|| {
-                                                        crate::common::root_specs::get_precision(
-                                                            &extract_root(&px_trade.symbol_id),
-                                                        )
-                                                        .unwrap_or(6)
-                                                    });
-                                                let price = Price::new(px_trade.price, prec);
-                                                let size =
-                                                    Quantity::non_zero(px_trade.volume as f64, 0);
+                                                let symbol = extract_root(&instrument);
+
+                                                let price = match Price::from_f64(px_trade.price) {
+                                                    Some(p) => p,
+                                                    None => {
+                                                        log::warn!("invalid price for {}", px_trade.price);
+                                                        return;
+                                                    }
+                                                };
+                                                let size = match Volume::from_i64(px_trade.volume) {
+                                                    Some(s) => s,
+                                                    None => {
+                                                        log::warn!("invalid size for {}", px_trade.volume);
+                                                        return;
+                                                    }
+                                                };
                                                 let aggressor = match px_trade.r#type {
-                                                    0 => AggressorSide::Buyer,
-                                                    1 => AggressorSide::Seller,
-                                                    _ => AggressorSide::NoAggressor,
+                                                    0 => Side::Buy,
+                                                    1 => Side::Sell,
+                                                    _ => Side::None,
                                                 };
-                                                // Derive a trade ID (ProjectX trade stream lacks one)
-                                                let tid_str = format!(
-                                                    "{}-{}-{}",
-                                                    px_trade.symbol_id,
-                                                    px_trade.timestamp,
-                                                    px_trade.price
-                                                );
-                                                let trade_id = TradeId::new(tid_str);
 
-                                                let ts_evt: UnixNanos = iso8601_to_unix_nanos(
-                                                    px_trade.timestamp.clone(),
-                                                )
-                                                .unwrap_or(UnixNanos::from(0));
-                                                let ts_init = UnixNanos::from(
-                                                    std::time::SystemTime::now()
-                                                        .duration_since(std::time::UNIX_EPOCH)
-                                                        .map(|d| d.as_nanos() as u64)
-                                                        .unwrap_or(0),
-                                                );
+                                               let time = match DateTime::<Utc>::from_str(px_trade.timestamp.as_str()) {
+                                                   Ok(t) => t,
+                                                   Err(e) => {
+                                                       log::warn!("invalid timestamp for {}: {}", px_trade.timestamp, e);
+                                                       return;
+                                                   }
+                                               };
 
-                                                let tick = TradeTick {
-                                                    instrument_id,
+                                                let tick = Tick {
+                                                    symbol,
+                                                    instrument,
                                                     price,
-                                                    size,
-                                                    aggressor_side: aggressor,
-                                                    trade_id,
-                                                    ts_event: ts_evt,
-                                                    ts_init,
+                                                    volume: Default::default(),
+                                                    time,
+                                                    side: Side::Buy,
+                                                    venue_seq: None,
                                                 };
-                                                info!("{}", tick);
-                                                self.emit_data(vec![Data::Trade(tick)]);
-                                            } else {
-                                                info!(target: "projectx.ws", "GatewayTrade (invalid symbol): {}", data_val);
-                                                self.emit_raw(val);
-                                            }
+                                                info!("{:?}", tick);
+                                            } 
                                         }
                                         Err(_) => {
                                             info!(target: "projectx.ws", "GatewayTrade (unparsed): {}", data_val);
-                                            self.emit_raw(val);
                                         }
                                     }
-                                } else {
-                                    self.emit_raw(val);
                                 }
                             }
                             "GatewayDepth" => {
-                                // Extract args and handle payload which may be an array of up to 10 levels
+                               // Extract args and handle payload which may be an array of up to 10 levels
                                 let args_opt = val.get("arguments").and_then(|a| a.as_array());
                                 if let Some(args) = args_opt {
-                                    let (contract_id_opt, data_val) = if args.len() >= 2 {
-                                        (args.get(0).and_then(|v| v.as_str()), &args[1])
-                                    } else {
-                                        (None, args.get(0).unwrap_or(&Value::Null))
-                                    };
-
-                                    use nautilus_core::{
-                                        UnixNanos, datetime::iso8601_to_unix_nanos,
-                                    };
-                                    use nautilus_model::{
-                                        identifiers::{InstrumentId, Symbol},
-                                        types::{Price, Quantity},
-                                    };
-
-                                    use crate::common::consts::PROJECT_X_VENUE;
-
-                                    // Derive symbol (ROOT.CODE) from ProjectX contract ID using common helper
-                                    let symbol_id = if let Some(cid) = contract_id_opt {
-                                        crate::common::futures_helpers::parse_symbol_from_contract_id(cid).unwrap_or_default()
-                                    } else {
-                                        String::new()
-                                    };
-
-                                    if let Ok(symbol) = Symbol::new_checked(symbol_id.clone()) {
-                                        let instrument_id =
-                                            InstrumentId::new(symbol, *PROJECT_X_VENUE);
-                                        // Remember mapping for cleanup on unsubscribe
-                                        if let Some(cid) = contract_id_opt {
-                                            self.contract_to_instrument
-                                                .insert(cid.to_string(), instrument_id);
-                                        }
-                                        // Resolve price precision for this symbol
-                                        let prec = *self
-                                            .precisions
-                                            .entry(extract_root(&symbol_id))
-                                            .or_insert_with(|| {
-                                                crate::common::root_specs::get_precision(
-                                                    &extract_root(&symbol_id),
-                                                )
-                                                .unwrap_or(6)
-                                            });
-
-                                        // Get or create persistent book
-                                        let mut entry = self
-                                            .market_books
-                                            .entry(instrument_id)
-                                            .or_insert_with(|| {
-                                                let empty = BookOrder::default();
-                                                let bids = [empty; 10];
-                                                let asks = [empty; 10];
-                                                let bid_counts = [0u32; 10];
-                                                let ask_counts = [0u32; 10];
-                                                Box::new(OrderBookDepth10::new(
-                                                    instrument_id,
-                                                    bids,
-                                                    asks,
-                                                    bid_counts,
-                                                    ask_counts,
-                                                    0,
-                                                    0,
-                                                    UnixNanos::from(0),
-                                                    UnixNanos::from(0),
-                                                ))
-                                            });
-                                        let mut_book = entry.value_mut();
-
-                                        let mut ts_evt: UnixNanos = UnixNanos::from(0);
-
-                                        if let Some(levels) = data_val.as_array() {
-                                            // Reset counts and overwrite levels per side in the order received
-                                            let mut b_idx: usize = 0;
-                                            let mut a_idx: usize = 0;
-                                            mut_book.bid_counts = [0u32; 10];
-                                            mut_book.ask_counts = [0u32; 10];
-                                            mut_book.bids = [BookOrder::default(); 10];
-                                            mut_book.asks = [BookOrder::default(); 10];
-
-                                            // Build deltas: CLEAR + ADDs for snapshot arrays
-                                            let mut deltas_vec: Vec<OrderBookDelta> = Vec::new();
-                                            let ts_init_now = UnixNanos::from(
-                                                std::time::SystemTime::now()
-                                                    .duration_since(std::time::UNIX_EPOCH)
-                                                    .map(|d| d.as_nanos() as u64)
-                                                    .unwrap_or(0),
-                                            );
-
-                                            for item in levels.iter() {
-                                                if b_idx >= 10 && a_idx >= 10 {
-                                                    break;
-                                                }
-                                                if let Ok(depth) =
-                                                    serde_json::from_value::<GatewayDepth>(
-                                                        item.clone(),
-                                                    )
-                                                {
-                                                    if let Ok(t) = iso8601_to_unix_nanos(
-                                                        depth.timestamp.clone(),
-                                                    ) {
-                                                        ts_evt = t;
-                                                    }
-                                                    let price = Price::new(depth.price, prec);
-                                                    let size =
-                                                        Quantity::new(depth.volume as f64, 0);
-                                                    // Skip zero-size levels to avoid invalid deltas and keep book clean
-                                                    if size.raw == 0 {
-                                                        continue;
-                                                    }
-                                                    match depth.r#type {
-                                                        x if x == DomType::Bid as i32 => {
-                                                            if b_idx < 10 {
-                                                                let bo = BookOrder::new(
-                                                                    NautilusOrderSide::Buy,
-                                                                    price,
-                                                                    size,
-                                                                    0,
-                                                                );
-                                                                info!("{}", bo);
-                                                                mut_book.bids[b_idx] = bo;
-                                                                mut_book.bid_counts[b_idx] = 1;
-                                                                // Add delta for this level
-                                                                deltas_vec.push(
-                                                                    OrderBookDelta::new(
-                                                                        instrument_id,
-                                                                        BookAction::Add,
-                                                                        bo,
-                                                                        0,
-                                                                        0,
-                                                                        ts_evt,
-                                                                        ts_init_now,
-                                                                    ),
-                                                                );
-                                                                b_idx += 1;
-                                                            }
-                                                        }
-                                                        x if x == DomType::Ask as i32 => {
-                                                            if a_idx < 10 {
-                                                                let bo = BookOrder::new(
-                                                                    NautilusOrderSide::Sell,
-                                                                    price,
-                                                                    size,
-                                                                    0,
-                                                                );
-                                                                info!("{}", bo);
-                                                                mut_book.asks[a_idx] = bo;
-                                                                mut_book.ask_counts[a_idx] = 1;
-                                                                // Add delta for this level
-                                                                deltas_vec.push(
-                                                                    OrderBookDelta::new(
-                                                                        instrument_id,
-                                                                        BookAction::Add,
-                                                                        bo,
-                                                                        0,
-                                                                        0,
-                                                                        ts_evt,
-                                                                        ts_init_now,
-                                                                    ),
-                                                                );
-                                                                a_idx += 1;
-                                                            }
-                                                        }
-                                                        _ => {}
-                                                    }
-                                                }
-                                            }
-                                            mut_book.ts_event = ts_evt;
-                                            mut_book.ts_init = ts_init_now;
-
-                                            // Prepend a CLEAR delta and emit the batch if we have at least 1 level
-                                            if !deltas_vec.is_empty() {
-                                                let mut all =
-                                                    Vec::with_capacity(deltas_vec.len() + 1);
-                                                all.push(OrderBookDelta::clear(
-                                                    instrument_id,
-                                                    0,
-                                                    ts_evt,
-                                                    ts_init_now,
-                                                ));
-                                                all.extend(deltas_vec);
-                                                let deltas =
-                                                    OrderBookDeltas::new(instrument_id, all);
-                                                self.emit_deltas(deltas);
-                                            }
-                                        } else {
-                                            // Single level update: update book based on DomType
-                                            if let Ok(px_depth) =
-                                                serde_json::from_value::<GatewayDepth>(
-                                                    data_val.clone(),
-                                                )
-                                            {
-                                                // Handle reset: clear the stored book
-                                                if px_depth.r#type == DomType::Reset as i32 {
-                                                    mut_book.bids = [BookOrder::default(); 10];
-                                                    mut_book.asks = [BookOrder::default(); 10];
-                                                    mut_book.bid_counts = [0u32; 10];
-                                                    mut_book.ask_counts = [0u32; 10];
-                                                    mut_book.ts_event = iso8601_to_unix_nanos(
-                                                        px_depth.timestamp.clone(),
-                                                    )
-                                                    .unwrap_or(UnixNanos::from(0));
-                                                    mut_book.ts_init = UnixNanos::from(
-                                                        std::time::SystemTime::now()
-                                                            .duration_since(std::time::UNIX_EPOCH)
-                                                            .map(|d| d.as_nanos() as u64)
-                                                            .unwrap_or(0),
-                                                    );
-                                                    info!(target: "projectx.ws", "GatewayDepth RESET: contract={:?}", contract_id_opt);
-                                                } else {
-                                                    let price = Price::new(px_depth.price, prec);
-                                                    let size =
-                                                        Quantity::new(px_depth.volume as f64, 0);
-                                                    // Track whether we should emit an additional Quote or Trade alongside the book snapshot
-                                                    let mut emit_quote = false;
-                                                    let mut emit_trade = false;
-                                                    let mut idx_i32 = match px_depth.index {
-                                                        None => {
-                                                            warn!("No depth for level update");
-                                                            return;
-                                                        }
-                                                        Some(d) => d,
-                                                    };
-                                                    if idx_i32 < 0 {
-                                                        idx_i32 = 0;
-                                                    }
-                                                    let mut idx: usize = idx_i32 as usize;
-                                                    if idx > 9 {
-                                                        idx = 9;
-                                                    }
-                                                    match px_depth.r#type {
-                                                        x if x == DomType::Bid as i32
-                                                            || x == DomType::BestBid as i32 =>
-                                                        {
-                                                            if size.raw > 0 {
-                                                                let bo = BookOrder::new(
-                                                                    NautilusOrderSide::Buy,
-                                                                    price,
-                                                                    size,
-                                                                    0,
-                                                                );
-                                                                info!("{}", bo);
-                                                                mut_book.bids[idx] = bo;
-                                                                mut_book.bid_counts[idx] = 1;
-                                                            } else {
-                                                                // Remove the level entirely
-                                                                mut_book.bids[idx] =
-                                                                    BookOrder::default();
-                                                                mut_book.bid_counts[idx] = 0;
-                                                            }
-                                                            emit_quote = idx == 0
-                                                                || x == DomType::BestBid as i32; // best bid update implies quote change
-                                                        }
-                                                        x if x == DomType::Ask as i32
-                                                            || x == DomType::BestAsk as i32 =>
-                                                        {
-                                                            if size.raw > 0 {
-                                                                let bo = BookOrder::new(
-                                                                    NautilusOrderSide::Sell,
-                                                                    price,
-                                                                    size,
-                                                                    0,
-                                                                );
-                                                                info!("{}", bo);
-                                                                mut_book.asks[idx] = bo;
-                                                                mut_book.ask_counts[idx] = 1;
-                                                            } else {
-                                                                mut_book.asks[idx] =
-                                                                    BookOrder::default();
-                                                                mut_book.ask_counts[idx] = 0;
-                                                            }
-                                                            emit_quote = idx == 0
-                                                                || x == DomType::BestAsk as i32; // best ask update implies quote change
-                                                        }
-                                                        x if x == DomType::NewBestBid as i32 => {
-                                                            if size.raw > 0 {
-                                                                let bo = BookOrder::new(
-                                                                    NautilusOrderSide::Buy,
-                                                                    price,
-                                                                    size,
-                                                                    0,
-                                                                );
-                                                                info!("{}", bo);
-                                                                mut_book.bids[idx] = bo;
-                                                                mut_book.bid_counts[idx] = 1;
-                                                            } else {
-                                                                mut_book.bids[idx] =
-                                                                    BookOrder::default();
-                                                                mut_book.bid_counts[idx] = 0;
-                                                            }
-                                                            emit_quote = true;
-                                                        }
-                                                        x if x == DomType::NewBestAsk as i32 => {
-                                                            if size.raw > 0 {
-                                                                let bo = BookOrder::new(
-                                                                    NautilusOrderSide::Sell,
-                                                                    price,
-                                                                    size,
-                                                                    0,
-                                                                );
-                                                                info!("{}", bo);
-                                                                mut_book.asks[idx] = bo;
-                                                                mut_book.ask_counts[idx] = 1;
-                                                            } else {
-                                                                mut_book.asks[idx] =
-                                                                    BookOrder::default();
-                                                                mut_book.ask_counts[idx] = 0;
-                                                            }
-                                                            emit_quote = true;
-                                                        }
-                                                        x if x == DomType::Trade as i32
-                                                            || x == DomType::Fill as i32 =>
-                                                        {
-                                                            // Trade-related DOM event: do not modify book sides here (server may send separate book updates)
-                                                            emit_trade = true;
-                                                        }
-                                                        _ => {
-                                                            // Other types (Low/High/Reset handled above) ignored for book construction
-                                                        }
-                                                    }
-                                                    let ts_evt_local = iso8601_to_unix_nanos(
-                                                        px_depth.timestamp.clone(),
-                                                    )
-                                                    .unwrap_or(UnixNanos::from(0));
-                                                    mut_book.ts_event = ts_evt_local;
-                                                    mut_book.ts_init = UnixNanos::from(
-                                                        std::time::SystemTime::now()
-                                                            .duration_since(std::time::UNIX_EPOCH)
-                                                            .map(|d| d.as_nanos() as u64)
-                                                            .unwrap_or(0),
-                                                    );
-
-                                                    // Emit a single delta for this level update (skip Trade/Fill)
-                                                    let side_for_delta = match px_depth.r#type {
-                                                        x if x == DomType::Bid as i32
-                                                            || x == DomType::BestBid as i32
-                                                            || x == DomType::NewBestBid as i32 =>
-                                                        {
-                                                            Some(NautilusOrderSide::Buy)
-                                                        }
-                                                        x if x == DomType::Ask as i32
-                                                            || x == DomType::BestAsk as i32
-                                                            || x == DomType::NewBestAsk as i32 =>
-                                                        {
-                                                            Some(NautilusOrderSide::Sell)
-                                                        }
-                                                        _ => None,
-                                                    };
-                                                    if let Some(delta_side) = side_for_delta {
-                                                        // For Delete actions, OrderBookDelta requires a positive size. Use the existing
-                                                        // book size at the level if available; otherwise skip emitting the delta.
-                                                        let (action, size_for_delta) =
-                                                            if size.raw == 0 {
-                                                                let existing = match delta_side {
-                                                                    NautilusOrderSide::Buy => {
-                                                                        mut_book.bids[idx].size
-                                                                    }
-                                                                    NautilusOrderSide::Sell => {
-                                                                        mut_book.asks[idx].size
-                                                                    }
-                                                                    _ => Quantity::new(0.0, 0),
-                                                                };
-                                                                if existing.raw > 0 {
-                                                                    (BookAction::Delete, existing)
-                                                                } else {
-                                                                    (BookAction::Delete, size)
-                                                                }
-                                                            } else {
-                                                                (BookAction::Update, size)
-                                                            };
-                                                        // Only emit if we have a positive size (model enforces > 0)
-                                                        if size_for_delta.raw > 0 {
-                                                            let bo = BookOrder::new(
-                                                                delta_side,
-                                                                price,
-                                                                size_for_delta,
-                                                                0,
-                                                            );
-                                                            let delta = OrderBookDelta::new(
-                                                                instrument_id,
-                                                                action,
-                                                                bo,
-                                                                0,
-                                                                0,
-                                                                ts_evt_local,
-                                                                mut_book.ts_init,
-                                                            );
-                                                            let deltas = OrderBookDeltas::new(
-                                                                instrument_id,
-                                                                vec![delta],
-                                                            );
-                                                            self.emit_deltas(deltas);
-                                                        }
-                                                    }
-
-                                                    let _display_vol = if px_depth.r#type
-                                                        == DomType::Trade as i32
-                                                        || px_depth.r#type == DomType::Fill as i32
-                                                    {
-                                                        px_depth.current_volume
-                                                    } else {
-                                                        px_depth.volume
-                                                    };
-
-                                                    // Emit an accompanying Quote when best bid/ask changed //todo, not sure if we should do this, +decreases need for # feeds, -could be handled wrong .
-                                                    if emit_quote {
-                                                        // Only emit a Quote when both best bid and best ask are present
-                                                        if mut_book.bid_counts[0] > 0
-                                                            && mut_book.ask_counts[0] > 0
-                                                        {
-                                                            let bid_price = mut_book.bids[0].price;
-                                                            let ask_price = mut_book.asks[0].price;
-                                                            let bid_size = mut_book.bids[0].size;
-                                                            let ask_size = mut_book.asks[0].size;
-                                                            let quote = QuoteTick {
-                                                                instrument_id,
-                                                                bid_price,
-                                                                ask_price,
-                                                                bid_size,
-                                                                ask_size,
-                                                                ts_event: ts_evt_local,
-                                                                ts_init: mut_book.ts_init,
-                                                            };
-                                                            info!("Quote {}", quote);
-                                                            self.emit_data(vec![Data::Quote(
-                                                                quote,
-                                                            )]);
-                                                        } else {
-                                                            info!(target: "projectx.ws", "Skipping Quote emit: missing side (bid_count={} ask_count={})", mut_book.bid_counts[0], mut_book.ask_counts[0]);
-                                                        }
-                                                    }
-
-                                                    // Emit a Trade when trade-related DOM event received //todo, not sure if we should do this, +decreases need for # feeds, -could be handled wrong .
-                                                    if emit_trade {
-                                                        use nautilus_model::identifiers::TradeId;
-                                                        let trade_price =
-                                                            Price::new(px_depth.price, prec);
-                                                        // Prefer currentVolume for per-trade size if available, else fall back to volume
-                                                        let trade_size = if px_depth.current_volume
-                                                            > 0
-                                                        {
-                                                            Quantity::new(
-                                                                px_depth.current_volume as f64,
-                                                                0,
-                                                            )
-                                                        } else {
-                                                            Quantity::new(px_depth.volume as f64, 0)
-                                                        };
-                                                        let trade_id = TradeId::new("".to_string());
-                                                        // Determine aggressor based on BBO vs trade price
-                                                        let aggressor_side = {
-                                                            let has_bid =
-                                                                mut_book.bid_counts[0] > 0;
-                                                            let has_ask =
-                                                                mut_book.ask_counts[0] > 0;
-                                                            if has_bid || has_ask {
-                                                                let tr = trade_price.raw;
-                                                                // Prefer ask comparison first (lifting the offer)
-                                                                if has_ask
-                                                                    && tr
-                                                                        >= mut_book.asks[0]
-                                                                            .price
-                                                                            .raw
-                                                                {
-                                                                    AggressorSide::Buyer
-                                                                } else if has_bid
-                                                                    && tr
-                                                                        <= mut_book.bids[0]
-                                                                            .price
-                                                                            .raw
-                                                                {
-                                                                    AggressorSide::Seller
-                                                                } else {
-                                                                    AggressorSide::NoAggressor
-                                                                }
-                                                            } else {
-                                                                AggressorSide::NoAggressor
-                                                            }
-                                                        };
-                                                        let tick = TradeTick {
-                                                            instrument_id,
-                                                            price: trade_price,
-                                                            size: trade_size,
-                                                            aggressor_side,
-                                                            trade_id,
-                                                            ts_event: ts_evt_local,
-                                                            ts_init: mut_book.ts_init,
-                                                        };
-                                                        info!("Tick {}", tick);
-                                                        self.emit_data(vec![Data::Trade(tick)]);
-                                                    }
-                                                }
-                                            } else {
-                                                info!(target: "projectx.ws", "GatewayDepth (unparsed): {}", data_val);
-                                                self.emit_raw(val.clone());
-                                                return;
-                                            }
-                                        }
-                                        // Emit a clone of the updated book
-                                        self.emit_data(vec![Data::Depth10(Box::new(
-                                            (**mut_book).clone(),
-                                        ))]);
-                                    } else {
-                                        info!(target: "projectx.ws", "GatewayDepth (unknown symbol from contract): {:?} payload={}", contract_id_opt, data_val);
-                                        self.emit_raw(val);
-                                    }
-                                } else {
-                                    self.emit_raw(val);
+                                    info!("GatewayDepth: {:?}", args);
                                 }
                             }
                             // User hub events
@@ -1353,43 +754,24 @@ impl PxWebSocketClient {
                                         }
                                     };
                                 info!(target: "projectx.ws", "GatewayUserAccount: {:?}", account);
-                                let id = match AccountId::new_checked(format!(
-                                    "{}-{}",
-                                    &self.firm, account.id
-                                )) {
-                                    Ok(id) => id,
-                                    Err(e) => {
-                                        error!("error parsing AccountId: {}", e);
+                                let id = AccountId::new(account.id);
+                                let name = AccountName::new(account.name);
+                                let balance = match Decimal::from_f64(account.balance) {
+                                    Some(b) => b,
+                                    None => {
+                                        error!("invalid balance for {}", account.balance);
                                         return;
                                     }
                                 };
-                                let ts = UnixNanos::new(
-                                    Utc::now().timestamp_nanos_opt().unwrap() as u64
-                                );
-                                //todo, get balances from positions??
-                                let state = AccountState::new(
+                                let snap_shot = AccountSnapShot {
+                                    name,
                                     id,
-                                    AccountType::Margin,
-                                    vec![],
-                                    vec![],
-                                    false,
-                                    Default::default(),
-                                    ts,
-                                    ts,
-                                    Some(Currency::USD()),
-                                );
-                                self.emit_account_update(state);
+                                    balance,
+                                    can_trade: account.can_trade,
+                                };
+                                info!(target: "projectx.ws", "AccountSnapShot: {:?}", snap_shot);
                             }
                             "GatewayUserOrder" => {
-                                use nautilus_core::{UnixNanos, datetime::iso8601_to_unix_nanos};
-                                use nautilus_model::{
-                                    enums::{
-                                        OrderSide as NautOrderSide, OrderStatus as NautOrderStatus,
-                                        OrderType as NautOrderType, TimeInForce,
-                                    },
-                                    identifiers::VenueOrderId,
-                                    types::{Price, Quantity},
-                                };
                                 let order =
                                     match serde_json::from_value::<GatewayUserOrder>(val.clone()) {
                                         Ok(o) => o,
@@ -1399,69 +781,27 @@ impl PxWebSocketClient {
                                         }
                                     };
                                 // Build identifiers
-                                let account_id = match AccountId::new_checked(format!(
-                                    "{}-{}",
-                                    &self.firm, order.account_id
-                                )) {
-                                    Ok(id) => id,
+                                let account_id = AccountId::new(order.account_id);
+                                let instrument = match Instrument::from_str(order.symbol_id.as_str()) {
+                                    Ok(i) => i,
                                     Err(e) => {
-                                        error!("error building AccountId: {}", e);
+                                        error!("error parsing instrument: {}", e);
                                         return;
                                     }
                                 };
-                                let symbol_str =
-                                    match parse_symbol_from_contract_id(&order.contract_id) {
-                                        Some(s) => s,
-                                        None => {
-                                            error!(
-                                                "error parsing symbol from contract: {}",
-                                                order.contract_id
-                                            );
-                                            return;
-                                        }
-                                    };
-                                let instrument_id = InstrumentId::new(
-                                    Symbol::new(symbol_str.clone()),
-                                    *PROJECT_X_VENUE,
-                                );
-                                let venue_order_id = VenueOrderId::new(order.id.to_string());
-
                                 // Enum mappings
-                                let side = if order.side == OrderSide::Bid as i32 {
-                                    NautOrderSide::Buy
+                                let side = if order.side == 0 {
+                                    Side::Buy
                                 } else {
-                                    NautOrderSide::Sell
+                                    Side::Sell
                                 };
-                                let otype = match order.r#type {
-                                    x if x == OrderType::Limit as i32 => NautOrderType::Limit,
-                                    x if x == OrderType::Market as i32 => NautOrderType::Market,
-                                    x if x == OrderType::Stop as i32 => NautOrderType::StopMarket,
-                                    x if x == OrderType::StopLimit as i32 => {
-                                        NautOrderType::StopLimit
-                                    }
-                                    _ => NautOrderType::Limit,
-                                };
-                                let status = match order.status {
-                                    x if x == OrderStatus::Open as i32 => NautOrderStatus::Accepted,
-                                    x if x == OrderStatus::Filled as i32 => NautOrderStatus::Filled,
-                                    x if x == OrderStatus::Cancelled as i32 => {
-                                        NautOrderStatus::Canceled
-                                    }
-                                    x if x == OrderStatus::Expired as i32 => {
-                                        NautOrderStatus::Expired
-                                    }
-                                    x if x == OrderStatus::Rejected as i32 => {
-                                        NautOrderStatus::Rejected
-                                    }
-                                    x if x == OrderStatus::Pending as i32 => {
-                                        NautOrderStatus::Submitted
-                                    }
-                                    _ => NautOrderStatus::Initialized,
-                                };
-                                let tif = TimeInForce::Gtc; // ProjectX does not provide TIF in payload
+                                let order_type = map_order_type(order.r#type);
+                                let status = map_status(order.status);
 
                                 // Quantities and prices
-                                let qty = Quantity::new(order.size as f64, 0);
+                                let qty = Volume::from_i64(order.size).unwrap_or_else(|| {
+                                    dec!(0)
+                                });
                                 let filled_qty =
                                     Quantity::new(order.fill_volume.unwrap_or(0) as f64, 0);
                                 let prec = *self
@@ -1543,12 +883,6 @@ impl PxWebSocketClient {
                                 // TODO: Map to PositionStatusReport and emit via execution bus if/when standardized for ProjectX
                             }
                             "GatewayUserTrade" => {
-                                use nautilus_core::{UnixNanos, datetime::iso8601_to_unix_nanos};
-                                use nautilus_model::{
-                                    enums::{LiquiditySide, OrderSide as NautOrderSide},
-                                    identifiers::{TradeId as VenueTradeId, VenueOrderId},
-                                    types::{Money, Price, Quantity},
-                                };
                                 let trade =
                                     match serde_json::from_value::<GatewayUserTrade>(val.clone()) {
                                         Ok(t) => t,

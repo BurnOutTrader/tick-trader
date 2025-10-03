@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use strum_macros::Display;
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 pub use crate::securities::symbols::Exchange;
+use crate::securities::symbols::Instrument;
 
 pub type Price = Decimal;
 pub type Volume = Decimal;
@@ -105,8 +106,8 @@ pub enum BarClose {
 pub struct Tick {
     /// Symbol identifier (e.g. `"MNQ"`, `"AAPL"`).
     pub symbol: String,
-    /// Exchange code (e.g. `Exchange::CME`, `Exchange::NASDAQ`).
-    pub exchange: Exchange,
+    /// Symbol identifier (e.g. `"MNQZ5"`).
+    pub instrument: Instrument,
     /// Trade price.
     #[rkyv(with = crate::rkyv_types::DecimalDef)]
     pub price: Price,
@@ -130,8 +131,8 @@ pub struct Tick {
 pub struct Candle {
     /// Symbol identifier (e.g. `"MNQ"`, `"AAPL"`).
     pub symbol: String,
-    /// Exchange code (e.g. `Exchange::CME`, `Exchange::NASDAQ`).
-    pub exchange: Exchange,
+    /// Symbol identifier (e.g. `"MNQZ5"`).
+    pub instrument: Instrument,
     /// Start time of the candle (inclusive).
     #[rkyv(with = crate::rkyv_types::DateTimeUtcDef)]
     pub time_start: DateTime<Utc>,
@@ -186,9 +187,10 @@ impl Candle {
 #[derive(Archive, RkyvDeserialize, RkyvSerialize)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Bbo {
-    // ---- Core (vendor-agnostic) ----
+    /// Symbol identifier (e.g. `"MNQ"`, `"AAPL"`).
     pub symbol: String,
-    pub exchange: Exchange,
+    /// Symbol identifier (e.g. `"MNQZ5"`).
+    pub instrument: Instrument,
     #[rkyv(with = crate::rkyv_types::DecimalDef)]
     pub bid: Price,
     #[rkyv(with = crate::rkyv_types::DecimalDef)]
@@ -231,8 +233,8 @@ pub struct BookLevel {
 pub struct OrderBook {
     /// Symbol identifier (e.g. `"MNQ"`, `"AAPL"`).
     pub symbol: String,
-    /// Exchange code (e.g. `Exchange::CME`, `Exchange::NASDAQ`).
-    pub exchange: Exchange,
+    /// Symbol identifier (e.g. `"MNQZ5"`).
+    pub instrument: Instrument,
     /// descending iteration = best to worst
     pub bids: Vec<BookLevel>,
     /// descending iteration = best to worst
@@ -251,7 +253,7 @@ mod tests {
     fn candle_bar_close_and_range() {
         let c = Candle {
             symbol: "ES".into(),
-            exchange: Exchange::CME,
+            instrument: Instrument::from_str("ESZ5").unwrap(),
             time_start: Utc::now(),
             time_end: Utc::now(),
             open: Price::from(10),

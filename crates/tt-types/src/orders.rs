@@ -1,11 +1,9 @@
-/*
+
 use serde::{Deserialize, Serialize};
 use strum_macros::Display;
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize)]
-#[archive(compare(PartialEq))]
-#[archive_attr(derive(Debug))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, Serialize, Deserialize)]
 pub enum OrderType {
     /// A market order to buy or sell at the best available price in the current market.
@@ -26,11 +24,10 @@ pub enum OrderType {
     TrailingStopMarket = 8,
     /// A trailing stop limit order combines the features of a trailing stop order with those of a limit order.
     TrailingStopLimit = 9,
+    Unknown
 }
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize)]
-#[archive(compare(PartialEq))]
-#[archive_attr(derive(Debug))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, Serialize, Deserialize)]
 pub enum OrderEventType {
     Initialized,
@@ -49,5 +46,5 @@ pub enum OrderEventType {
     Updated,
     PartiallyFilled,
     Filled,
-}*/
+}
 

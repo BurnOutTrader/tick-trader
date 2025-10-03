@@ -19,7 +19,9 @@ use std::env;
 
 use dotenvy::dotenv;
 use tracing::{error, info, level_filters::LevelFilter, warn};
+use projectx::http::client::PxHttpClient;
 use projectx::http::credentials::PxCredential;
+use projectx::http::models::ContractSearchResponse;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

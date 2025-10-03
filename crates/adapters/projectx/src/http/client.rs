@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
-
+use std::str::FromStr;
 use anyhow::anyhow;
 use chrono::{DateTime, Utc, Duration as ChronoDuration};
 use reqwest::Method;
@@ -14,8 +14,12 @@ use tokio::{
 };
 use ustr::Ustr;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use tt_types::accounts::account::AccountId;
 use tt_types::api_helpers::rate_limiter::RateLimiter;
 use tt_types::api_helpers::retry_manager::{RetryManager, RetryConfig};
+use tt_types::securities::futures_helpers::extract_root;
+use tt_types::securities::security::FuturesContract;
+use tt_types::securities::symbols::{get_symbol_info, Instrument, SecurityType};
 use crate::common::consts::{PX_GLOBAL_RATE_KEY, PX_REST_QUOTA, PX_BARS_QUOTA};
 
 // Lightweight reqwest-based HTTP client with per-key rate limiting
@@ -651,8 +655,7 @@ impl PxHttpInnerClient {
 
 pub struct PxHttpClient {
     firm: String,
-    inner: Arc<PxHttpInnerClient>,
-    instruments_cache: Arc<RwLock<HashMap<Ustr, nautilus_model::instruments::InstrumentAny>>>,
+    pub inner: Arc<PxHttpInnerClient>,
     internal_accounts_ids: Arc<RwLock<HashMap<Ustr, i64>>>,
     cache_initialized: bool,
 }
@@ -679,7 +682,6 @@ impl PxHttpClient {
                 retry_delay_ms,
                 retry_delay_max_ms,
             )?),
-            instruments_cache: Arc::new(RwLock::new(HashMap::new())),
             internal_accounts_ids: Arc::new(RwLock::new(Default::default())),
             cache_initialized: false,
         })
@@ -701,12 +703,13 @@ impl PxHttpClient {
     async fn spawn_auto_validate(&self, period: Duration) {
         let mut rx = self.inner.stop_tx.subscribe();
         let this = self.clone();
+        let client = self.inner.clone();
         let handle = tokio::spawn(async move {
             let mut ticker = tokio::time::interval(period);
             loop {
                 tokio::select! {
                     _ = ticker.tick() => {
-                        let _ = this.inner.validate().await; // log errors if you want
+                        let _ = client.validate().await; // log errors if you want
                     }
                     _ = rx.changed() => {
                         if *rx.borrow() { break; }
@@ -717,28 +720,35 @@ impl PxHttpClient {
         *self.inner.bg_task.write().await = Some(handle);
     }
 
-    pub async fn request_instruments(&self) -> anyhow::Result<Vec<InstrumentAny>> {
+    pub async fn request_instruments(&self) -> anyhow::Result<Vec<FuturesContract>> {
         let resp: ContractSearchResponse = self
             .inner
             .available_contracts(false)
             .await
             .map_err(|e| anyhow::anyhow!(e))?;
 
-        let mut instruments: Vec<InstrumentAny> = Vec::new();
-        let mut cache_lock = self.instruments_cache.write().await;
+        let mut instruments: Vec<FuturesContract> = Vec::new();
         for inst in &resp.contracts {
-            let symbol = Symbol::new_checked(inst.symbol_id.clone())?;
-            let id = InstrumentId::new(symbol, *PROJECT_X_VENUE);
-            let f = match build_futures_from_code(id, &inst.name) {
-                Some(f) => f,
-                None => {
-                    log::warn!("Failed to build futures from code: {}", id);
-                    continue;
-                }
+            let instrument = match Instrument::from_str(inst.id.as_str()) {
+                Ok(instrument) => instrument,
+                Err(e) => {
+                    log::error!("Failed to parse instrument: {}", inst.id);
+                    continue
+                },
             };
-            let any = InstrumentAny::FuturesContract(f);
-            cache_lock.insert(inst.name.clone().into(), any.clone());
-            instruments.push(any);
+            let symbol = extract_root(&instrument);
+            let symbol_info = match get_symbol_info(&symbol) {
+                Some(info) => info,
+                None => {
+                    log::error!("Failed to parse symbol: {}", symbol);
+                    continue
+                },
+            };
+            let s = match FuturesContract::from_root_with_default_models(&instrument, symbol_info.exchange, SecurityType::Future) {
+                None => continue,
+                Some(s) => s
+            };
+            instruments.push(s);
         }
 
         Ok(instruments)
@@ -752,7 +762,13 @@ impl PxHttpClient {
         let mut account_lock = self.internal_accounts_ids.write().await;
         for acc in &resp.accounts {
             account_lock.insert(acc.name.clone().into(), acc.id);
-            let id = AccountId::new_checked(format!("{}-{}", &self.firm, acc.id))?;
+            let id = match AccountId::from_str(&format!("{}-{}", &self.firm, acc.id)) {
+                Ok(id) => id,
+                Err(e) => {
+                    log::error!("Failed to parse account id: {}", e);
+                    continue;
+                }           
+            };
             ids.push(id);
         }
         Ok(ids)
@@ -765,6 +781,13 @@ impl PxHttpClient {
             .get(&account_name)
             .copied()
             .ok_or_else(|| anyhow::anyhow!(format!("Account {} not found", account_name)))?;
-        Ok(AccountId::new_checked(format!("{}-{}", &self.firm, id))?)
+        let id = match AccountId::from_str(&format!("{}-{}", &self.firm, id)) {
+            Ok(id) => id,
+            Err(e) => {
+                log::error!("Failed to parse account id: {}", e);
+                return Err(anyhow::anyhow!(format!("Account {} not found", account_name)));
+            }           
+        };
+        Ok(id)
     }
 }
