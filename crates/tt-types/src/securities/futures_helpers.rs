@@ -1,26 +1,9 @@
-// -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
-//  https://nautechsystems.io
-//
-//  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
-//  You may not use this file except in compliance with the License.
-//  You may obtain a copy of the License at https://www.gnu.org/licenses/lgpl-3.0.en.html
-//
-//  Unless required by applicable law or agreed to in writing, software
-//  distributed under the License is distributed on an "AS IS" BASIS,
-//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-//  See the License for the specific language governing permissions and
-//  limitations under the License.
-// -------------------------------------------------------------------------------------------------
-
 use std::borrow::Cow;
-
-use chrono::{Datelike, Duration, Months, NaiveDate, NaiveTime, Utc};
-use nautilus_core::UnixNanos;
-use nautilus_model::{
-    identifiers::{InstrumentId, Symbol},
-    instruments::FuturesContract,
-};
+use chrono::{Datelike, Duration, Months, NaiveDate, NaiveTime};
+use rust_decimal::Decimal;
+use rust_decimal::prelude::FromPrimitive;
+use crate::base_data::Price;
+use crate::securities::symbols::Instrument;
 
 #[inline]
 fn sanitize_code(s: &str) -> Cow<'_, str> {
@@ -74,8 +57,8 @@ fn unix_nanos_midnight_utc(date: NaiveDate) -> u64 {
 
 /// Compute activation (u64 ns) from a contract code with a chosen policy.
 /// Returns `None` if the code cannot be parsed.
-pub fn activation_ns_from_code_with_policy(code: &str, policy: ActivationPolicy) -> Option<u64> {
-    let expiry_month_start = parse_expiry_from_contract_code(code)?;
+pub fn activation_ns_from_code_with_policy(instrument: &Instrument, policy: ActivationPolicy) -> Option<u64> {
+    let expiry_month_start = parse_expiry_from_instrument(&instrument)?;
     let activation_date = match policy {
         ActivationPolicy::MonthsBefore(m) => {
             expiry_month_start.checked_sub_months(Months::new(m))?
@@ -96,7 +79,7 @@ pub fn activation_ns_from_code_with_policy(code: &str, policy: ActivationPolicy)
 /// - Monthly commodities (energies, metals, ags, livestock, crypto): 1 month before
 ///
 /// You can tweak this mapping to your venue rules without touching call sites.
-pub fn activation_ns_default(root: &str, code: &str) -> Option<u64> {
+pub fn activation_ns_default(root: &str, instrument: &Instrument) -> Option<u64> {
     let r = root.to_ascii_uppercase();
 
     // FX & minis
@@ -117,11 +100,12 @@ pub fn activation_ns_default(root: &str, code: &str) -> Option<u64> {
         ActivationPolicy::MonthsBefore(1)
     };
 
-    activation_ns_from_code_with_policy(code, policy)
+    activation_ns_from_code_with_policy(instrument, policy)
 }
 
-pub fn parse_expiry_from_contract_code(code: &str) -> Option<NaiveDate> {
-    let s = sanitize_code(code).to_ascii_uppercase();
+pub fn parse_expiry_from_instrument(instrument: &Instrument) -> Option<NaiveDate> {
+    let code = instrument.to_string();
+    let s = sanitize_code(&code).to_ascii_uppercase();
     let bytes = s.as_bytes();
 
     // 1) Collect 1–2 trailing digits as the year
@@ -163,6 +147,8 @@ pub fn parse_expiry_from_contract_code(code: &str) -> Option<NaiveDate> {
     NaiveDate::from_ymd_opt(year, month, 1)
 }
 
+
+#[allow(dead_code)]
 /// Extract a futures **root** from a vendor symbol code.
 ///
 /// Heuristic:
@@ -189,7 +175,8 @@ pub fn parse_expiry_from_contract_code(code: &str) -> Option<NaiveDate> {
 /// assert_eq!(extract_root("ESZ25"), "ES");
 /// assert_eq!(extract_root("MNQZ5"), "MNQ");
 /// assert_eq!(extract_root("cl"), "CL");
-pub(crate) fn extract_root(code: &str) -> String {
+pub fn extract_root(instrument: &Instrument) -> String {
+    let code = instrument.to_string();
     let up = code.to_ascii_uppercase();
     let b = up.as_bytes();
     let mut i = b.len();
@@ -204,6 +191,7 @@ pub(crate) fn extract_root(code: &str) -> String {
     code[..i].to_string()
 }
 
+#[allow(dead_code)]
 fn unix_nanos_utc_from_date(date: NaiveDate) -> u64 {
     // 00:00:00 UTC on that date
     let dt = date.and_time(NaiveTime::MIN).and_utc(); // DateTime<Utc>
@@ -215,51 +203,6 @@ fn unix_nanos_utc_from_date(date: NaiveDate) -> u64 {
     // Compose as i128, then checked-convert to u64
     let total_ns_i128 = (secs as i128) * 1_000_000_000i128 + (subnanos as i128);
     u64::try_from(total_ns_i128).expect("timestamp before 1970-01-01 or overflowed u64")
-}
-
-// Main entrypoint: pass "M6AU5" -> FuturesContract
-pub fn build_futures_from_code(id: InstrumentId, code: &str) -> Option<FuturesContract> {
-    let root = extract_root(code);
-    let specs = crate::common::root_specs::hardcoded_roots();
-    let spec = specs.get(root.as_str())?;
-
-    let raw_symbol = Symbol::from_ustr_unchecked(code.into());
-
-    let expiry_date = parse_expiry_from_contract_code(code)?;
-    let expiration_ns: u64 = unix_nanos_utc_from_date(expiry_date);
-    let ts_event: u64 = Utc::now().timestamp_nanos_opt()? as u64;
-    let activation_ns: u64 = activation_ns_default(root.as_str(), code)?;
-
-    match FuturesContract::new_checked(
-        id,
-        raw_symbol,
-        spec.asset_class,
-        spec.exchange,
-        spec.underlying,
-        UnixNanos::new(activation_ns),
-        UnixNanos::new(expiration_ns),
-        spec.currency,
-        spec.price_precision,
-        spec.price_increment,
-        spec.multiplier,
-        spec.size_increment,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        UnixNanos::new(ts_event),
-        UnixNanos::new(ts_event),
-    ) {
-        Ok(c) => Some(c),
-        Err(e) => {
-            log::error!("Failed to build futures contract: {}", e);
-            None
-        }
-    }
 }
 
 #[inline]
@@ -274,4 +217,22 @@ pub fn parse_symbol_from_contract_id(contract_id: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+#[inline]
+pub fn round_to_decimals(value: Decimal, decimals: u32) -> Price {
+    // Create a factor of 10^decimals using Decimal
+    let factor = Decimal::from_i64(10_i64.pow(decimals)).unwrap();
+
+    // Perform the rounding operation
+    (value * factor).round() / factor
+}
+
+#[inline]
+pub fn round_to_tick_size(value: Decimal, tick_size: Decimal) -> Price {
+    // Divide the value by the tick size, then round to the nearest integer
+    let ticks = (value / tick_size).round();
+
+    // Multiply the rounded number of ticks by the tick size to get_requests the final rounded value
+    ticks * tick_size
 }

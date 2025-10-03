@@ -1,18 +1,3 @@
-// -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
-//  https://nautechsystems.io
-//
-//  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
-//  You may not use this file except in compliance with the License.
-//  You may obtain a copy of the License at https://www.gnu.org/licenses/lgpl-3.0.en.html
-//
-//  Unless required by applicable law or agreed to in writing, software
-//  distributed under the License is distributed on an "AS IS" BASIS,
-//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-//  See the License for the specific language governing permissions and
-//  limitations under the License.
-// -------------------------------------------------------------------------------------------------
-
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
@@ -20,19 +5,7 @@ use std::{
 };
 
 use anyhow::anyhow;
-use chrono::{DateTime, Utc};
-use nautilus_core::consts::NAUTILUS_USER_AGENT;
-use nautilus_model::{
-    accounts::{Account, AccountAny, MarginAccount},
-    data::{MarkPriceUpdate, TradeTick},
-    identifiers::{AccountId, InstrumentId, Symbol},
-    instruments::InstrumentAny,
-};
-use nautilus_network::{
-    http::HttpClient,
-    ratelimiter::quota::Quota,
-    retry::{RetryConfig, RetryManager},
-};
+use chrono::{DateTime, Utc, Duration as ChronoDuration};
 use reqwest::Method;
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::{
@@ -40,12 +13,96 @@ use tokio::{
     task::JoinHandle,
 };
 use ustr::Ustr;
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use tt_types::api_helpers::rate_limiter::RateLimiter;
+use tt_types::api_helpers::retry_manager::{RetryManager, RetryConfig};
+use crate::common::consts::{PX_GLOBAL_RATE_KEY, PX_REST_QUOTA, PX_BARS_QUOTA};
+
+// Lightweight reqwest-based HTTP client with per-key rate limiting
+#[derive(Clone, Debug)]
+struct SimpleResponse {
+    status: reqwest::StatusCode,
+    body: Vec<u8>,
+}
+
+struct SimpleHttp {
+    client: reqwest::Client,
+    default_headers: HeaderMap,
+    rate_limiter: RateLimiter<Ustr>,
+}
+
+impl SimpleHttp {
+    fn new(
+        default_headers: HashMap<String, String>,
+        rate_limiter: RateLimiter<Ustr>,
+        timeout_secs: Option<u64>,
+    ) -> Self {
+        let mut headers = HeaderMap::new();
+        for (k, v) in default_headers {
+            if let (Ok(name), Ok(val)) = (HeaderName::from_bytes(k.as_bytes()), HeaderValue::from_str(&v)) {
+                headers.insert(name, val);
+            }
+        }
+        let mut builder = reqwest::Client::builder().default_headers(headers.clone());
+        if let Some(secs) = timeout_secs {
+            builder = builder.timeout(Duration::from_secs(secs));
+        }
+        let client = builder.build().expect("failed to build reqwest client");
+        Self { client, default_headers: headers, rate_limiter }
+    }
+
+    async fn take_slots(&self, keys: &[Ustr]) {
+        if keys.is_empty() { return; }
+        loop {
+            let mut waits = Vec::new();
+            for k in keys {
+                match self.rate_limiter.check_key(k) {
+                    Ok(()) => {},
+                    Err(d) => waits.push(d),
+                }
+            }
+            if waits.is_empty() {
+                break;
+            }
+            if let Some(maxw) = waits.into_iter().max() {
+                tokio::time::sleep(maxw).await;
+            }
+        }
+    }
+
+    async fn request_with_ustr_keys(
+        &self,
+        method: Method,
+        url: String,
+        headers: Option<HashMap<String, String>>,
+        body_bytes: Option<Vec<u8>>,
+        _query: Option<HashMap<String, String>>,
+        rate_keys: Option<Vec<Ustr>>,
+    ) -> Result<SimpleResponse, reqwest::Error> {
+        if let Some(keys) = &rate_keys {
+            self.take_slots(keys).await;
+        }
+        let mut rb = self.client.request(method, &url);
+        if let Some(hs) = headers {
+            let mut hmap = HeaderMap::new();
+            for (k, v) in hs {
+                if let (Ok(name), Ok(val)) = (HeaderName::from_bytes(k.as_bytes()), HeaderValue::from_str(&v)) {
+                    hmap.insert(name, val);
+                }
+            }
+            rb = rb.headers(hmap);
+        }
+        if let Some(bytes) = body_bytes {
+            rb = rb.body(bytes);
+        }
+        let resp = rb.send().await?;
+        let status = resp.status();
+        let body = resp.bytes().await?.to_vec();
+        Ok(SimpleResponse { status, body })
+    }
+}
 
 use crate::{
-    common::{
-        consts::{PROJECT_X_VENUE, PX_BARS_QUOTA, PX_GLOBAL_RATE_KEY, PX_REST_QUOTA},
-        futures_helpers::build_futures_from_code,
-    },
     http::{
         credentials::PxCredential,
         endpoints::PxEndpoints,
@@ -62,11 +119,10 @@ use crate::{
     },
 };
 
-#[derive(Debug)]
 /// HTTP client for the ProjectX Gateway API
 pub struct PxHttpInnerClient {
     cfg: PxCredential,
-    http: HttpClient,
+    http: SimpleHttp,
     retry_manager: RetryManager<PxError>,
     token: Arc<RwLock<Option<String>>>,
     auth_headers: Arc<RwLock<HashMap<String, String>>>,
@@ -77,7 +133,7 @@ pub struct PxHttpInnerClient {
 
 impl PxHttpInnerClient {
     fn default_headers() -> HashMap<String, String> {
-        HashMap::from([("User-Agent".to_string(), NAUTILUS_USER_AGENT.to_string())])
+        HashMap::from([("User-Agent".to_string(), "Tick Trader".to_string())])
     }
 
     fn make_auth_headers(token: &str) -> HashMap<String, String> {
@@ -104,6 +160,13 @@ impl PxHttpInnerClient {
         keys
     }
 
+    fn build_rate_limiter() -> RateLimiter<Ustr> {
+        // From policy: All other endpoints 200/60s; retrieveBars 50/30s
+        let base = Some((PX_REST_QUOTA as u32, ChronoDuration::seconds(60)));
+        let keyed = vec![(Ustr::from("px:bars"), (PX_BARS_QUOTA as u32, ChronoDuration::seconds(30)))];
+        RateLimiter::new_with_limits(base, keyed)
+    }
+
     /// Create a new client with the given credentials
     pub fn new(
         cfg: PxCredential,
@@ -114,11 +177,9 @@ impl PxHttpInnerClient {
     ) -> anyhow::Result<Self> {
         let (tx, _rx) = watch::channel(false);
 
-        let client = HttpClient::new(
+        let http = SimpleHttp::new(
             Self::default_headers(),
-            vec![],
-            Self::rate_limiter_quotas(),
-            None,
+            Self::build_rate_limiter(),
             timeout_secs,
         );
         let retry_config = RetryConfig {
@@ -135,7 +196,7 @@ impl PxHttpInnerClient {
             retry_manager: RetryManager::new(retry_config)?,
             end_points: crate::http::endpoints::PxEndpoints::from_firm(cfg.firm.as_str()),
             cfg,
-            http: client,
+            http,
             token: Arc::new(RwLock::new(None)),
             auth_headers: Arc::new(RwLock::new(HashMap::new())),
             stop_tx: Arc::new(tx),
@@ -148,12 +209,6 @@ impl PxHttpInnerClient {
         Self::new(cfg, None, None, None, None)
     }
 
-    fn rate_limiter_quotas() -> Vec<(String, Quota)> {
-        vec![
-            (PX_GLOBAL_RATE_KEY.to_string(), *PX_REST_QUOTA),
-            ("px:bars".to_string(), *PX_BARS_QUOTA),
-        ]
-    }
 
     /// Internal helper to send a JSON HTTP request and deserialize the JSON response
     async fn request_json<TResp, TBody>(
@@ -202,7 +257,7 @@ impl PxHttpInnerClient {
                             Some(rate_keys),
                         )
                         .await
-                        .map_err(|e| PxError::Other(anyhow!(e)))?;
+                        .map_err(PxError::Http)?;
 
                     if !resp.status.is_success() {
                         let body_txt = String::from_utf8_lossy(&resp.body).to_string();
@@ -251,8 +306,10 @@ impl PxHttpInnerClient {
     pub async fn authenticate(&self) -> Result<(), PxError> {
         const PATH: &str = "/api/Auth/loginKey";
         let url = format!("{}{PATH}", self.end_points.api_base.trim_end_matches('/'));
-        let body =
-            serde_json::json!({ "userName": self.cfg.user_name, "apiKey": self.cfg.api_key });
+        let body = serde_json::json!({
+            "userName": self.cfg.user_name,
+            "apiKey": self.cfg.api_key.to_string()
+        });
 
         let body_bytes = serde_json::to_vec(&body).map_err(|e| PxError::Other(anyhow!(e)))?;
         let mut headers = HashMap::new();
@@ -282,7 +339,7 @@ impl PxHttpInnerClient {
                             Some(rate_keys),
                         )
                         .await
-                        .map_err(|e| PxError::Other(anyhow!(e)))?;
+                        .map_err(PxError::Http)?;
                     if !resp.status.is_success() {
                         let body_txt = String::from_utf8_lossy(&resp.body).to_string();
                         return Err(PxError::UnexpectedStatus {
@@ -367,7 +424,7 @@ impl PxHttpInnerClient {
                             Some(rate_keys),
                         )
                         .await
-                        .map_err(|e| PxError::Other(anyhow!(e)))?;
+                        .map_err(PxError::Http)?;
                     if !resp.status.is_success() {
                         let body_txt = String::from_utf8_lossy(&resp.body).to_string();
                         return Err(PxError::UnexpectedStatus {
@@ -591,33 +648,13 @@ impl PxHttpInnerClient {
     }
 }
 
-/// Provides a higher-level HTTP client for the [Px](https://api.projectx.com) REST API.
-///
-/// This client wraps the underlying `PxHttpInnerClient` to handle conversions
-/// into the Nautilus domain model.
-#[derive(Clone, Debug)]
-#[cfg_attr(
-    feature = "python",
-    pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.adapters")
-)]
-pub struct PxHttpClient {
-    pub firm: String,
-    pub inner: Arc<PxHttpInnerClient>,
-    pub(crate) instruments_cache: Arc<RwLock<HashMap<Ustr, InstrumentAny>>>,
-    pub(crate) internal_accounts_ids: Arc<RwLock<HashMap<Ustr, i64>>>,
-    cache_initialized: bool,
-}
 
-impl Default for PxHttpClient {
-    fn default() -> Self {
-        let credential = PxCredential {
-            firm: "".to_string(),
-            user_name: "".to_string(),
-            api_key: "".into(),
-        };
-        Self::new(credential, Some(60), None, None, None)
-            .expect("Failed to create default OKXHttpClient")
-    }
+pub struct PxHttpClient {
+    firm: String,
+    inner: Arc<PxHttpInnerClient>,
+    instruments_cache: Arc<RwLock<HashMap<Ustr, nautilus_model::instruments::InstrumentAny>>>,
+    internal_accounts_ids: Arc<RwLock<HashMap<Ustr, i64>>>,
+    cache_initialized: bool,
 }
 
 impl PxHttpClient {

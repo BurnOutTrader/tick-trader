@@ -1,78 +1,12 @@
-use std::str::FromStr;
 pub use chrono::{DateTime, Utc};
 pub use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use strum_macros::Display;
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
+pub use crate::securities::symbols::Exchange;
 
-type Price = Decimal;
-type Volume = Decimal;
-
-
-#[derive(Archive, RkyvDeserialize, RkyvSerialize)]
-#[rkyv(compare(PartialEq), derive(Debug))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, Serialize, Deserialize)]
-pub enum Exchange {
-    CME,
-    CBOT,
-    COMEX,
-    NYMEX,
-    GLOBEX,
-    EUREX,
-    ICEUS,
-    ICEEU,
-    SGX,
-    CFE,
-}
-
-impl FromStr for Exchange {
-    type Err = ();
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_ascii_uppercase().as_str() {
-            "CME" => Ok(Exchange::CME),
-            "GLOBEX" => Ok(Exchange::GLOBEX),
-            "CBOT" => Ok(Exchange::CBOT),
-            "COMEX" => Ok(Exchange::COMEX),
-            "NYMEX" => Ok(Exchange::NYMEX),
-            "EUREX" => Ok(Exchange::EUREX),
-            "ICEUS" => Ok(Exchange::ICEUS),
-            "ICEEU" => Ok(Exchange::ICEEU),
-            "SGX" => Ok(Exchange::SGX),
-            "CFE" => Ok(Exchange::CFE),
-            _ => Err(()),
-        }
-    }
-}
-
-impl Exchange {
-    #[inline]
-    pub fn map_exchange_bytes(b: &[u8]) -> Option<Exchange> {
-        // Match on the bytes to avoid allocating a String.
-        // Extend with any other codes you expect from the feed.
-        Some(match b {
-            b"CME" => Exchange::CME,
-            b"GLOBEX" => Exchange::GLOBEX,
-            b"CBOT" => Exchange::CBOT,
-            b"COMEX" => Exchange::COMEX,
-            b"NYMEX" => Exchange::NYMEX,
-            b"EUREX" => Exchange::EUREX,
-            b"ICEUS" => Exchange::ICEUS,
-            b"ICEEU" => Exchange::ICEEU,
-            b"SGX" => Exchange::SGX,
-            b"CFE" => Exchange::CFE,
-            _ => return None,
-        })
-    }
-}
-
-#[derive(Archive, RkyvDeserialize, RkyvSerialize)]
-#[rkyv(compare(PartialEq), derive(Debug))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, Serialize, Deserialize)]
-pub enum MarketType {
-    Futures,
-}
-
+pub type Price = Decimal;
+pub type Volume = Decimal;
 
 /// Resolution for time- or tick-based aggregation.
 ///
@@ -89,13 +23,11 @@ pub enum MarketType {
 #[rkyv(compare(PartialEq), derive(Debug))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, Serialize, Deserialize)]
 pub enum Resolution {
-    Ticks,
     Seconds(u8),
     Minutes(u8),
     Hours(u8),
     Daily,
     Weekly,
-    TickBars(u32),
 }
 
 impl Resolution {
@@ -103,13 +35,11 @@ impl Resolution {
     /// Returns None for TickBars which are generally parameterized elsewhere.
     pub fn as_key(&self) -> Option<&'static str> {
         match self {
-            Resolution::Ticks => Some("ticks"),
             Resolution::Seconds(n) => Some(Box::leak(format!("sec{}", n).into_boxed_str())),
             Resolution::Minutes(n) => Some(Box::leak(format!("min{}", n).into_boxed_str())),
             Resolution::Hours(n) => Some(Box::leak(format!("hr{}", n).into_boxed_str())),
             Resolution::Daily => Some("daily"),
             Resolution::Weekly => Some("weekly"),
-            Resolution::TickBars(_) => None, // handled elsewhere
         }
     }
 
@@ -119,13 +49,21 @@ impl Resolution {
 
     pub fn to_os_string(&self) -> String {
         match self {
-            Resolution::Ticks => "ticks".to_string(),
             Resolution::Seconds(n) => format!("sec{}", n),
             Resolution::Minutes(n) => format!("min{}", n),
             Resolution::Hours(n) => format!("hr{}", n),
             Resolution::Daily => "daily".to_string(),
             Resolution::Weekly => "weekly".to_string(),
-            Resolution::TickBars(n) => format!("tickbars{}", n),
+        }
+    }
+
+    pub fn as_duration(&self) -> chrono::Duration {
+        match self {
+            Resolution::Seconds(n) => chrono::Duration::seconds(*n as i64),
+            Resolution::Minutes(n) => chrono::Duration::minutes(*n as i64),
+            Resolution::Hours(n) => chrono::Duration::hours(*n as i64),
+            Resolution::Daily => chrono::Duration::days(1),
+            Resolution::Weekly => chrono::Duration::weeks(1),
         }
     }
 }
@@ -331,9 +269,7 @@ mod tests {
 
     #[test]
     fn resolution_helpers() {
-        assert_eq!(Resolution::Ticks.as_key(), Some("ticks"));
         assert_eq!(Resolution::Seconds(1).as_key(), Some("sec1"));
-        assert!(Resolution::TickBars(100).as_key().is_none());
         assert_eq!(Resolution::Minutes(5).to_os_string(), "min5");
         assert!(Resolution::Daily.is_intraday() == false);
         assert!(Resolution::Seconds(2).is_intraday());
@@ -343,6 +279,6 @@ mod tests {
     fn exchange_from_str_parses_case_insensitively() {
         assert_eq!(Exchange::from_str("CME").unwrap(), Exchange::CME);
         assert_eq!(Exchange::from_str("globex").unwrap(), Exchange::GLOBEX);
-        assert!(Exchange::from_str("unknown").is_err());
+        assert!(Exchange::from_str("unknown").is_none());
     }
 }

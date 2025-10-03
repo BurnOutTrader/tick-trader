@@ -1,0 +1,902 @@
+//!
+//! Market hours: exchange trading calendars, sessions, and bar boundary helpers.
+//!
+//! This module models exchange trading hours at the exchange level (per [`Exchange`])
+//! and exposes utilities to query whether a market is open at a given UTC instant,
+//! compute session bounds, and find candle end boundaries that respect trading hours.
+//!
+//! Key concepts:
+//! - Time semantics: All public APIs take and return [`chrono::DateTime<Utc>`]. The
+//!   exchange's local time zone (`tz`) is used only internally to interpret session
+//!   rules and handle DST transitions correctly.
+//! - Session rules: Each exchange is described by a set of [`SessionRule`]s for
+//!   "regular" and/or "extended" trading. A rule activates on specific weekdays and
+//!   defines an open and close time as seconds since local midnight (SSM). If
+//!   `open_ssm <= close_ssm`, the session runs within the same local day; if
+//!   `open_ssm > close_ssm`, the session wraps past midnight and closes the next
+//!   local day.
+//! - Weekday indexing: Weekdays are indexed Monday=0 through Sunday=6. The `days`
+//!   mask in [`SessionRule`] follows this convention throughout the module.
+//! - Holidays: If an exchange-local calendar date is marked as a holiday, no
+//!   sessions occur on that local date. Wrapped sessions from "yesterday" do not
+//!   bleed into a holiday; i.e., a previous-day wrap is ignored if the previous
+//!   local date is a holiday.
+//! - Maintenance windows: A convenience heuristic [`MarketHours::is_maintenance`]
+//!   returns true when the market is currently closed but the next session starts
+//!   within ~90 minutes (useful for CME’s daily maintenance break).
+//!
+//! What you can do with this module:
+//! - Check open/closed state at an instant: [`MarketHours::is_open`],
+//!   [`MarketHours::is_open_with`], [`MarketHours::is_open_regular`],
+//!   [`MarketHours::is_open_extended`].
+//! - Find the trading session that contains a time (or the next one):
+//!   [`session_bounds`], [`session_bounds_with`], [`next_session_after`],
+//!   [`next_session_after_with`], [`next_session_open_after`].
+//! - Compute bar end times that align with the market calendar: [`candle_end`]
+//!   (alias [`time_end_of_day`]). Intraday bars step to the next permitted boundary
+//!   skipping closed periods; Daily/Weekly end at session/week boundaries.
+//!
+//! Exchange presets:
+//! - [`hours_for_exchange`] provides pragmatic default hours for major venues
+//!   (CME, CBOT, COMEX, NYMEX, EUREX, ICEUS, ICEEU, SGX, CFE). These are exchange-
+//!   level defaults for common product profiles (e.g., CME equity-index futures):
+//!   Sun 17:00 – Fri 16:00 Central, with a daily break 16:00–17:00, RTH 08:30–15:15,
+//!   and a brief 15:30–16:00 window. Always verify specific contract rules when
+//!   needed; product-level calendars can be layered later if required.
+//!
+//! DST and ambiguous times:
+//! - Local times are resolved with `Tz::from_local_datetime(...).single()` and
+//!   conservative fallbacks to ensure a valid instant is produced even across DST
+//!   transitions. Comparisons are done in SSM (seconds since local midnight) and
+//!   converted back to UTC only at the edges.
+//!
+//! Invariants and nuances:
+//! - All comparisons against session close are end-exclusive: the instant equal to
+//!   `close_ssm` is considered closed. This avoids overlapping sessions.
+//! - "Wrapped" sessions are represented by `open_ssm > close_ssm`. When inside a
+//!   wrap, times before `close_ssm` on the next day are still considered inside the
+//!   same session.
+//! - The calendar-wide checks (`is_closed_all_day_*`) interpret a "day" in the
+//!   specified calendar TZ and correctly handle DST while checking for any session
+//!   overlap within that window.
+//!
+//! Examples can be found in `standard_lib/tests/market_hours_tests.rs`.
+use crate::securities::symbols::Exchange;
+use chrono::{
+    DateTime, Datelike, Duration, LocalResult, NaiveDate, NaiveDateTime, TimeZone, Timelike, Utc,
+    Weekday,
+};
+use chrono_tz::{America, Asia, Europe, Tz, US};
+use serde::{Deserialize, Serialize};
+use tracing::warn;
+use crate::base_data::Resolution;
+
+/// One schedule slice for a market session.
+///
+/// - `days`: Monday=0 .. Sunday=6 mask; `true` enables the rule on that weekday.
+/// - `open_ssm` / `close_ssm`: seconds since local midnight in the exchange TZ.
+///   If `open_ssm <= close_ssm` the session is same-day; if `open_ssm > close_ssm`
+///   the session wraps into the next local day and closes at `close_ssm` there.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionRule {
+    /// Weekday activation mask (Mon=0 .. Sun=6)
+    pub days: [bool; 7],
+    /// Open time in seconds since local midnight (exchange TZ)
+    pub open_ssm: u32,
+    /// Close time in seconds since local midnight (end-exclusive)
+    pub close_ssm: u32,
+}
+
+/// Exchange-level trading hours definition.
+///
+/// This is a pragmatic calendar describing typical hours for an exchange. It may not
+/// capture product-specific exceptions; consult contract specs for exact rules.
+#[derive(Debug, Clone)]
+pub struct MarketHours {
+    /// Which exchange these hours represent.
+    pub exchange: Exchange,
+    /// Exchange’s local time zone (used to interpret `SessionRule`s and handle DST).
+    pub tz: Tz,
+    /// Primary/pit ("regular") trading sessions (e.g., RTH for equities/futures).
+    pub regular: Vec<SessionRule>,
+    /// Electronic/overnight and other non-regular sessions.
+    pub extended: Vec<SessionRule>,
+    /// Exchange-local holiday dates (no sessions occur on these local calendar days).
+    pub holidays: Vec<chrono::NaiveDate>,
+    /// True if there is a distinct daily close (used for daily candle boundaries).
+    pub has_daily_close: bool,
+    /// True if the exchange has a true weekend close (used for weekly boundaries).
+    pub has_weekend_close: bool,
+}
+
+/// Which session set to consult when querying hours
+#[derive(Debug, Clone, Copy)]
+pub enum SessionKind {
+    Regular,
+    Extended,
+    Both,
+}
+
+impl MarketHours {
+    #[inline]
+    fn iter_rules<'a>(&'a self, kind: SessionKind) -> impl Iterator<Item = &'a SessionRule> + 'a {
+        let reg = self.regular.iter();
+        let ext = self.extended.iter();
+        match kind {
+            SessionKind::Regular => reg.take(usize::MAX).chain(ext.take(0)),
+            SessionKind::Extended => reg.take(0).chain(ext.take(usize::MAX)),
+            SessionKind::Both => reg.take(usize::MAX).chain(ext.take(usize::MAX)),
+        }
+    }
+
+    /// True if **any** (regular or extended) session is open at `t`.
+    pub fn is_open(&self, t: DateTime<Utc>) -> bool {
+        self.is_open_with(t, SessionKind::Both)
+    }
+
+    /// True if a session of the requested kind is open at `t`.
+    pub fn is_open_with(&self, t: DateTime<Utc>, kind: SessionKind) -> bool {
+        let local = t.with_timezone(&self.tz);
+        if self.holidays.iter().any(|d| *d == local.date_naive()) {
+            return false;
+        }
+        let w_today = local.weekday().num_days_from_monday() as usize;
+        let ssm = local.num_seconds_from_midnight();
+
+        // --- Hard gate known CME/CFE halts (source: CME rule filings & specs) ---
+        if matches!(self.exchange, Exchange::CME | Exchange::CFE) {
+            // 15:15–15:30 CT trading halt; 16:00–17:00 CT daily maintenance (Mon–Thu)
+            let ct_1515 = 15 * 3600 + 15 * 60;
+            let ct_1530 = 15 * 3600 + 30 * 60;
+            let ct_1600 = 16 * 3600;
+            let ct_1700 = 17 * 3600;
+
+            // Halt window every weekday (Mon–Fri)
+            let is_weekday = w_today <= 4;
+            if is_weekday && ssm >= ct_1515 && ssm < ct_1530 {
+                return false;
+            }
+
+            // Maintenance applies Mon–Thu (no Friday overnight open)
+            let is_mon_thu = w_today <= 3;
+            if is_mon_thu && ssm >= ct_1600 && ssm < ct_1700 {
+                return false;
+            }
+        }
+        // -----------------------------------------------------------------------
+        // ...then continue with your existing checks
+        if self.iter_rules(kind).any(|r| {
+            if !r.days[w_today] {
+                return false;
+            }
+            if r.open_ssm <= r.close_ssm {
+                ssm >= r.open_ssm && ssm < r.close_ssm
+            } else {
+                ssm >= r.open_ssm || ssm < r.close_ssm
+            }
+        }) {
+            return true;
+        }
+
+        let yday_date = local.date_naive() - Duration::days(1);
+        if self.holidays.iter().any(|d| *d == yday_date) {
+            return false;
+        }
+        let yday = yday_date.weekday().num_days_from_monday() as usize;
+        self.iter_rules(kind).any(|r| {
+            if !(r.open_ssm > r.close_ssm) {
+                return false;
+            }
+            if !r.days[yday] {
+                return false;
+            }
+            ssm < r.close_ssm
+        })
+    }
+
+    /// Convenience wrappers
+    pub fn is_open_regular(&self, t: DateTime<Utc>) -> bool {
+        self.is_open_with(t, SessionKind::Regular)
+    }
+    pub fn is_open_extended(&self, t: DateTime<Utc>) -> bool {
+        self.is_open_with(t, SessionKind::Extended)
+    }
+    /// Next bar end strictly after `now_utc`, skipping closed periods.
+    pub fn next_bar_end(&self, now_utc: DateTime<Utc>, res: Resolution) -> DateTime<Utc> {
+        match res {
+            Resolution::Seconds(_) | Resolution::Minutes(_) | Resolution::Hours(_) => {
+                let step = match res {
+                    Resolution::Seconds(s) => s as i64,
+                    Resolution::Minutes(m) => (m as i64) * 60,
+                    Resolution::Hours(h) => (h as i64) * 3600,
+                    _ => unreachable!(),
+                };
+                let mut t = now_utc;
+                loop {
+                    let secs = t.timestamp();
+                    let next = secs - (secs.rem_euclid(step)) + step;
+                    let cand = Utc.timestamp_opt(next, 0).single().unwrap_or(t);
+                    if self.is_open(cand) {
+                        return cand;
+                    }
+                    // if closed at that boundary, jump to next session open
+                    let (open, _close) = next_session_after(self, cand);
+                    t = open;
+                }
+            }
+            Resolution::Daily | Resolution::Weekly => {
+                // Use session bounds so “daily” ends at session close, not midnight
+                let (_open, close) = session_bounds(self, now_utc);
+                close
+            }
+        }
+    }
+
+    pub fn is_maintenance(&self, t: DateTime<Utc>) -> bool {
+        // “Maintenance” := closed now but next session is within ~90 minutes.
+        if self.is_open(t) {
+            return false;
+        }
+        let (open, _close) = next_session_after(self, t);
+        (open - t) <= chrono::Duration::minutes(90)
+    }
+
+    /// Return true iff the market is closed for the entire **calendar day** `day`
+    /// interpreted in `calendar_tz`. This checks whether *any* session (of `kind`)
+    /// intersects the [day@00:00, next_day@00:00) window.
+    pub fn is_closed_all_day_in_calendar(
+        &self,
+        day: NaiveDate,
+        calendar_tz: Tz,
+        kind: SessionKind,
+    ) -> bool {
+        // Convert the calendar day's bounds to UTC, DST-safe.
+        fn midnight_utc_for(tz: Tz, d: NaiveDate) -> DateTime<Utc> {
+            match tz.with_ymd_and_hms(d.year(), d.month(), d.day(), 0, 0, 0) {
+                LocalResult::Single(dt) => dt.with_timezone(&Utc),
+                LocalResult::Ambiguous(a, b) => a.min(b).with_timezone(&Utc),
+                LocalResult::None => {
+                    // Extremely rare at midnight; fallback to 01:00 local.
+                    tz.with_ymd_and_hms(d.year(), d.month(), d.day(), 1, 0, 0)
+                        .single()
+                        .expect("resolvable local time")
+                        .with_timezone(&Utc)
+                }
+            }
+        }
+
+        let start_utc = midnight_utc_for(calendar_tz, day);
+        let end_utc = midnight_utc_for(calendar_tz, day.succ_opt().expect("valid next day"));
+
+        // If you want “holiday = fully closed”, short-circuit when the exchange-local
+        // date(s) overlapped by this window include a holiday.
+        let start_local_day = start_utc.with_timezone(&self.tz).date_naive();
+        let end_local_day = (end_utc - Duration::nanoseconds(1))
+            .with_timezone(&self.tz)
+            .date_naive();
+        if self.holidays.contains(&start_local_day) || self.holidays.contains(&end_local_day) {
+            return true;
+        }
+
+        // If any session is active at window start → not closed all day.
+        if self.is_open_with(start_utc, kind) {
+            return false;
+        }
+
+        // Otherwise, check the *next* session after the window start; if it opens
+        // before the window ends, the day is not fully closed.
+        let (next_open, _next_close) = next_session_after_with(kind, self, start_utc);
+        next_open >= end_utc
+    }
+
+    /// Convenience: interpret the date in the **exchange TZ** (what your old
+    /// `is_closed_all_day_on` did).
+    #[inline]
+    pub fn is_closed_all_day_on(&self, local_day: NaiveDate, kind: SessionKind) -> bool {
+        self.is_closed_all_day_in_calendar(local_day, self.tz, kind)
+    }
+
+    /// Convenience: starting from a UTC timestamp, use a chosen calendar TZ to define “the day”.
+    #[inline]
+    pub fn is_closed_all_day_at(
+        &self,
+        ts_utc: DateTime<Utc>,
+        calendar_tz: Tz,
+        kind: SessionKind,
+    ) -> bool {
+        let day = ts_utc.with_timezone(&calendar_tz).date_naive();
+        self.is_closed_all_day_in_calendar(day, calendar_tz, kind)
+    }
+}
+
+/// Compute the inclusive candle end timestamp for a given `time_open`, `resolution` and `exchange`.
+/// The result is **one nanosecond before** the next bar's open (i.e., end-exclusive boundary minus 1ns),
+/// so adjacent bars do not collide.
+///
+/// Rules:
+/// - Intraday (Seconds/Minutes/Hours): use the exchange's trading hours to find the next bar boundary,
+///   then subtract 1ns.
+/// - Daily: if the exchange has a distinct daily close (`has_daily_close = true`), end at the *session close* - 1ns;
+///   otherwise, end at the next local midnight - 1ns (in the exchange's timezone).
+/// - Weekly: if the exchange has a distinct weekend close (`has_weekend_close = true`), end at the next
+///   Monday 00:00 local - 1ns; otherwise, end at the next Sunday 17:00 local - 1ns (common futures reopen).
+pub fn candle_end(
+    time_open: DateTime<Utc>,
+    resolution: Resolution,
+    exchange: Exchange,
+) -> Option<DateTime<Utc>> {
+    let hours = hours_for_exchange(exchange);
+
+    // helper: 1ns subtraction (avoid underflow)
+    let minus_1ns = |t: DateTime<Utc>| t.checked_sub_signed(Duration::nanoseconds(1)).unwrap_or(t);
+
+    match resolution {
+        Resolution::Seconds(_) | Resolution::Minutes(_) | Resolution::Hours(_) => {
+            // Use next bar boundary from market hours (skips closed periods)
+            let end_exclusive = hours.next_bar_end(time_open, resolution);
+            Some(minus_1ns(end_exclusive))
+        }
+        Resolution::Daily => {
+            if hours.has_daily_close {
+                let (_open, close) = session_bounds(&hours, time_open);
+                Some(minus_1ns(close))
+            } else {
+                // No explicit daily close → use next local midnight in the exchange TZ
+                let local = time_open.with_timezone(&hours.tz);
+                let tomorrow = local.date_naive() + Duration::days(1);
+                let next_midnight_local = hours
+                    .tz
+                    .with_ymd_and_hms(tomorrow.year(), tomorrow.month(), tomorrow.day(), 0, 0, 0)
+                    .earliest()
+                    .unwrap()
+                    .with_timezone(&Utc);
+                Some(minus_1ns(next_midnight_local))
+            }
+        }
+        Resolution::Weekly => {
+            use chrono::Weekday;
+            let local = time_open.with_timezone(&hours.tz);
+
+            // Find the next Monday 00:00 local
+            let mut d = local.date_naive();
+            let mut dow = local.weekday();
+            while dow != Weekday::Mon {
+                d = d + Duration::days(1);
+                dow = d.weekday();
+            }
+            let next_monday_00_local = hours
+                .tz
+                .with_ymd_and_hms(d.year(), d.month(), d.day(), 0, 0, 0)
+                .earliest()
+                .unwrap()
+                .with_timezone(&Utc);
+
+            if hours.has_weekend_close {
+                Some(minus_1ns(next_monday_00_local))
+            } else {
+                // Continuous products without a true weekend close:
+                // Use “Sunday night” as the weekly boundary (commonly 17:00 local on many futures venues).
+                // If the computed Monday is today (already Monday), move back to the prior week’s Sunday.
+                let mut d_sun = d;
+                // step back to Sunday corresponding to that Monday
+                d_sun = d_sun - Duration::days(1);
+                let sunday_17_local = hours
+                    .tz
+                    .with_ymd_and_hms(d_sun.year(), d_sun.month(), d_sun.day(), 17, 0, 0)
+                    .earliest()
+                    .unwrap()
+                    .with_timezone(&Utc);
+                Some(minus_1ns(sunday_17_local))
+            }
+        }
+    }
+}
+
+/// Back-compat shim: old name pointing to `candle_end`.
+#[inline]
+pub fn time_end_of_day(
+    time_open: DateTime<Utc>,
+    resolution: Resolution,
+    exchange: Exchange,
+) -> Option<DateTime<Utc>> {
+    candle_end(time_open, resolution, exchange)
+}
+
+/// Build default futures trading hours per exchange.
+/// NOTE: These are exchange-level defaults. Product-level variations may differ.
+pub fn hours_for_exchange(exch: Exchange) -> MarketHours {
+    match exch {
+        // ------------------------------------------------------------
+        // CME (CME Globex, Equity Index default)
+        // Sun 17:00 – Fri 16:00 CT with daily 60-min break at 16:00;
+        // RTH 08:30–15:15 CT; continuous 15:15–16:00 CT; no Fri overnight.
+        // Sources: CME Globex Notice (eliminated 3:15–3:30), contract specs.
+        // ------------------------------------------------------------
+        Exchange::CME => MarketHours {
+            exchange: Exchange::CME,
+            tz: US::Central,
+            regular: vec![
+                // RTH (Mon–Fri): 08:30–15:15 CT
+                SessionRule {
+                    days: [true, true, true, true, true, false, false],
+                    open_ssm: 8 * 3600 + 30 * 60,
+                    close_ssm: 15 * 3600 + 15 * 60,
+                },
+            ],
+            extended: vec![
+                // **Continuous** after RTH: 15:15–16:00 CT (Mon–Fri)
+                SessionRule {
+                    days: [true, true, true, true, true, false, false],
+                    open_ssm: 15 * 3600 + 15 * 60, // 15:15:00
+                    close_ssm: 16 * 3600,          // 16:00:00 (end-exclusive)
+                },
+                // Globex overnight (wrap): Sun + Mon–Thu 17:00 → next day 08:30 CT
+                // days mask marks the **open** day (Mon=0..Sun=6): Sun + Mon–Thu
+                SessionRule {
+                    days: [true, true, true, true, false, false, true],
+                    open_ssm: 17 * 3600,
+                    close_ssm: 8 * 3600 + 30 * 60,
+                },
+            ],
+            holidays: vec![],
+            has_daily_close: true,
+            has_weekend_close: true,
+        },
+
+        // ------------------------------------------------------------
+        // CBOT (Grains/Oilseeds default)
+        // Sun–Fri overnight 19:00–07:45 CT, day 08:30–13:20 CT.
+        // ------------------------------------------------------------
+        Exchange::CBOT => MarketHours {
+            exchange: Exchange::CBOT,
+            tz: US::Central,
+            regular: vec![
+                // Day session (Mon–Fri): 08:30–13:20 CT
+                SessionRule {
+                    days: [false, true, true, true, true, true, false],
+                    open_ssm: 8 * 3600 + 30 * 60,
+                    close_ssm: 13 * 3600 + 20 * 60,
+                },
+            ],
+            extended: vec![
+                // CBOT overnight (wrap): Sun + Mon–Thu 19:00 → next day 07:45 CT
+                // Mon=0..Sun=6  =>  [Mon, Tue, Wed, Thu, Fri, Sat, Sun]
+                SessionRule {
+                    days: [true, true, true, true, false, false, true],
+                    open_ssm: 19 * 3600,
+                    close_ssm: 7 * 3600 + 45 * 60,
+                },
+            ],
+            holidays: vec![],
+            has_daily_close: true,
+            has_weekend_close: true,
+        },
+
+        // ------------------------------------------------------------
+        // COMEX (Metals default)
+        // Nearly 24x5: 17:00–16:00 CT with daily maintenance 16:00–17:00.
+        // ------------------------------------------------------------
+        Exchange::COMEX => MarketHours {
+            exchange: Exchange::COMEX,
+            tz: US::Central,
+            regular: vec![],
+            extended: vec![
+                // BEFORE: days: [true, true, true, true, true, true, false]
+                SessionRule {
+                    days: [true, true, true, true, false, false, true],
+                    open_ssm: 17 * 3600,
+                    close_ssm: 16 * 3600,
+                },
+            ],
+            holidays: vec![],
+            has_daily_close: true,
+            has_weekend_close: true,
+        },
+
+        // ------------------------------------------------------------
+        // NYMEX (Energy default)
+        // Same “17:00–16:00 CT, daily break at 16:00–17:00”.
+        // ------------------------------------------------------------
+        Exchange::NYMEX => MarketHours {
+            exchange: Exchange::NYMEX,
+            tz: US::Central,
+            regular: vec![],
+            // --- NYMEX (energy) overnight ---
+            extended: vec![
+                // BEFORE: days: [true, true, true, true, true, true, false]
+                SessionRule {
+                    days: [true, true, true, true, false, false, true],
+                    open_ssm: 17 * 3600,
+                    close_ssm: 16 * 3600,
+                },
+            ],
+            holidays: vec![],
+            has_daily_close: true,
+            has_weekend_close: true,
+        },
+
+        // ------------------------------------------------------------
+        // EUREX (generic index/IR default)
+        // Asian hours 01:00–08:00 CET/CEST, then regular 08:00–22:00 CET/CEST.
+        // ------------------------------------------------------------
+        Exchange::EUREX => MarketHours {
+            exchange: Exchange::EUREX,
+            tz: Europe::Berlin,
+            regular: vec![
+                // Regular: 08:00–22:00 local
+                SessionRule {
+                    days: [false, true, true, true, true, true, false],
+                    open_ssm: 8 * 3600,
+                    close_ssm: 22 * 3600,
+                },
+            ],
+            extended: vec![
+                // Asian hours: 01:00–08:00 local
+                SessionRule {
+                    days: [false, true, true, true, true, true, false],
+                    open_ssm: 1 * 3600,
+                    close_ssm: 8 * 3600,
+                },
+            ],
+            holidays: vec![],
+            has_daily_close: true,
+            has_weekend_close: true,
+        },
+
+        // ------------------------------------------------------------
+        // ICE Futures U.S. (common profile)
+        // Many contracts follow ~20:00–18:00 ET (22h) with daily 2h break.
+        // ------------------------------------------------------------
+        Exchange::ICEUS => MarketHours {
+            exchange: Exchange::ICEUS,
+            tz: America::New_York,
+            regular: vec![],
+            extended: vec![
+                // Wrapped: 20:00 → 18:00 next day ET (common ICE US schedule)
+                SessionRule {
+                    days: [true, true, true, true, true, true, false],
+                    open_ssm: 20 * 3600,
+                    close_ssm: 18 * 3600,
+                },
+            ],
+            holidays: vec![],
+            has_daily_close: true,
+            has_weekend_close: true,
+        },
+
+        // ------------------------------------------------------------
+        // ICE Futures Europe (common profile)
+        // Typical 01:00–23:00 London for many equity/fixed income; ICE publishes DST variants.
+        // We model a broad window 01:00–23:00 local.
+        // ------------------------------------------------------------
+        Exchange::ICEEU => MarketHours {
+            exchange: Exchange::ICEEU,
+            tz: Europe::London,
+            regular: vec![SessionRule {
+                days: [false, true, true, true, true, true, false],
+                open_ssm: 1 * 3600,
+                close_ssm: 23 * 3600,
+            }],
+            extended: vec![],
+            holidays: vec![],
+            has_daily_close: true,
+            has_weekend_close: true,
+        },
+
+        // ------------------------------------------------------------
+        // SGX Derivatives (generic)
+        // T session ~07:10–20:00 SGT, T+1 ~20:00:01–05:15 SGT (varies by product).
+        // ------------------------------------------------------------
+        Exchange::SGX => MarketHours {
+            exchange: Exchange::SGX,
+            tz: Asia::Singapore,
+            regular: vec![
+                // T session (Mon–Fri): 07:10–20:00 SGT
+                SessionRule {
+                    days: [false, true, true, true, true, true, false],
+                    open_ssm: 7 * 3600 + 10 * 60,
+                    close_ssm: 20 * 3600,
+                },
+            ],
+            extended: vec![
+                // T+1 session (wrap): 20:00:01 → 05:15 next day SGT
+                SessionRule {
+                    days: [false, true, true, true, true, true, false],
+                    open_ssm: 20 * 3600,
+                    close_ssm: 5 * 3600 + 15 * 60,
+                },
+                // (The 1-second offset isn’t needed in SSM; end-exclusive comparison prevents overlap.)
+            ],
+            holidays: vec![],
+            has_daily_close: true,
+            has_weekend_close: true,
+        },
+
+        // ------------------------------------------------------------
+        // CFE (Cboe Futures – VIX default profile)
+        // Nearly 24x5 with daily 15-min halt 15:15–15:30 CT and a short 15:00–16:00 window;
+        // use RTH 08:30–15:15, plus 15:30–16:00, plus 17:00–08:30 wrap (Sun open at 17:00).
+        // ------------------------------------------------------------
+        Exchange::CFE => MarketHours {
+            exchange: Exchange::CFE,
+            tz: US::Central,
+            regular: vec![
+                // RTH: 08:30–15:15 CT
+                SessionRule {
+                    days: [true, true, true, true, true, false, false],
+                    open_ssm: 8 * 3600 + 30 * 60,
+                    close_ssm: 15 * 3600 + 15 * 60,
+                },
+            ],
+            extended: vec![
+                // Short window after RTH: 15:30–16:00 CT (Mon–Thu)
+                SessionRule {
+                    days: [true, true, true, true, false, false, false],
+                    open_ssm: 15 * 3600 + 30 * 60,
+                    close_ssm: 16 * 3600,
+                },
+                // Overnight (wrap): Sun + Mon–Thu 17:00 → next day 08:30 CT
+                SessionRule {
+                    days: [true, true, true, true, false, false, true],
+                    open_ssm: 17 * 3600,
+                    close_ssm: 8 * 3600 + 30 * 60,
+                },
+            ],
+            holidays: vec![],
+            has_daily_close: true,
+            has_weekend_close: true,
+        },
+
+        // Fallback
+        _ => {
+            warn!("No market hours found for : {}", exch);
+            MarketHours {
+                exchange: exch,
+                tz: chrono_tz::UTC,
+                regular: vec![SessionRule {
+                    days: [true, true, true, true, true, true, true],
+                    open_ssm: 0,
+                    close_ssm: 24 * 3600,
+                }],
+                extended: vec![],
+                holidays: vec![],
+                has_daily_close: true,
+                has_weekend_close: true,
+            }
+        }
+    }
+}
+
+// ---------------------------
+// Session helpers (public API)
+// ---------------------------
+
+/// Return the trading session [open, close) that **contains** `t` (if any) for the given kind.
+/// If `t` is outside any session (e.g., weekend/holiday), this falls back to:
+/// 1) previous day's wrap session (if it spans into today), else
+/// 2) the next valid session after `t`.
+pub fn session_bounds_with(
+    kind: SessionKind,
+    hours: &MarketHours,
+    t: DateTime<Utc>,
+) -> (DateTime<Utc>, DateTime<Utc>) {
+    let local = t.with_timezone(&hours.tz);
+    let day = local.date_naive();
+    let ssm = local.num_seconds_from_midnight() as i64;
+
+    let w_today = day.weekday().num_days_from_monday() as usize;
+    let yday = (day - chrono::Duration::days(1))
+        .weekday()
+        .num_days_from_monday() as usize;
+
+    // 1) Try all of TODAY's rules.
+    for r in hours.iter_rules(kind).filter(|r| r.days[w_today]) {
+        if (r.open_ssm as i64) <= (r.close_ssm as i64) {
+            // same-day
+            if ssm >= r.open_ssm as i64 && ssm < r.close_ssm as i64 {
+                let open = mk_local(hours.tz, day, r.open_ssm);
+                let close = mk_local(hours.tz, day, r.close_ssm);
+                return (open.with_timezone(&Utc), close.with_timezone(&Utc));
+            }
+        } else {
+            // wrap (open today, close tomorrow)
+            if ssm >= r.open_ssm as i64 {
+                let open = mk_local(hours.tz, day, r.open_ssm);
+                let close = mk_local(hours.tz, day + chrono::Duration::days(1), r.close_ssm);
+                return (open.with_timezone(&Utc), close.with_timezone(&Utc));
+            }
+        }
+    }
+
+    // 2) Try all of YESTERDAY's WRAP rules that spill into today.
+    //    (This is the case for early-morning times like 02:00 CT.)
+    for r in hours.iter_rules(kind).filter(|r| r.days[yday]) {
+        if r.open_ssm > r.close_ssm {
+            // yesterday had a wrap; if we're before today's wrap close, we are inside it
+            if ssm < r.close_ssm as i64 {
+                let open = mk_local(hours.tz, day - chrono::Duration::days(1), r.open_ssm);
+                let close = mk_local(hours.tz, day, r.close_ssm);
+                return (open.with_timezone(&Utc), close.with_timezone(&Utc));
+            }
+        }
+    }
+
+    // 3) Otherwise, fall forward to the next session after t.
+    next_session_after_with(kind, hours, t)
+}
+
+/// Backwards-compatible wrapper using Both (regular+extended)
+pub fn session_bounds(hours: &MarketHours, t: DateTime<Utc>) -> (DateTime<Utc>, DateTime<Utc>) {
+    session_bounds_with(SessionKind::Both, hours, t)
+}
+
+/// Next session bounds strictly after `end_excl` (searches forward, skipping holidays).
+pub fn next_session_after_with(
+    kind: SessionKind,
+    hours: &MarketHours,
+    end_excl: DateTime<Utc>,
+) -> (DateTime<Utc>, DateTime<Utc>) {
+    let local = end_excl.with_timezone(&hours.tz);
+    let base_day = local.date_naive();
+    let ssm_now = local.num_seconds_from_midnight() as i64;
+
+    for dd in 0..14 {
+        let d = base_day + Duration::days(dd);
+        if is_holiday(hours, d) {
+            continue;
+        }
+
+        // Consider ALL rules applicable on this day (don’t stop at the first one)
+        let mut best_open: Option<(DateTime<Utc>, DateTime<Utc>)> = None;
+        let w = d.weekday().num_days_from_monday() as usize; // Mon=0..Sun=6
+        for r in hours.iter_rules(kind) {
+            if !r.days[w] {
+                continue;
+            }
+            if r.open_ssm as i64 <= r.close_ssm as i64 {
+                if dd > 0 || ssm_now < r.open_ssm as i64 {
+                    let open_l = mk_local(hours.tz, d, r.open_ssm);
+                    let close_l = mk_local(hours.tz, d, r.close_ssm);
+                    let cand = (open_l.with_timezone(&Utc), close_l.with_timezone(&Utc));
+                    best_open = match best_open {
+                        None => Some(cand),
+                        Some(cur) => Some(if cand.0 < cur.0 { cand } else { cur }),
+                    };
+                }
+            } else {
+                if dd > 0 || ssm_now < r.open_ssm as i64 {
+                    let open_l = mk_local(hours.tz, d, r.open_ssm);
+                    let close_l = mk_local(hours.tz, d + Duration::days(1), r.close_ssm);
+                    let cand = (open_l.with_timezone(&Utc), close_l.with_timezone(&Utc));
+                    best_open = match best_open {
+                        None => Some(cand),
+                        Some(cur) => Some(if cand.0 < cur.0 { cand } else { cur }),
+                    };
+                }
+            }
+        }
+        if let Some(b) = best_open {
+            return b;
+        }
+    }
+    (end_excl, end_excl)
+}
+
+pub fn next_session_after(
+    hours: &MarketHours,
+    end_excl: DateTime<Utc>,
+) -> (DateTime<Utc>, DateTime<Utc>) {
+    next_session_after_with(SessionKind::Both, hours, end_excl)
+}
+
+// ---------------------------
+// Internals
+// ---------------------------
+
+fn is_holiday(hours: &MarketHours, d: chrono::NaiveDate) -> bool {
+    hours.holidays.iter().any(|h| *h == d)
+}
+
+#[allow(dead_code)]
+fn rule_for_date_in<'a>(
+    hours: &'a MarketHours,
+    d: chrono::NaiveDate,
+    kind: SessionKind,
+) -> Option<&'a SessionRule> {
+    if is_holiday(hours, d) {
+        return None;
+    }
+    let w = d.weekday().num_days_from_monday() as usize;
+    hours.iter_rules(kind).find(|r| r.days[w])
+}
+
+fn mk_local(tz: Tz, day: chrono::NaiveDate, ssm: u32) -> chrono::DateTime<Tz> {
+    let base: NaiveDateTime = day.and_hms_opt(0, 0, 0).unwrap() + Duration::seconds(ssm as i64);
+    // Resolve TZ (handle DST transitions); prefer `.single()` and fallback safely
+    tz.from_local_datetime(&base)
+        .single()
+        .unwrap_or_else(|| tz.from_utc_datetime(&base))
+}
+
+#[inline]
+pub fn next_session_open_after(mh: &MarketHours, after_utc: DateTime<Utc>) -> DateTime<Utc> {
+    // Search up to 14 days ahead (safety bound)
+    let tz: Tz = mh.tz;
+    let after_local = after_utc.with_timezone(&tz);
+
+    // quick holiday check
+    let is_holiday = |d: NaiveDate| mh.holidays.iter().any(|h| *h == d);
+
+    // combine regular + extended for “is open” calendar
+    let mut rules: Vec<&SessionRule> = Vec::new();
+    rules.extend(mh.regular.iter());
+    rules.extend(mh.extended.iter());
+
+    // Walk day-by-day until we find the first session whose OPEN is after `after_local`
+    for day_offset in 0..14 {
+        let day_local = after_local.date_naive() + chrono::Days::new(day_offset);
+        if is_holiday(day_local) {
+            continue;
+        }
+
+        // Which weekday is this?
+        let wd: Weekday = tz
+            .with_ymd_and_hms(
+                day_local.year(),
+                day_local.month(),
+                day_local.day(),
+                0,
+                0,
+                0,
+            )
+            .single()
+            .expect("valid local midnight")
+            .weekday();
+        // Standardize weekday indexing to Mon=0 .. Sun=6 (consistent with rule_for_date_in)
+        let wd_idx = wd.num_days_from_monday() as usize; // 0=Mon..6=Sun
+
+        // Evaluate all rules for this day; pick the earliest open strictly after `after_local`
+        let mut candidate: Option<DateTime<Tz>> = None;
+
+        for r in &rules {
+            if !r.days[wd_idx] {
+                continue;
+            }
+
+            // Construct local open time
+            let open_ssm = r.open_ssm.max(0).min(24 * 3600);
+            let open_h = (open_ssm / 3600) as u32;
+            let open_m = ((open_ssm % 3600) / 60) as u32;
+            let open_s = (open_ssm % 60) as u32;
+
+            let open_local = tz
+                .with_ymd_and_hms(
+                    day_local.year(),
+                    day_local.month(),
+                    day_local.day(),
+                    open_h,
+                    open_m,
+                    open_s,
+                )
+                .single();
+            let Some(open_dt) = open_local else { continue }; // skip ambiguous/skipped local-midnight edges
+
+            // Only accept opens strictly after our local time reference
+            if open_dt <= after_local {
+                continue;
+            }
+
+            candidate = match candidate {
+                None => Some(open_dt),
+                Some(best) => Some(best.min(open_dt)),
+            };
+        }
+
+        if let Some(open_dt) = candidate {
+            return open_dt.with_timezone(&Utc);
+        }
+    }
+
+    // Fallback: if we didn’t find anything (odd calendar), nudge by 1 day in UTC
+    after_utc + Duration::days(1)
+}

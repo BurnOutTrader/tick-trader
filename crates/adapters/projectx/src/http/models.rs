@@ -1,28 +1,10 @@
-// -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
-//  https://nautechsystems.io
-//
-//  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
-//  You may not use this file except in compliance with the License.
-//  You may obtain a copy of the License at https://www.gnu.org/licenses/lgpl-3.0.en.html
-//
-//  Unless required by applicable law or agreed to in writing, software
-//  distributed under the License is distributed on an "AS IS" BASIS,
-//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-//  See the License for the specific language governing permissions and
-//  limitations under the License.
-// -------------------------------------------------------------------------------------------------
-
-use chrono::DateTime;
-use nautilus_core::UnixNanos;
-use nautilus_model::{
-    data::{Bar, BarSpecification, BarType},
-    enums::{AggregationSource, BarAggregation, PriceType},
-    identifiers::InstrumentId,
-    types::{Price, Quantity},
-};
+use std::str::FromStr;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::{sync::watch, task::JoinHandle};
+use tt_types::base_data::{Candle, Exchange, Resolution};
+use tt_types::securities::futures_helpers::extract_root;
+use tt_types::maps::get_symbol_info;
 
 #[allow(unused)]
 #[derive(Debug, Serialize)]
@@ -117,47 +99,6 @@ pub struct PxApiBar {
     pub v: i64,
 }
 
-fn map_unit_to_aggregation(unit: i32) -> BarAggregation {
-    match unit {
-        // These codes are based on observed API behavior; default to Minute if unknown
-        0 => BarAggregation::Second,
-        1 => BarAggregation::Second,
-        2 => BarAggregation::Minute, // observed in practice
-        3 => BarAggregation::Hour,
-        4 => BarAggregation::Day,
-        5 => BarAggregation::Week,
-        6 => BarAggregation::Month,
-        _ => BarAggregation::Minute,
-    }
-}
-
-impl PxApiBar {
-    fn to_engine_bar(
-        &self,
-        bar_type: BarType,
-        price_precision: u8,
-        size_precision: u8,
-    ) -> anyhow::Result<Bar> {
-        // Parse RFC3339 timestamp to UnixNanos
-        let dt = DateTime::parse_from_rfc3339(&self.t)
-            .map_err(|e| anyhow::anyhow!("invalid bar timestamp '{}': {}", &self.t, e))?;
-        let ts_nanos = dt
-            .timestamp_nanos_opt()
-            .ok_or_else(|| anyhow::anyhow!("timestamp overflow for '{}'", &self.t))?;
-        let ts_nanos_u64: u64 = ts_nanos
-            .try_into()
-            .map_err(|_| anyhow::anyhow!("negative timestamp for '{}'", &self.t))?;
-        let ts = UnixNanos::from(ts_nanos_u64);
-
-        let open = Price::new(self.o, price_precision);
-        let high = Price::new(self.h, price_precision);
-        let low = Price::new(self.l, price_precision);
-        let close = Price::new(self.c, price_precision);
-        let volume = Quantity::new(self.v as f64, size_precision);
-
-        Ok(Bar::new(bar_type, open, high, low, close, volume, ts, ts))
-    }
-}
 
 #[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -179,22 +120,57 @@ impl RetrieveBarsResponse {
     /// - unit/unit_number: timeframe info as supplied in the request
     /// - price_precision: desired price precision for the instrument
     /// - size_precision: desired size precision for the instrument
-    pub fn to_engine_bars(
+    pub fn to_engine_candles(
         &self,
-        instrument_id: InstrumentId,
-        unit: i32,
-        unit_number: i32,
-        price_precision: u8,
-        size_precision: u8,
-    ) -> anyhow::Result<Vec<Bar>> {
-        let aggregation = map_unit_to_aggregation(unit);
-        let spec = BarSpecification::new(unit_number as usize, aggregation, PriceType::Last);
-        let bar_type = BarType::new(instrument_id, spec, AggregationSource::External);
-        self.bars
-            .iter()
-            .map(|b| b.to_engine_bar(bar_type, price_precision, size_precision))
-            .collect()
+        instrument_id: String,
+    ) -> anyhow::Result<Vec<Candle>> {
+        let root = extract_root(&instrument_id);
+        let symbol_info = get_symbol_info(&root)
+            .ok_or_else(|| anyhow::anyhow!("unknown symbol info for root {}", root))?;
+
     }
+
+    pub fn bar_to_candle(
+        &self,
+        bar: &PxApiBar,
+        instrument_id: String,
+        resolution: Resolution,
+        exchange: Exchange,
+    ) -> anyhow::Result<Candle> {
+        let time_start = DateTime::<Utc>::from_str(&bar.t)?;
+        let time_end = match resolution {
+            Resolution::Daily => {
+                let market_hours = get_m
+            }
+            Resolution::Weekly => {}
+            _ => time_start + resolution.as_duration()
+        };
+    }
+        let candle = Candle {
+            symbol: instrument_id,
+            exchange,
+            time_start: Default::default(),
+            time_end: Default::default(),
+            open: Default::default(),
+            high: Default::default(),
+            low: Default::default(),
+            close: Default::default(),
+            volume: Default::default(),
+            ask_volume: Default::default(),
+            bid_volume: Default::default(),
+            resolution: Resolution::Ticks,
+        }
+
+
+        Ok(Candle {
+            instrument_id: instrument_id.clone(),
+            timestamp: bar.t.clone(),
+            open,
+            high,
+            low,
+            close,
+            volume,
+        })
 }
 
 // ---------------- Contract Available ----------------

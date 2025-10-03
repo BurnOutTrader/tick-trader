@@ -18,11 +18,8 @@
 use std::env;
 
 use dotenvy::dotenv;
-use nautilus_projectx::{
-    http::{client::PxHttpClient, credentials::PxCredential, models::ContractSearchResponse},
-    websocket::PxWebSocketClient,
-};
 use tracing::{error, info, level_filters::LevelFilter, warn};
+use projectx::http::credentials::PxCredential;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
