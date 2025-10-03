@@ -121,13 +121,6 @@ lazy_static! {
         map.insert("ZT",   CommissionInfo { per_side: dec!(1.17) + dec!(0.25), currency: "USD".to_string() });
         map.insert("GE",   CommissionInfo { per_side: dec!(1.72) + dec!(0.35), currency: "USD".to_string() });
         map.insert("GLB",  CommissionInfo { per_side: dec!(1.72) + dec!(0.35), currency: "USD".to_string() });
-        map.insert("FGBL", CommissionInfo { per_side: dec!(0.77) + dec!(0.15), currency: "EUR".to_string() });
-        map.insert("FGBM", CommissionInfo { per_side: dec!(0.77) + dec!(0.15), currency: "EUR".to_string() });
-        map.insert("FGBS", CommissionInfo { per_side: dec!(0.77) + dec!(0.15), currency: "EUR".to_string() });
-        map.insert("FBTP", CommissionInfo { per_side: dec!(0.74) + dec!(0.15), currency: "EUR".to_string() });
-        map.insert("FOAT", CommissionInfo { per_side: dec!(0.77) + dec!(0.15), currency: "EUR".to_string() });
-        map.insert("FGBX", CommissionInfo { per_side: dec!(0.77) + dec!(0.15), currency: "EUR".to_string() });
-        map.insert("FBTS", CommissionInfo { per_side: dec!(0.77) + dec!(0.15), currency: "EUR".to_string() });
 
         // Grains Futures (Exchange Fee: 0.50 USD)
         map.insert("XC", CommissionInfo { per_side: dec!(1.55) + dec!(0.50), currency: "USD".to_string() });
