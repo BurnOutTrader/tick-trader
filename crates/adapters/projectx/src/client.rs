@@ -10,7 +10,7 @@ use tt_types::securities::symbols::Instrument;
 use crate::http::client::PxHttpClient;
 use crate::http::credentials::PxCredential;
 use crate::http::error::PxError;
-use crate::websocket::PxWebSocketClient;
+use crate::websocket::client::PxWebSocketClient;
 use tokio::sync::watch;
 use tt_bus::MessageBus;
 
@@ -132,7 +132,7 @@ impl MarketDataProvider for PXClient {
     }
 
     async fn disconnect(&self, reason: DisconnectReason) {
-        self.websocket.kill();
+        self.websocket.kill().await;
         self.http.kill()
     }
 

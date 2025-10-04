@@ -6,7 +6,7 @@ use tracing::{error, info, level_filters::LevelFilter, warn};
 use projectx::http::client::PxHttpClient;
 use projectx::http::credentials::PxCredential;
 use projectx::http::models::ContractSearchResponse;
-use projectx::websocket::PxWebSocketClient;
+use projectx::websocket::client::PxWebSocketClient;
 use tokio::sync::watch;
 use tt_bus::MessageBus;
 
