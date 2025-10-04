@@ -54,7 +54,8 @@ pub struct WebSocketConfig {
 
 #[derive(Debug)]
 pub struct WebSocketClient {
-    write: Arc<tokio::sync::Mutex<futures_util::stream::SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>>>,
+    write_tx: mpsc::Sender<Message>,
+    recv_task: Option<JoinHandle<()>>,
 }
 
 impl WebSocketClient {
@@ -81,15 +82,36 @@ impl WebSocketClient {
             }
         }
         let (ws_stream, _response) = connect_async(request).await?;
-        let (write, read) = ws_stream.split();
-        let client = WebSocketClient { write: Arc::new(tokio::sync::Mutex::new(write)) };
+        let (mut write, read) = ws_stream.split();
+        // Create a bounded channel and spawn a dedicated writer task to serialize sends
+        let (tx, mut rx) = mpsc::channel::<Message>(8192);
+        let recv_task = tokio::spawn(async move {
+            while let Some(msg) = rx.recv().await {
+                if let Err(_e) = write.send(msg).await {
+                    break;
+                }
+            }
+        });
+        let client = WebSocketClient { write_tx: tx, recv_task: Some(recv_task) };
         let reader: BoxStream<'static, Result<Message, tungstenite::Error>> = Box::pin(read);
         Ok((reader, client))
     }
 
     pub async fn send_text(&self, data: String, _request_id: Option<u64>) -> anyhow::Result<()> {
-        let mut write = self.write.lock().await;
-        write.send(Message::Text(data.into())).await.map_err(|e| anyhow::anyhow!(e))
+        // Fast path: try to enqueue without awaiting to minimize latency on hot path
+        match self.write_tx.try_send(Message::Text(data.clone().into())) {
+            Ok(_) => Ok(()),
+            Err(tokio::sync::mpsc::error::TrySendError::Full(_m)) => {
+                // Apply backpressure by awaiting when queue is full
+                self.write_tx
+                    .send(Message::Text(data.into()))
+                    .await
+                    .map_err(|e| anyhow::anyhow!(e.to_string()))
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_m)) => {
+                Err(anyhow::anyhow!("websocket writer closed"))
+            }
+        }
     }
 }
 // ---------------- Enums ----------------
