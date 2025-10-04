@@ -1,12 +1,13 @@
 use projectx::http::credentials::PxCredential;
+use tt_types::providers::ProjectXTenant;
 
-const FIRM: &str = "example_firm";
+const FIRM: ProjectXTenant =  ProjectXTenant::Topstep;
 const USER_NAME: &str = "example_user";
 const API_KEY: &str = "example_api_key_123";
 
 #[test]
 fn test_new_constructs_fields() {
-    let cred = PxCredential::new(FIRM.to_string(), USER_NAME.to_string(), API_KEY.to_string());
+    let cred = PxCredential::new(FIRM, USER_NAME.to_string(), API_KEY.to_string());
     assert_eq!(cred.firm, FIRM);
     assert_eq!(cred.user_name, USER_NAME);
     // api_key is a Ustr; compare by as_str()
@@ -15,7 +16,7 @@ fn test_new_constructs_fields() {
 
 #[test]
 fn test_debug_redacts_secret() {
-    let cred = PxCredential::new(FIRM.to_string(), USER_NAME.to_string(), API_KEY.to_string());
+    let cred = PxCredential::new(FIRM, USER_NAME.to_string(), API_KEY.to_string());
     let dbg_out = format!("{:?}", cred);
 
     // Ensure redaction markers are present

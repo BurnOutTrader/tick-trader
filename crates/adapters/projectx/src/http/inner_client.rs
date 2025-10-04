@@ -93,7 +93,7 @@ impl PxHttpInnerClient {
         };
         Ok(Self {
             retry_manager: RetryManager::new(retry_config)?,
-            end_points: crate::http::endpoints::PxEndpoints::from_firm(cfg.firm.as_str()),
+            end_points: crate::http::endpoints::PxEndpoints::from_firm(cfg.firm.clone()),
             cfg,
             http,
             token: Arc::new(RwLock::new(None)),

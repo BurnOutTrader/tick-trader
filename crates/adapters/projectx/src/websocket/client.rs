@@ -18,6 +18,7 @@ use tt_types::accounts::account::{AccountName, AccountSnapShot};
 use tt_types::accounts::events::{AccountDelta, OrderUpdate, PositionDelta, ProviderOrderId, ClientOrderId};
 use tt_types::wire::{OrdersBatch, PositionsBatch, AccountDeltaBatch};
 use tt_types::base_data::{Price, Side, Tick, Volume};
+use tt_types::providers::ProjectXTenant;
 use tt_types::securities::futures_helpers::extract_root;
 use tt_types::securities::symbols::Instrument;
 use crate::websocket::base_client::{WebSocketClient, WebSocketConfig};
@@ -33,7 +34,7 @@ use crate::websocket::models::{GatewayQuote, GatewayTrade, GatewayUserAccount, G
 #[derive(Clone)]
 pub struct PxWebSocketClient {
     bus: Arc<tt_bus::bus::MessageBus>,
-    firm: String,
+    firm: ProjectXTenant,
     /// Base URL for the websocket service, e.g. `https://rtc.tradeify.projectx.com`
     pub base_url: String,
     /// Optional bearer token used for hub access
@@ -96,7 +97,7 @@ impl PxWebSocketClient {
     /// Create a new websocket client with optional bearer token
     /// token is a clone or the Arc<RwLock<Option<String>>> managed by the http client.
     /// If an update is made to the token, it will automatically be copied by the websocket client by way of arc.
-    pub fn new(base_url: impl Into<String>, bearer_token: Arc<RwLock<Option<String>>>, firm: String, bus: Arc<MessageBus>) -> Self {
+    pub fn new(base_url: impl Into<String>, bearer_token: Arc<RwLock<Option<String>>>, firm: ProjectXTenant, bus: Arc<MessageBus>) -> Self {
         // Dedicated per-hub message queues to avoid head-of-line blocking
         let (user_tx, mut user_rx) = mpsc::channel::<Value>(4096);
         let (market_tx, mut market_rx) = mpsc::channel::<Value>(4096);

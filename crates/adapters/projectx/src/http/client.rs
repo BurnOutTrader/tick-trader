@@ -10,6 +10,7 @@ use rust_decimal::Decimal;
 use rust_decimal::prelude::FromPrimitive;
 use tokio::sync::RwLock;
 use tt_types::accounts::account::{AccountName, AccountSnapShot};
+use tt_types::providers::ProjectXTenant;
 use tt_types::securities::futures_helpers::extract_root;
 use tt_types::securities::security::FuturesContract;
 use tt_types::securities::symbols::{get_symbol_info, Instrument, SecurityType};
@@ -30,7 +31,7 @@ use crate::http::inner_client::PxHttpInnerClient;
 
 #[derive(Clone)]
 pub struct PxHttpClient {
-    pub firm: String,
+    pub firm: ProjectXTenant,
     pub inner: Arc<PxHttpInnerClient>,
     internal_accounts: Arc<DashMap<AccountName, AccountSnapShot>>,
     instruments: Arc<RwLock<AHashMap<Instrument, FuturesContract>>>,

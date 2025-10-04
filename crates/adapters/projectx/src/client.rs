@@ -12,10 +12,11 @@ use crate::http::credentials::PxCredential;
 use crate::http::error::PxError;
 use crate::websocket::client::PxWebSocketClient;
 use tt_bus::MessageBus;
+use tt_types::providers::ProjectXTenant;
 
 const PROVIDER: &'static str = "ProjectX";
 pub struct PXClient {
-    firm: String,
+    firm: ProjectXTenant,
     http: PxHttpClient,
     websocket: PxWebSocketClient,
     http_connection_state: RwLock<ConnectionState>,
@@ -31,6 +32,7 @@ impl PXClient {
         let firm = session.creds.get("firm").expect(
             "PXClient requires a 'firm' credential to be set in the session credentials",
         );
+        let firm = ProjectXTenant::try_from(firm.as_str())?;
         let user_name = session.creds.get("user_name").expect(">&user_name credential to be set in the session credentials");
         let api_key = session.creds.get("api_key").expect(
             "PXClient requires a 'api_key' credential to be set in the session credentials",
@@ -40,9 +42,9 @@ impl PXClient {
         let base = http.inner.rtc_base();
         let token = http.inner.token_string().await;
         let websocket = PxWebSocketClient::new(base, token, firm.clone(), bus);
-        let id = format!("ProjectX:{}", firm);
+        let id = format!("ProjectX:{:?}", firm);
         Ok(Self {
-            firm: firm.to_string(),
+            firm,
             id,
             http,
             websocket,
@@ -163,7 +165,8 @@ impl MarketDataProvider for PXClient {
     async fn active_md_subscriptions(&self) -> AHashMap<Topic, Vec<SymbolKey>> {
         // Collect current active subscriptions from the websocket client which tracks
         // contract ids per topic internally.
-        fn symbol_from_contract_id(firm: String, instrument: &str) -> Option<SymbolKey> {
+        fn symbol_from_contract_id(firm: ProjectXTenant, instrument: &str) -> Option<SymbolKey> {
+            let firm = firm.to_string();
             Some(SymbolKey {
                 instrument: instrument.to_string(),
                 provider: PROVIDER.to_string(),
@@ -173,15 +176,15 @@ impl MarketDataProvider for PXClient {
 
         let ticks = {
             let g = self.websocket.active_contract_ids_ticks().await;
-            g.iter().filter_map(|s| symbol_from_contract_id(self.firm.to_string(), s)).collect::<Vec<_>>()
+            g.iter().filter_map(|s| symbol_from_contract_id(self.firm.clone(), s)).collect::<Vec<_>>()
         };
         let quotes = {
             let g = self.websocket.active_contract_ids_quotes().await;
-            g.iter().filter_map(|s| symbol_from_contract_id(self.firm.to_string(), s)).collect::<Vec<_>>()
+            g.iter().filter_map(|s| symbol_from_contract_id(self.firm.clone(), s)).collect::<Vec<_>>()
         };
         let depth = {
             let g = self.websocket.active_contract_ids_depth().await;
-            g.iter().filter_map(|s| symbol_from_contract_id(self.firm.to_string(), s)).collect::<Vec<_>>()
+            g.iter().filter_map(|s| symbol_from_contract_id(self.firm.clone(), s)).collect::<Vec<_>>()
         };
 
         let mut map = AHashMap::new();

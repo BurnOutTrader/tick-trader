@@ -22,6 +22,7 @@ dashmap = { workspace = true }
 tokio-util = "0.7.16"
 ahash = { workspace = true }
 lazy_static = {workspace = true}
+zeroize = "1.8.2"
 [features]
 default = []
 

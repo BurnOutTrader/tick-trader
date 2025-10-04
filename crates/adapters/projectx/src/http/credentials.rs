@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 use ustr::Ustr;
-use zeroize::ZeroizeOnDrop;
+use tt_types::providers::ProjectXTenant;
 
 /// ProjectX credentials used to authenticate HTTP requests
 ///
@@ -8,18 +8,16 @@ use zeroize::ZeroizeOnDrop;
 /// - firm: the ProjectX firm identifier
 /// - user_name: the ProjectX login user name, redacted in Debug
 /// - api_key: the ProjectX API key, stored as Ustr and redacted in Debug.
-#[derive(Clone, ZeroizeOnDrop)]
+#[derive(Clone)]
 pub struct PxCredential {
-    pub firm: String,
-    #[zeroize(skip)]
+    pub firm: ProjectXTenant,
     pub user_name: String,
-    #[zeroize(skip)]
     pub api_key: Ustr,
 }
 
 impl PxCredential {
     /// Create a new credential from explicit values
-    pub fn new(firm: String, user_name: String, api_key: String) -> Self {
+    pub fn new(firm: ProjectXTenant, user_name: String, api_key: String) -> Self {
         Self {
             firm,
             user_name,
@@ -32,7 +30,7 @@ impl PxCredential {
     /// Expected variables: PX_FIRM, PX_USERNAME, PX_API_KEY.
     pub fn from_env() -> anyhow::Result<Self> {
         Ok(Self {
-            firm: std::env::var("PX_FIRM")?,
+            firm: ProjectXTenant::from(std::env::var("PX_FIRM")?.as_str()),
             user_name: std::env::var("PX_USERNAME")?,
             api_key: std::env::var("PX_API_KEY")?.into(),
         })

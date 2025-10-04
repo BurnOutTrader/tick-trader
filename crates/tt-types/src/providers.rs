@@ -1,3 +1,4 @@
+use std::fmt::Display;
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
@@ -5,8 +6,28 @@ use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 pub enum ProjectXTenant {
     Topstep,
     AlphaFutures,
-    /// Custom provider affinity; treated as literal provider id or URL segment
-    Custom(String),
+    Demo
+}
+
+impl From<&str> for ProjectXTenant {
+    fn from(s: &str) -> Self {
+        match s {
+            "topstep" => ProjectXTenant::Topstep,
+            "alphafutures" => ProjectXTenant::AlphaFutures,
+            "demo" => ProjectXTenant::Demo,
+            _ => panic!("invalid ProjectX tenant: {}", s),
+        }
+    }
+}
+
+impl Display for ProjectXTenant {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ProjectXTenant::Topstep => write!(f, "topstep"),
+            ProjectXTenant::AlphaFutures => write!(f, "alphafutures"),
+            ProjectXTenant::Demo => write!(f, "demo"),
+        }
+    }
 }
 
 impl ProjectXTenant {
@@ -14,7 +35,7 @@ impl ProjectXTenant {
         match self {
             ProjectXTenant::Topstep => "topstep".to_string(),
             ProjectXTenant::AlphaFutures => "alphafutures".to_string(),
-            ProjectXTenant::Custom(s) => s.to_lowercase(),
+            ProjectXTenant::Demo => "demo".to_string(),
         }
     }
 
@@ -24,7 +45,15 @@ impl ProjectXTenant {
         match self {
             ProjectXTenant::Topstep => "https://api.projectx.topstep.com".to_string(),
             ProjectXTenant::AlphaFutures => "https://api.projectx.alphafutures.com".to_string(),
-            ProjectXTenant::Custom(s) => s.clone(),
+            ProjectXTenant::Demo => "https://api.projectx.demo.com".to_string(),
+        }
+    }
+
+    pub fn to_platform_name(&self) -> String {
+        match self {
+            ProjectXTenant::Topstep => "topstepx".to_string(),
+            ProjectXTenant::AlphaFutures => "alphaticks".to_string(),
+            ProjectXTenant::Demo => "demo".to_string(),
         }
     }
 }

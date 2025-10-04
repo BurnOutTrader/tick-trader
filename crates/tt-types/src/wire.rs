@@ -2,7 +2,6 @@ use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use crate::base_data::{Bbo, Candle, Tick};
 use crate::keys::Topic;
 use crate::securities::security::FuturesContract;
-use crate::securities::symbols::Instrument;
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq, Eq)]
 #[rkyv(compare(PartialEq), derive(Debug))]
@@ -125,7 +124,6 @@ pub struct FuturesContractWire {
 
 impl FuturesContractWire {
     pub fn from_contract(fc: &FuturesContract) -> Self {
-        use rust_decimal::prelude::ToPrimitive;
         FuturesContractWire {
             instrument: fc.instrument.to_string(),
             provider_id: fc.provider_id.clone(),
