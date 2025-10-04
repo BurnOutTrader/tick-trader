@@ -11,8 +11,8 @@ use crate::http::client::PxHttpClient;
 use crate::http::credentials::PxCredential;
 use crate::http::error::PxError;
 use crate::websocket::client::PxWebSocketClient;
-use tokio::sync::watch;
 use tt_bus::MessageBus;
+
 const PROVIDER: &'static str = "ProjectX";
 pub struct PXClient {
     firm: String,
