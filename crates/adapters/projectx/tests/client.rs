@@ -1,23 +1,7 @@
-// -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
-//  https://nautechsystems.io
-//
-//  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
-//  You may not use this file except in compliance with the License.
-//  You may obtain a copy of the License at https://www.gnu.org/licenses/lgpl-3.0.en.html
-//
-//  Unless required by applicable law or agreed to in writing, software
-//  distributed under the License is distributed on an "AS IS" BASIS,
-//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-//  See the License for the specific language governing permissions and
-//  limitations under the License.
-// -------------------------------------------------------------------------------------------------
-
 use dotenvy::dotenv;
-use nautilus_projectx::http::{client::PxHttpInnerClient, credentials::PxCredential};
-use rstest::rstest;
+use projectx::http::client::PxHttpInnerClient;
+use projectx::http::credentials::PxCredential;
 
-#[rstest]
 #[ignore]
 #[tokio::test]
 async fn test_authenticate_returns_token() {
@@ -30,7 +14,8 @@ async fn test_authenticate_returns_token() {
     http.authenticate().await.expect("auth failed");
 
     // read token for assertions
-    let token = http.token_string().await.expect("no token after auth");
+    let token_guard = http.token_string().await;
+    let token = token_guard.read().await.clone().expect("Token guard poisoned");
 
     // Basic sanity checks
     assert!(!token.is_empty(), "Token was empty");
@@ -42,7 +27,7 @@ async fn test_authenticate_returns_token() {
     );
 }
 
-#[rstest]
+
 #[ignore]
 #[tokio::test]
 async fn auth_key_smoke_test() {
@@ -53,13 +38,14 @@ async fn auth_key_smoke_test() {
 
     http.authenticate().await.expect("Failed to auth");
 
-    let token = http.token_string().await.expect("no token after auth");
+    let token_guard = http.token_string().await;
+    let token = token_guard.read().await.clone().expect("Token guard poisoned");
     assert!(!token.is_empty());
     assert!(token.len() > 10);
     assert!(token.starts_with("eyJ"));
 }
 
-#[rstest]
+
 #[ignore]
 #[tokio::test]
 async fn validate_returns_new_token() {
@@ -72,12 +58,14 @@ async fn validate_returns_new_token() {
     http.authenticate().await.expect("auth");
 
     #[allow(unused)]
-    let tok1 = http.token_string().await.expect("missing tok1");
-
+    let token_guard = http.token_string().await;
+    let _ = token_guard.read().await.clone().expect("Token guard poisoned");
+    
     // rotate/validate (now Result<()>)
     http.validate().await.expect("validate");
 
-    let tok2 = http.token_string().await.expect("missing tok2");
+    let token_guard = http.token_string().await;
+    let tok2 = token_guard.read().await.clone().expect("Token guard poisoned");
 
     assert!(!tok2.is_empty(), "empty token after validate");
     // Depending on tenant, token may or may not change; if it should rotate:

@@ -123,6 +123,11 @@ impl Currency {
 #[rkyv(compare(PartialEq), derive(Debug))]
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Instrument(String);
+impl Instrument {
+    pub fn from(name: &str) -> Instrument {
+        Self(name.to_string())
+    }
+}
 impl FromStr for Instrument {
     type Err = ();
     fn from_str(s: &str) -> Result<Self, Self::Err> {

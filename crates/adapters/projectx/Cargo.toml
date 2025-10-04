@@ -9,6 +9,8 @@ name = "projectx"
 
 [dependencies]
 tt-types = { path = "../../tt-types" }
+tt-provider = {path = "../../provider"}
+tt-bus = { path = "../../bus" }
 ahash = { workspace = true }
 anyhow = { workspace = true }
 async-stream = { workspace = true }
@@ -33,6 +35,8 @@ tracing-subscriber = { workspace = true }
 async-trait = { workspace = true }  # Needed for example binaries
 rust_decimal = { workspace = true }
 rust_decimal_macros = { workspace = true }
+rustls = { workspace = true }
+lazy_static = "1.5.0"
 
 
 

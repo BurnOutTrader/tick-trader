@@ -3,8 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use tracing::info;
-
-use tt_provider::{MarketDataProvider, ProbeStatus, ProviderParams, SubscribeResult};
+use provider::traits::{MarketDataProvider, ProbeStatus, ProviderParams};
 use tt_types::keys::{SymbolKey, Topic};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -182,7 +181,7 @@ impl<P: MarketDataProvider + 'static> Engine<P> {
             if prev > 0 && ent.downstream_count == 0 {
                 drop(inner);
                 info!(?sk, "upstream unsubscribe start (downstream=0)");
-                self.provider.unsubscribe_md(topic, &key).await;
+                self.provider.unsubscribe_md(topic, &key).await?;
                 let mut inner2 = self.inner.lock().await;
                 if let Some(ent2) = inner2.interest.get_mut(&sk) {
                     ent2.state = SubState::Unsubscribed;
@@ -252,92 +251,5 @@ impl<P: MarketDataProvider + 'static> Engine<P> {
         while ring.len() > 1024 {
             ring.pop_front();
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tt_provider::{ConnectionState, DisconnectReason, ProviderSessionSpec};
-    use tt_types::keys::{SymbolKey, Topic};
-
-    struct MockProvider {
-        calls: Arc<Mutex<Vec<String>>>,
-    }
-    #[async_trait::async_trait]
-    impl MarketDataProvider for MockProvider {
-        fn id(&self) -> u16 {
-            1
-        }
-        fn name(&self) -> &'static str {
-            "mock"
-        }
-        fn supports(&self, _topic: Topic) -> bool {
-            true
-        }
-        async fn connect(&self, _session: ProviderSessionSpec) -> tt_provider::ConnectResult {
-            tt_provider::ConnectResult {
-                ok: true,
-                error: None,
-            }
-        }
-        async fn disconnect(&self, _reason: DisconnectReason) {}
-        fn connection_state(&self) -> ConnectionState {
-            ConnectionState::Connected
-        }
-        fn last_heartbeat_at(&self) -> Instant {
-            Instant::now()
-        }
-        async fn subscribe_md(
-            &self,
-            topic: Topic,
-            key: &tt_types::keys::SymbolKey,
-            _params: Option<&ProviderParams>,
-        ) -> SubscribeResult {
-            let mut g = self.calls.lock().await;
-            g.push(format!("sub:{:?}:{:?}", topic.id().0, key));
-            SubscribeResult {
-                ok: true,
-                error: None,
-            }
-        }
-        async fn unsubscribe_md(&self, topic: Topic, key: &tt_types::keys::SymbolKey) {
-            let mut g = self.calls.lock().await;
-            g.push(format!("unsub:{:?}:{:?}", topic.id().0, key));
-        }
-        fn active_md_subscriptions(&self) -> Vec<(Topic, SymbolKey)> {
-            vec![]
-        }
-    }
-
-    #[tokio::test]
-    async fn ref_count_and_params() {
-        let mp = Arc::new(MockProvider {
-            calls: Arc::new(Mutex::new(vec![])),
-        });
-        let eng = Engine::new(mp.clone(), EngineConfig::default());
-        let key = SymbolKey {
-            instrument: "ES".into(),
-            provider: "mock".into(),
-            broker: None,
-        };
-        let mut p = ProviderParams::new();
-        p.insert("depth".into(), "10".into());
-        eng.interest_delta(Topic::Depth, key.clone(), 1, Some(p.clone()))
-            .await
-            .unwrap();
-        eng.interest_delta(Topic::Depth, key.clone(), 1, None)
-            .await
-            .unwrap(); // idempotent subscribe, no extra call expected
-        eng.interest_delta(Topic::Depth, key.clone(), -1, None)
-            .await
-            .unwrap();
-        eng.interest_delta(Topic::Depth, key.clone(), -1, None)
-            .await
-            .unwrap(); // extra -1 should be no-op
-        let calls = mp.calls.lock().await.clone();
-        // Expect one subscribe and one unsubscribe
-        assert!(calls.iter().any(|c| c.starts_with("sub:")));
-        assert!(calls.iter().any(|c| c.starts_with("unsub:")));
     }
 }

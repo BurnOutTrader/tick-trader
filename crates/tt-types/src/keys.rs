@@ -1,7 +1,9 @@
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::RwLock;
 use once_cell::sync::Lazy;
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
+use crate::accounts::account::AccountName;
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq, Copy, Eq, Hash)]
 #[rkyv(compare(PartialEq), derive(Debug))]
@@ -196,7 +198,7 @@ impl SymbolKey {
 pub struct AccountKey {
     pub provider: String,       // lower
     pub broker: Option<String>, // lower
-    pub account_id: String,     // as-is
+    pub account_name: AccountName,     // as-is
     pub env: Option<String>,
 }
 
@@ -243,7 +245,7 @@ impl AccountKey {
                 (1..acc_idx, acc_idx, env)
             }
         };
-        let account_id = unescape(&parts[account_idx]);
+        let account_name = unescape(&parts[account_idx]);
         // Broker chain is any segments between provider and account_id for len>=4
         let broker = if broker_chain_range.start < broker_chain_range.end {
             let tail: Vec<String> = parts[broker_chain_range]
@@ -254,10 +256,16 @@ impl AccountKey {
         } else {
             None
         };
+        let account_name = match AccountName::from_str(&account_name) {
+            Ok(name) => name,
+            Err(e) => {
+                anyhow::bail!("invalid account name: {}", e);
+            }
+        };
         Ok(AccountKey {
             provider,
             broker,
-            account_id,
+            account_name,
             env,
         })
     }
@@ -273,7 +281,7 @@ impl AccountKey {
         }
         s.push(':');
         // account id as-is with escaping ':' and '\\'
-        s.push_str(&escape(&self.account_id, ':'));
+        s.push_str(&escape(&self.account_name.to_string(), ':'));
         if let Some(env) = &self.env {
             s.push(':');
             s.push_str(&escape(env, ':'));
@@ -307,7 +315,7 @@ mod tests {
         let k = AccountKey::parse(s).unwrap();
         assert_eq!(k.provider, "ib");
         assert_eq!(k.broker, None);
-        assert_eq!(k.account_id, "DU12345");
+        assert_eq!(k.account_name.as_ref(), "DU12345");
         assert_eq!(k.env.as_deref(), Some("paper"));
         let s2 = k.to_string_wire();
         assert_eq!(s2, s);
@@ -325,14 +333,14 @@ mod tests {
 
         let a = "acct:ibkr:DU\\:123:live";
         let k2 = AccountKey::parse(a).unwrap();
-        assert_eq!(k2.account_id, "DU:123");
+        assert_eq!(k2.account_name.as_ref(), "DU:123");
         assert_eq!(k2.to_string_wire(), a);
 
         let a2 = "acct:rithmic:top:step:DU12345:paper"; // multi-level broker chain for accounts
         let k3 = AccountKey::parse(a2).unwrap();
         assert_eq!(k3.provider, "rithmic");
         assert_eq!(k3.broker.as_deref(), Some("top.step"));
-        assert_eq!(k3.account_id, "DU12345");
+        assert_eq!(k3.account_name.as_ref(), "DU12345");
         assert_eq!(k3.env.as_deref(), Some("paper"));
         assert_eq!(k3.to_string_wire(), "acct:rithmic:top:step:DU12345:paper");
     }

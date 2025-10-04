@@ -4,8 +4,8 @@ members = [
     "crates/provider",
     "crates/engine",
     "crates/tt-types",
-    "crates/adapters/projectx"
-]
+    "crates/adapters/projectx",
+    "crates/server"]
 resolver = "2"
 
 [workspace.package]
@@ -22,7 +22,7 @@ bytes = "1.10.1"
 thiserror = "2.0.17"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
-tokio = { version = "1.47.1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util", "test-util"] }
+tokio = { version = "1.47.1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util", "test-util", "signal"] }
 tokio-util = { version = "0.7.16", features = ["codec"] }
 once_cell = "1.21.3"
 strum_macros = "0.27.2"
@@ -31,7 +31,7 @@ rust_decimal = { version = "1.38.0", features = ["serde", "default", "macros"] }
 rstest = "0.26.1"
 ustr = "1.1.0"
 rkyv = { version = "0.8.12", features = ["std", "alloc", "bytecheck"] }
-tokio-tungstenite = "0.28.0"
+tokio-tungstenite = { version = "0.28.0", features = ["native-tls"] }
 zeroize = { version = "1.8.2", features = ["derive"] }
 dashmap = "7.0.0-rc2"
 futures-util = "0.3.28"
@@ -41,3 +41,4 @@ reqwest = { version = "0.12.23"}
 rust_decimal_macros = "1.38.0"
 serde_json = "1.0.145"
 lazy_static = "1.5.0"
+rustls = { version = "0.23.20", default-features = false, features = ["ring"] }

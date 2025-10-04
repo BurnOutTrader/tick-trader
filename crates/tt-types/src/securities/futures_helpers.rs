@@ -236,3 +236,69 @@ pub fn round_to_tick_size(value: Decimal, tick_size: Decimal) -> Price {
     // Multiply the rounded number of ticks by the tick size to get_requests the final rounded value
     ticks * tick_size
 }
+
+/// Extract the futures month letter and year code (1–2 digits) from an instrument code.
+///
+/// This does not assume whether the root is 2 or 3 characters. It scans from the end
+/// for 1–2 trailing digits (year), then takes the preceding character as the month code
+/// and validates it against standard futures month letters (F,G,H,J,K,M,N,Q,U,V,X,Z).
+///
+/// Examples:
+/// - "ESZ25" -> Some(('Z', 25))
+/// - "MNQZ5" -> Some(('Z', 5))
+/// - "HEG24" -> Some(('G', 24))
+/// - "CL"    -> None
+#[inline]
+pub fn extract_month_year(instrument: &Instrument) -> Option<(char, u8)> {
+    let code = instrument.to_string();
+    let s = sanitize_code(&code).to_ascii_uppercase();
+    let b = s.as_bytes();
+    let mut i = b.len();
+    let mut year_digits = 0usize;
+    while i > 0 && b[i - 1].is_ascii_digit() && year_digits < 2 {
+        i -= 1;
+        year_digits += 1;
+    }
+    if year_digits == 0 || i == 0 { return None; }
+
+    // Preceding char is the month
+    let month_ch = s.as_bytes()[i - 1] as char;
+    // Validate month
+    if month_from_code(month_ch).is_none() { return None; }
+
+    // Parse year (keep as 1–2 digit code, not a full year)
+    let year_slice = &s[i..];
+    if year_slice.is_empty() || year_slice.len() > 2 { return None; }
+    let year_u8 = year_slice.parse::<u8>().ok()?;
+    Some((month_ch, year_u8))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::securities::symbols::Instrument;
+
+    #[test]
+    fn test_extract_month_year_two_letter_root() {
+        let i = Instrument::from("ESZ25");
+        assert_eq!(extract_month_year(&i), Some(('Z', 25)));
+    }
+
+    #[test]
+    fn test_extract_month_year_three_letter_root() {
+        let i = Instrument::from("MNQZ5");
+        assert_eq!(extract_month_year(&i), Some(('Z', 5)));
+    }
+
+    #[test]
+    fn test_extract_month_year_other() {
+        let i = Instrument::from("HEG24");
+        assert_eq!(extract_month_year(&i), Some(('G', 24)));
+    }
+
+    #[test]
+    fn test_extract_month_year_none() {
+        let i = Instrument::from("CL");
+        assert_eq!(extract_month_year(&i), None);
+    }
+}

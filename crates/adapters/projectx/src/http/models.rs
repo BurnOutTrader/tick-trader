@@ -154,7 +154,6 @@ impl RetrieveBarsResponse {
         let candle = Candle {
             symbol: root,
             instrument,
-            exchange,
             time_start,
             time_end,
             open: Decimal::from_f64(bar.o).unwrap_or_default(),

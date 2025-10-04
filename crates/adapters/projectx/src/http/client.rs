@@ -1,11 +1,12 @@
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::Duration,
 };
 use std::str::FromStr;
 use anyhow::anyhow;
-use chrono::{DateTime, Utc, Duration as ChronoDuration};
+use chrono::Duration as ChronoDuration;
+use dashmap::DashMap;
 use reqwest::Method;
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::{
@@ -14,7 +15,9 @@ use tokio::{
 };
 use ustr::Ustr;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
-use tt_types::accounts::account::AccountId;
+use tokio::sync::watch::{Receiver, Sender};
+use tt_bus::MessageBus;
+use tt_types::accounts::account::AccountName;
 use tt_types::api_helpers::rate_limiter::RateLimiter;
 use tt_types::api_helpers::retry_manager::{RetryManager, RetryConfig};
 use tt_types::securities::futures_helpers::extract_root;
@@ -133,6 +136,7 @@ pub struct PxHttpInnerClient {
     stop_tx: Arc<watch::Sender<bool>>,
     bg_task: Arc<RwLock<Option<JoinHandle<()>>>>,
     end_points: PxEndpoints,
+    bus: Arc<MessageBus>
 }
 
 impl PxHttpInnerClient {
@@ -178,6 +182,7 @@ impl PxHttpInnerClient {
         max_retries: Option<u32>,
         retry_delay_ms: Option<u64>,
         retry_delay_max_ms: Option<u64>,
+        bus: Arc<MessageBus>
     ) -> anyhow::Result<Self> {
         let (tx, _rx) = watch::channel(false);
 
@@ -201,16 +206,12 @@ impl PxHttpInnerClient {
             end_points: crate::http::endpoints::PxEndpoints::from_firm(cfg.firm.as_str()),
             cfg,
             http,
+            bus,
             token: Arc::new(RwLock::new(None)),
             auth_headers: Arc::new(RwLock::new(HashMap::new())),
             stop_tx: Arc::new(tx),
             bg_task: Arc::new(RwLock::new(None)),
         })
-    }
-
-    /// Convenience constructor matching earlier tests: use all defaults
-    pub fn new_default(cfg: PxCredential) -> anyhow::Result<Self> {
-        Self::new(cfg, None, None, None, None)
     }
 
 
@@ -386,8 +387,8 @@ impl PxHttpInnerClient {
     }
 
     /// Get a clone of the current bearer token if available
-    pub async fn token_string(&self) -> Option<String> {
-        self.token.read().await.clone()
+    pub async fn token_string(&self) -> Arc<RwLock<Option<String>>> {
+        self.token.clone()
     }
 
     /// Return a human-readable overview of the ProjectX rate limiting policy
@@ -653,10 +654,11 @@ impl PxHttpInnerClient {
 }
 
 
+#[derive(Clone)]
 pub struct PxHttpClient {
-    firm: String,
+    pub firm: String,
     pub inner: Arc<PxHttpInnerClient>,
-    internal_accounts_ids: Arc<RwLock<HashMap<Ustr, i64>>>,
+    internal_accounts_ids: Arc<DashMap<AccountName, i64>>,
     cache_initialized: bool,
 }
 
@@ -682,34 +684,54 @@ impl PxHttpClient {
                 retry_delay_ms,
                 retry_delay_max_ms,
             )?),
-            internal_accounts_ids: Arc::new(RwLock::new(Default::default())),
+            internal_accounts_ids: Arc::new(DashMap::new()),
             cache_initialized: false,
         })
     }
 
     /// Authenticate once, then start background token validation on an interval,
     /// Returns Ok when the task is spawned.
-    pub async fn start(&self) -> Result<(), PxError> {
+    pub async fn start(&self, token_update_sender: Sender<String>,) -> Result<(), PxError> {
         // 1) authenticate once
         self.inner.authenticate().await?;
+
+        // 1.5) send initial token to downstream listeners (e.g., websocket client)
+        if let Some(tok) = self.inner.token.read().await.clone() {
+            // Send the freshly authenticated token so listeners can initialize
+            let _ = token_update_sender.send_replace(tok);
+        }
+
         // 2) spawn background validator (client-managed)
-        self.spawn_auto_validate(Duration::from_secs(12 * 3600))
+        self.spawn_auto_validate(Duration::from_secs(12 * 3600), token_update_sender)
             .await; // ~12h
         Ok(())
     }
 
     /// Spawns Autovalidate to update token every 12 hours.
     /// Stores the joinhandle in the inner client so that it is maintained on clone and drop of this object via the Arc<InnerClient>
-    async fn spawn_auto_validate(&self, period: Duration) {
+    async fn spawn_auto_validate(&self, period: Duration, token_update_sender: Sender<String>,) {
         let mut rx = self.inner.stop_tx.subscribe();
-        let this = self.clone();
         let client = self.inner.clone();
         let handle = tokio::spawn(async move {
             let mut ticker = tokio::time::interval(period);
+            // track last sent token to avoid redundant notifications
+            let mut last_token: Option<String> = None;
+            // attempt to read and send current token at startup
+            if let Some(cur) = client.token.read().await.clone() {
+                last_token = Some(cur.clone());
+                let _ = token_update_sender.send_replace(cur);
+            }
             loop {
                 tokio::select! {
                     _ = ticker.tick() => {
-                        let _ = client.validate().await; // log errors if you want
+                        if client.validate().await.is_ok() {
+                            if let Some(cur) = client.token.read().await.clone() {
+                                if last_token.as_ref().map(|s| s.as_str()) != Some(cur.as_str()) {
+                                    last_token = Some(cur.clone());
+                                    let _ = token_update_sender.send_replace(cur);
+                                }
+                            }
+                        }
                     }
                     _ = rx.changed() => {
                         if *rx.borrow() { break; }
@@ -755,39 +777,33 @@ impl PxHttpClient {
     }
 
     /// Initialise or refresh the account id using the api
-    pub async fn account_ids(&self) -> anyhow::Result<Vec<AccountId>> {
+    pub async fn account_ids(&self) -> anyhow::Result<Vec<i64>> {
         let resp = self.inner.search_accounts(true).await?;
 
         let mut ids = Vec::new();
-        let mut account_lock = self.internal_accounts_ids.write().await;
         for acc in &resp.accounts {
-            account_lock.insert(acc.name.clone().into(), acc.id);
-            let id = match AccountId::from_str(&format!("{}-{}", &self.firm, acc.id)) {
-                Ok(id) => id,
+            let name = match AccountName::from_str(&acc.name) {
+                Ok(name) => name,
                 Err(e) => {
                     log::error!("Failed to parse account id: {}", e);
                     continue;
-                }           
+                }
             };
-            ids.push(id);
+            self.internal_accounts_ids.insert(name, acc.id);
+            ids.push(acc.id);
         }
         Ok(ids)
     }
 
     /// Find a correlated nautilus account id from an account name
-    pub async fn account_id(&self, account_name: Ustr) -> anyhow::Result<AccountId> {
-        let lock = self.internal_accounts_ids.read().await;
-        let id = lock
+    pub async fn account_id(&self, account_name: AccountName) -> anyhow::Result<i64> {
+        let id = self.internal_accounts_ids
             .get(&account_name)
-            .copied()
-            .ok_or_else(|| anyhow::anyhow!(format!("Account {} not found", account_name)))?;
-        let id = match AccountId::from_str(&format!("{}-{}", &self.firm, id)) {
-            Ok(id) => id,
-            Err(e) => {
-                log::error!("Failed to parse account id: {}", e);
-                return Err(anyhow::anyhow!(format!("Account {} not found", account_name)));
-            }           
-        };
-        Ok(id)
+            .ok_or_else(|| anyhow::anyhow!(format!("Account {:?} ID not found", account_name)))?;
+        Ok(id.clone())
+    }
+
+    pub fn kill(&self) {
+
     }
 }

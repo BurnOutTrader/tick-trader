@@ -1,25 +1,9 @@
-// -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
-//  https://nautechsystems.io
-//
-//  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
-//  You may not use this file except in compliance with the License.
-//  You may obtain a copy of the License at https://www.gnu.org/licenses/lgpl-3.0.en.html
-//
-//  Unless required by applicable law or agreed to in writing, software
-//  distributed under the License is distributed on an "AS IS" BASIS,
-//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-//  See the License for the specific language governing permissions and
-//  limitations under the License.
-// -------------------------------------------------------------------------------------------------
-
 use dotenvy::dotenv;
-use nautilus_projectx::http::{
-    client::{PxHttpClient, PxHttpInnerClient},
-    credentials::PxCredential,
-    models::ContractSearchResponse,
-};
+use rustls::crypto::{ring, CryptoProvider};
 use tracing::level_filters::LevelFilter;
+use projectx::http::client::PxHttpClient;
+use projectx::http::credentials::PxCredential;
+use tokio::sync::watch;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -29,11 +13,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     dotenv().ok();
 
+    let _ = CryptoProvider::install_default(ring::default_provider());
+
     let cfg = PxCredential::from_env().expect("Missing PX env vars");
     #[allow(unused)]
     let client = PxHttpClient::new(cfg, None, None, None, None)?;
 
-    let _ = client.start().await?;
+    let (_tx, _rx) = watch::channel(String::new());
+    let _ = client.start(_tx).await?;
     tracing::info!("Authentication: Success");
 
     let resp = client.account_ids().await?;

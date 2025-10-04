@@ -1,28 +1,7 @@
+use std::fmt::Display;
 use std::str::FromStr;
-use rust_decimal::Decimal;
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
-
-#[derive(Archive, RkyvDeserialize, RkyvSerialize)]
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct AccountId(i64);
-impl AccountId {
-    pub fn new(id: i64) -> Self {
-        Self(id)
-    }
-    pub fn to_string(&self) -> String {
-        self.0.to_string()
-    }
-    pub fn to_i64(&self) -> i64 {
-        self.0
-    }
-    pub fn is_valid(&self) -> bool {}
-}
-impl FromStr for AccountId {
-    type Err = String;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(Self(i64::from_str(s).map_err(|e| format!("Invalid AccountId: {}", e))?))
-    }
-}
+use rust_decimal::Decimal;
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -39,11 +18,23 @@ impl AccountName {
     }
 }
 
+impl Display for AccountName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl AsRef<str> for AccountName {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
 #[derive(Archive, RkyvDeserialize, RkyvSerialize)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct AccountSnapShot {
     pub name: AccountName,
-    pub id: AccountId,
+    pub id: i64,
     #[rkyv(with = crate::rkyv_types::DecimalDef)]
     pub balance: Decimal,
     pub can_trade: bool,
