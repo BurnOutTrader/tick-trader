@@ -32,7 +32,7 @@ impl PXClient {
             "PXClient requires a 'api_key' credential to be set in the session credentials",
         );
         let px_credentials = PxCredential::new(firm.clone(), user_name.clone(), api_key.clone());
-        let http = PxHttpClient::new(px_credentials, None, None, None, None, bus.clone())?;
+        let http = PxHttpClient::new(px_credentials, None, None, None, None)?;
         let base = http.inner.rtc_base();
         let token = http.inner.token_string().await;
         let websocket = PxWebSocketClient::new(base, token, firm.clone(), bus);

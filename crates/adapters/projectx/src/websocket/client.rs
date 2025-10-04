@@ -98,7 +98,7 @@ impl PxWebSocketClient {
         // Dedicated per-hub message queues to avoid head-of-line blocking
         let (user_tx, mut user_rx) = mpsc::channel::<Value>(4096);
         let (market_tx, mut market_rx) = mpsc::channel::<Value>(4096);
-        let mut client = Self {
+        let client = Self {
             bus,
             firm,
             base_url: base_url.into(),

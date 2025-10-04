@@ -392,7 +392,7 @@ impl PxHttpInnerClient {
 
     /// List available contracts
     /// POST /api/Contract/available
-    pub async fn available_contracts(&self, live: bool) -> Result<ContractSearchResponse, PxError> {
+    pub async fn list_all_contracts(&self, live: bool) -> Result<ContractSearchResponse, PxError> {
         const PATH: &str = "/api/Contract/available";
         let body = AvailableContractsReq { live };
         self.request_json::<ContractSearchResponse, _>(Method::POST, PATH, Some(&body))

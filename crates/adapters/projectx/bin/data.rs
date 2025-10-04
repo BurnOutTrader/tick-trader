@@ -21,8 +21,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Authenticate via HTTP to obtain a JWT for the SignalR market hub
     let cfg = PxCredential::from_env().expect("Missing PX env vars");
-    let bus = Arc::new(MessageBus::new());
-    let http = PxHttpClient::new(cfg, None, None, None, None, bus.clone())?;
+    let http = PxHttpClient::new(cfg, None, None, None, None)?;
     http.start().await?;
     info!("Authentication: Success");
 
@@ -54,6 +53,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .token_string()
         .await;
     let base = http.inner.rtc_base();
+    let bus = Arc::new(MessageBus::new());
     let rt = PxWebSocketClient::new(base, token, http.firm.clone(), bus.clone());
 
     // Connect market hub and subscribe to trades for the contract
