@@ -266,4 +266,9 @@ impl PxHttpClient {
     pub fn kill(&self) {
         let _ = self.inner.stop_tx.send(true);
     }
+
+    /// Returns a clone of the current instruments map (Instrument -> FuturesContract)
+    pub async fn instruments_snapshot(&self) -> AHashMap<Instrument, FuturesContract> {
+        self.instruments.read().await.clone()
+    }
 }

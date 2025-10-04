@@ -1,10 +1,11 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use tracing::info;
 use provider::traits::{MarketDataProvider, ProbeStatus, ProviderParams};
 use tt_types::keys::{SymbolKey, Topic};
+use async_trait::async_trait;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubState {
@@ -251,5 +252,261 @@ impl<P: MarketDataProvider + 'static> Engine<P> {
         while ring.len() > 1024 {
             ring.pop_front();
         }
+    }
+}
+
+
+// -------- Strategy runtime over the MessageBus --------
+use tt_bus::bus::{MessageBus, SubId};
+use tokio::sync::mpsc;
+use tt_types::base_data::{Bbo, Candle, Tick};
+use tt_types::wire::{AccountDeltaBatch, BarBatch, Envelope, FlowCredit, OrdersBatch, PositionsBatch, Subscribe, TickBatch, QuoteBatch};
+
+#[async_trait]
+pub trait Strategy: Send + Sync + 'static {
+    fn desired_topics(&self) -> HashSet<Topic>;
+    async fn on_start(&self) {}
+    async fn on_stop(&self) {}
+    async fn on_tick(&self, _t: Tick) {}
+    async fn on_quote(&self, _q: Bbo) {}
+    async fn on_bar(&self, _b: Candle) {}
+    async fn on_orders_batch(&self, _b: OrdersBatch) {}
+    async fn on_positions_batch(&self, _b: PositionsBatch) {}
+    async fn on_account_delta_batch(&self, _b: AccountDeltaBatch) {}
+}
+
+pub struct EngineRuntime {
+    bus: Arc<MessageBus>,
+    sub_id: Option<SubId>,
+    rx: Option<mpsc::Receiver<Envelope>>,
+    task: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl EngineRuntime { 
+    pub async fn list_instruments(&self, provider: &str, pattern: Option<String>) -> anyhow::Result<Vec<String>> {
+        self.bus.request_instruments(provider, pattern).await
+    }
+    pub async fn subscribe_symbol(&self, provider: &str, topic: Topic, key: &SymbolKey) -> anyhow::Result<()> {
+        self.bus.md_subscribe(provider, topic, key.to_string_wire()).await
+    }
+    pub async fn unsubscribe_symbol(&self, provider: &str, topic: Topic, key: &SymbolKey) -> anyhow::Result<()> {
+        self.bus.md_unsubscribe(provider, topic, key.to_string_wire()).await
+    }
+    pub fn new(bus: Arc<MessageBus>) -> Self {
+        Self { bus, sub_id: None, rx: None, task: None }
+    }
+
+    pub async fn start<S: Strategy>(&mut self, strategy: Arc<S>) -> anyhow::Result<()> {
+        let (tx, rx) = mpsc::channel::<Envelope>(1024);
+        let sub_id = self.bus.add_client(tx).await;
+        self.sub_id = Some(sub_id.clone());
+        self.rx = Some(rx);
+        for topic in strategy.desired_topics().into_iter() {
+            let sub = Subscribe { topic, latest_only: false, from_seq: 0 };
+            self.bus.handle(&sub_id, Envelope::Subscribe(sub)).await?;
+            let fc = FlowCredit { topic, credits: 1000 };
+            self.bus.handle(&sub_id, Envelope::FlowCredit(fc)).await?;
+        }
+        let mut rx = self.rx.take().expect("rx present after start");
+        strategy.on_start().await;
+        let handle = tokio::spawn(async move {
+            while let Some(env) = rx.recv().await {
+                match env {
+                    Envelope::TickBatch(TickBatch { ticks, .. }) => {
+                        for t in ticks { strategy.on_tick(t).await; }
+                    }
+                    Envelope::QuoteBatch(QuoteBatch { quotes, .. }) => {
+                        for q in quotes { strategy.on_quote(q).await; }
+                    }
+                    Envelope::BarBatch(BarBatch { bars, .. }) => {
+                        for b in bars { strategy.on_bar(b).await; }
+                    }
+                    Envelope::OrdersBatch(ob) => { strategy.on_orders_batch(ob).await; }
+                    Envelope::PositionsBatch(pb) => { strategy.on_positions_batch(pb).await; }
+                    Envelope::AccountDeltaBatch(ab) => { strategy.on_account_delta_batch(ab).await; }
+                    Envelope::Pong(_) | Envelope::VendorData(_) | Envelope::Tick(_) | Envelope::Quote(_) | Envelope::Bar(_) => {}
+                    Envelope::Subscribe(_) | Envelope::FlowCredit(_) | Envelope::Ping(_) => {}
+                    Envelope::MdSubscribe(_) | Envelope::MdUnsubscribe(_) | Envelope::InstrumentsRequest(_) | Envelope::InstrumentsResponse(_) | Envelope::InstrumentsMapResponse(_) | Envelope::AuthCredentials(_) => {}
+                }
+            }
+            let _ = strategy.on_stop().await;
+        });
+        self.task = Some(handle);
+        Ok(())
+    }
+
+    pub async fn stop(&mut self) {
+        if let Some(handle) = self.task.take() { handle.abort(); }
+        self.rx.take();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tt_types::base_data::{Decimal, Utc, Side, Bbo, Candle, Resolution};
+    use std::str::FromStr;
+    use tt_types::wire::{Envelope, TickBatch, QuoteBatch, BarBatch, OrdersBatch, PositionsBatch, AccountDeltaBatch};
+    use tt_types::wire::codec;
+    use tt_types::accounts::events::{OrderUpdate, PositionDelta, AccountDelta};
+
+    struct TestStrategy {
+        ticks: Arc<AtomicUsize>,
+        quotes: Arc<AtomicUsize>,
+        bars: Arc<AtomicUsize>,
+        orders: Arc<AtomicUsize>,
+        positions: Arc<AtomicUsize>,
+        accounts: Arc<AtomicUsize>,
+        topics: HashSet<Topic>,
+    }
+    #[async_trait]
+    impl Strategy for TestStrategy {
+        fn desired_topics(&self) -> HashSet<Topic> { self.topics.clone() }
+        async fn on_tick(&self, _t: Tick) { self.ticks.fetch_add(1, Ordering::SeqCst); }
+        async fn on_quote(&self, _q: Bbo) { self.quotes.fetch_add(1, Ordering::SeqCst); }
+        async fn on_bar(&self, _b: Candle) { self.bars.fetch_add(1, Ordering::SeqCst); }
+        async fn on_orders_batch(&self, _b: OrdersBatch) { self.orders.fetch_add(1, Ordering::SeqCst); }
+        async fn on_positions_batch(&self, _b: PositionsBatch) { self.positions.fetch_add(1, Ordering::SeqCst); }
+        async fn on_account_delta_batch(&self, _b: AccountDeltaBatch) { self.accounts.fetch_add(1, Ordering::SeqCst); }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn engine_runtime_receives_ticks() {
+        let bus = Arc::new(MessageBus::new());
+        let mut rt = EngineRuntime::new(bus.clone());
+        let mut topics = HashSet::new(); topics.insert(Topic::Ticks);
+        let strat = Arc::new(TestStrategy {
+            ticks: Arc::new(AtomicUsize::new(0)),
+            quotes: Arc::new(AtomicUsize::new(0)),
+            bars: Arc::new(AtomicUsize::new(0)),
+            orders: Arc::new(AtomicUsize::new(0)),
+            positions: Arc::new(AtomicUsize::new(0)),
+            accounts: Arc::new(AtomicUsize::new(0)),
+            topics,
+        });
+        rt.start(strat.clone()).await.unwrap();
+        // publish a tick
+        let tick = tt_types::base_data::Tick {
+            symbol: "ES".to_string(),
+            instrument: tt_types::securities::symbols::Instrument::from_str("ESZ5").unwrap(),
+            price: Decimal::new(100, 0),
+            volume: Decimal::new(1, 0),
+            time: Utc::now(),
+            side: Side::None,
+            venue_seq: None,
+        };
+        let _ = bus.publish_tick(tick).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(strat.ticks.load(Ordering::SeqCst) >= 1);
+        rt.stop().await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn engine_and_bus_work_across_serialized_envelopes() {
+        // Simulate a separate server and strategy by serializing Envelopes across a boundary.
+        let bus = Arc::new(MessageBus::new());
+        // Register a provider (server) endpoint with a throwaway channel
+        let (srv_tx, mut _srv_rx) = tokio::sync::mpsc::channel::<Envelope>(16);
+        let provider_id = bus.add_client(srv_tx).await;
+
+        // Start the strategy runtime subscribing to multiple topics
+        let mut topics: HashSet<Topic> = HashSet::new();
+        topics.insert(Topic::Ticks);
+        topics.insert(Topic::Quotes);
+        topics.insert(Topic::Bars1m);
+        topics.insert(Topic::Orders);
+        topics.insert(Topic::Positions);
+        topics.insert(Topic::AccountEvt);
+        let strat = Arc::new(TestStrategy {
+            ticks: Arc::new(AtomicUsize::new(0)),
+            quotes: Arc::new(AtomicUsize::new(0)),
+            bars: Arc::new(AtomicUsize::new(0)),
+            orders: Arc::new(AtomicUsize::new(0)),
+            positions: Arc::new(AtomicUsize::new(0)),
+            accounts: Arc::new(AtomicUsize::new(0)),
+            topics,
+        });
+        let mut rt = EngineRuntime::new(bus.clone());
+        rt.start(strat.clone()).await.unwrap();
+
+        // Build sample frames for each topic and send via bus.handle after encode/decode
+        // TickBatch
+        let tick = tt_types::base_data::Tick {
+            symbol: "ES".to_string(),
+            instrument: tt_types::securities::symbols::Instrument::from_str("ESZ5").unwrap(),
+            price: Decimal::new(100, 0),
+            volume: Decimal::new(1, 0),
+            time: Utc::now(),
+            side: Side::None,
+            venue_seq: None,
+        };
+        let tb = TickBatch { topic: Topic::Ticks, seq: 0, ticks: vec![tick] };
+        let env = Envelope::TickBatch(tb);
+        let bytes = codec::encode(&env);
+        let env2 = codec::decode(&bytes).unwrap();
+        bus.handle(&provider_id, env2).await.unwrap();
+
+        // QuoteBatch
+        let quote = Bbo {
+            symbol: "ES".into(),
+            instrument: tt_types::securities::symbols::Instrument::from_str("ESZ5").unwrap(),
+            bid: Decimal::new(100,0), bid_size: Decimal::new(1,0),
+            ask: Decimal::new(101,0), ask_size: Decimal::new(1,0),
+            time: Utc::now(), bid_orders: None, ask_orders: None, venue_seq: None, is_snapshot: None,
+        };
+        let qb = QuoteBatch { topic: Topic::Quotes, seq: 0, quotes: vec![quote] };
+        let env = Envelope::QuoteBatch(qb);
+        let bytes = codec::encode(&env);
+        let env2 = codec::decode(&bytes).unwrap();
+        bus.handle(&provider_id, env2).await.unwrap();
+
+        // BarBatch (1m)
+        let inst = tt_types::securities::symbols::Instrument::from_str("ESZ5").unwrap();
+        let now = Utc::now();
+        let bar = Candle { symbol: "ES".into(), instrument: inst, time_start: now, time_end: now, open: Decimal::new(100,0), high: Decimal::new(101,0), low: Decimal::new(99,0), close: Decimal::new(100,0), volume: Decimal::new(10,0), ask_volume: Decimal::new(5,0), bid_volume: Decimal::new(5,0), resolution: Resolution::Minutes(1) };
+        let bb = BarBatch { topic: Topic::Bars1m, seq: 0, bars: vec![bar] };
+        let env = Envelope::BarBatch(bb);
+        let bytes = codec::encode(&env);
+        let env2 = codec::decode(&bytes).unwrap();
+        bus.handle(&provider_id, env2).await.unwrap();
+
+        // OrdersBatch
+        let ou = OrderUpdate { provider_order_id: None, client_order_id: None, state_code: 2, leaves: 0, cum_qty: 1, avg_fill_px: Decimal::new(100,0), ts_ns: 0 };
+        let ob = OrdersBatch { topic: Topic::Orders, seq: 0, orders: vec![ou] };
+        let env = Envelope::OrdersBatch(ob);
+        let bytes = codec::encode(&env);
+        let env2 = codec::decode(&bytes).unwrap();
+        bus.handle(&provider_id, env2).await.unwrap();
+
+        // PositionsBatch
+        let inst2 = tt_types::securities::symbols::Instrument::from_str("MNQZ5").unwrap();
+        let pd = PositionDelta { instrument: inst2, net_qty_before: 0, net_qty_after: 1, realized_delta: Decimal::new(0,0), open_pnl: Decimal::new(0,0), ts_ns: 0 };
+        let pb = PositionsBatch { topic: Topic::Positions, seq: 0, positions: vec![pd] };
+        let env = Envelope::PositionsBatch(pb);
+        let bytes = codec::encode(&env);
+        let env2 = codec::decode(&bytes).unwrap();
+        bus.handle(&provider_id, env2).await.unwrap();
+
+        // AccountDeltaBatch
+        let ad = AccountDelta { equity: Decimal::new(100000,0), day_realized_pnl: Decimal::new(0,0), open_pnl: Decimal::new(0,0), ts_ns: 0 };
+        let ab = AccountDeltaBatch { topic: Topic::AccountEvt, seq: 0, accounts: vec![ad] };
+        let env = Envelope::AccountDeltaBatch(ab);
+        let bytes = codec::encode(&env);
+        let env2 = codec::decode(&bytes).unwrap();
+        bus.handle(&provider_id, env2).await.unwrap();
+
+        // Allow dispatch to run
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Validate callbacks
+        assert!(strat.ticks.load(Ordering::SeqCst) >= 1, "tick callback not invoked");
+        assert!(strat.quotes.load(Ordering::SeqCst) >= 1, "quote callback not invoked");
+        assert!(strat.bars.load(Ordering::SeqCst) >= 1, "bar callback not invoked");
+        assert!(strat.orders.load(Ordering::SeqCst) >= 1, "orders batch callback not invoked");
+        assert!(strat.positions.load(Ordering::SeqCst) >= 1, "positions batch callback not invoked");
+        assert!(strat.accounts.load(Ordering::SeqCst) >= 1, "account delta batch callback not invoked");
+
+        rt.stop().await;
     }
 }

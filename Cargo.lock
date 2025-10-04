@@ -2688,6 +2688,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+ "tt-bus",
  "tt-provider",
  "tt-types",
 ]

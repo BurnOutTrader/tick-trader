@@ -9,7 +9,7 @@ use super::events::*;
 use super::order::{Order, OrderState};
 use super::position::PositionLedger;
 
-#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, Default)]
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, Default, PartialEq)]
 pub struct AccountState { #[rkyv(with = DecimalDef)] pub equity: Decimal, #[rkyv(with = DecimalDef)] pub day_realized_pnl: Decimal, #[rkyv(with = DecimalDef)] pub open_pnl: Decimal }
 
 pub struct AccountActorHandle { tx: mpsc::Sender<AccountEvent> }
@@ -31,18 +31,30 @@ impl AccountActor {
         let mut actor = AccountActor { orders_by_provider: HashMap::new(), orders_by_client: HashMap::new(), exec_by_id: HashSet::new(), positions: PositionLedger::new(), marks: HashMap::new(), state: AccountState::default(), wal: Vec::new() };
         let task = tokio::spawn(async move {
             while let Some(ev) = rx.recv().await {
-                actor.append_wal(&ev);
+                // WAL append is handled inside apply() to avoid double-logging in tests
                 actor.apply(ev);
             }
         });
         (AccountActorHandle{tx}, task)
     }
 
-    fn append_wal(&mut self, _ev: &AccountEvent) {
-        // Minimal stub; a real impl would rkyv::to bytes and persist to file.
+    fn append_wal(&mut self, ev: &AccountEvent) {
+        // Serialize event using rkyv into an aligned byte buffer and store in-memory.
+        // In a full implementation this would be persisted to disk as a WAL.
+        match rkyv::to_bytes::<rkyv::rancor::BoxedError>(ev) {
+            Ok(buf) => {
+                // AlignedVec -> Vec<u8>
+                self.wal.push(buf.as_ref().to_vec());
+            }
+            Err(_) => {
+                // On serialization failure, skip WAL append in minimal impl.
+            }
+        }
     }
 
     fn apply(&mut self, ev: AccountEvent) {
+        // Append to WAL first, then apply side effects.
+        self.append_wal(&ev);
         match ev {
             AccountEvent::Order(oe) => self.apply_order_event(oe),
             AccountEvent::Exec(exe) => self.apply_exec(exe),
@@ -304,5 +316,134 @@ mod tests {
         actor.apply(AccountEvent::Order(OrderEvent{ kind: OrderEventKind::Canceled, provider_order_id: Some(prov.clone()), client_order_id: None, provider_seq: None, leaves_qty: None, ts_ns: 3 }));
         let o = actor.orders_by_provider.get(&prov).unwrap();
         assert_eq!(o.state, OrderState::Canceled);
+    }
+
+    #[test]
+    fn out_of_order_cancel_older_seq_is_ignored() {
+        let mut actor = AccountActor { orders_by_provider: HashMap::new(), orders_by_client: HashMap::new(), exec_by_id: HashSet::new(), positions: PositionLedger::new(), marks: HashMap::new(), state: AccountState::default(), wal: Vec::new() };
+        let prov = ProviderOrderId("P4".to_string());
+        // Ack at seq 5
+        actor.apply(AccountEvent::Order(OrderEvent{
+            kind: OrderEventKind::NewAck { instrument: inst("ESZ5"), side: Side::Buy, qty: 2 },
+            provider_order_id: Some(prov.clone()), client_order_id: None, provider_seq: Some(5), leaves_qty: Some(2), ts_ns: 1
+        }));
+        // Older cancel at seq 4 (should be ignored by can_apply)
+        actor.apply(AccountEvent::Order(OrderEvent{
+            kind: OrderEventKind::Canceled,
+            provider_order_id: Some(prov.clone()), client_order_id: None, provider_seq: Some(4), leaves_qty: None, ts_ns: 2
+        }));
+        let o = actor.orders_by_provider.get(&prov).unwrap();
+        assert_eq!(o.state, OrderState::Acknowledged);
+        assert_eq!(o.leaves, 2);
+    }
+
+    #[test]
+    fn equal_seq_precedence_cancel_beats_filled() {
+        // Document precedence behavior: with equal seq, Cancel > Filled
+        let mut actor = AccountActor { orders_by_provider: HashMap::new(), orders_by_client: HashMap::new(), exec_by_id: HashSet::new(), positions: PositionLedger::new(), marks: HashMap::new(), state: AccountState::default(), wal: Vec::new() };
+        let prov = ProviderOrderId("P5".to_string());
+        // Ack at seq 2
+        actor.apply(AccountEvent::Order(OrderEvent{
+            kind: OrderEventKind::NewAck { instrument: inst("MNQZ5"), side: Side::Buy, qty: 1 },
+            provider_order_id: Some(prov.clone()), client_order_id: None, provider_seq: Some(2), leaves_qty: Some(1), ts_ns: 1
+        }));
+        // Fill via exec (order last seq stays at 2)
+        actor.apply(AccountEvent::Exec(ExecutionEvent{
+            exec_id: ExecId("E20".into()), provider_order_id: Some(prov.clone()), client_order_id: None,
+            side: Side::Buy, qty: 1, price: Decimal::from_i32(100).unwrap(), fee: Decimal::ZERO, ts_ns: 2, provider_seq: Some(3), instrument: inst("MNQZ5")
+        }));
+        // Equal seq cancel (2) should override due to precedence
+        actor.apply(AccountEvent::Order(OrderEvent{
+            kind: OrderEventKind::Canceled,
+            provider_order_id: Some(prov.clone()), client_order_id: None, provider_seq: Some(2), leaves_qty: None, ts_ns: 3
+        }));
+        let o = actor.orders_by_provider.get(&prov).unwrap();
+        assert_eq!(o.state, OrderState::Canceled);
+        assert_eq!(o.leaves, 0);
+    }
+
+    #[test]
+    fn late_fill_after_cancel_applies_and_updates_positions_current_impl() {
+        // Current implementation applies executions regardless of order cancel state/seq.
+        let mut actor = AccountActor { orders_by_provider: HashMap::new(), orders_by_client: HashMap::new(), exec_by_id: HashSet::new(), positions: PositionLedger::new(), marks: HashMap::new(), state: AccountState::default(), wal: Vec::new() };
+        let prov = ProviderOrderId("P6".to_string());
+        // Ack then Cancel with higher seq
+        actor.apply(AccountEvent::Order(OrderEvent{ kind: OrderEventKind::NewAck { instrument: inst("ESZ5"), side: Side::Sell, qty: 2 }, provider_order_id: Some(prov.clone()), client_order_id: None, provider_seq: Some(10), leaves_qty: Some(2), ts_ns: 1 }));
+        actor.apply(AccountEvent::Order(OrderEvent{ kind: OrderEventKind::Canceled, provider_order_id: Some(prov.clone()), client_order_id: None, provider_seq: Some(11), leaves_qty: None, ts_ns: 2 }));
+        // Late fill shows up (older seq) -> position updates to short 1
+        actor.apply(AccountEvent::Exec(ExecutionEvent{ exec_id: ExecId("E30".into()), provider_order_id: Some(prov.clone()), client_order_id: None, side: Side::Sell, qty: 1, price: Decimal::from_i32(200).unwrap(), fee: Decimal::ZERO, ts_ns: 3, provider_seq: Some(9), instrument: inst("ESZ5") }));
+        let seg = actor.positions.segments.get(&inst("ESZ5")).cloned();
+        assert!(seg.is_some());
+        let seg = seg.unwrap();
+        assert_eq!(seg.net_qty, -1);
+        // Order will show PartiallyFilled despite prior cancel
+        let o = actor.orders_by_provider.get(&prov).unwrap();
+        assert_eq!(o.state, OrderState::PartiallyFilled);
+        assert_eq!(o.leaves, 1);
+    }
+
+    #[test]
+    fn duplicate_same_seq_lower_precedence_ignored() {
+        // A New event with same seq should not override a higher-precedence Canceled
+        let mut actor = AccountActor { orders_by_provider: HashMap::new(), orders_by_client: HashMap::new(), exec_by_id: HashSet::new(), positions: PositionLedger::new(), marks: HashMap::new(), state: AccountState::default(), wal: Vec::new() };
+        let prov = ProviderOrderId("P7".to_string());
+        actor.apply(AccountEvent::Order(OrderEvent{ kind: OrderEventKind::NewAck { instrument: inst("CLZ5"), side: Side::Buy, qty: 1 }, provider_order_id: Some(prov.clone()), client_order_id: None, provider_seq: Some(7), leaves_qty: Some(1), ts_ns: 1 }));
+        actor.apply(AccountEvent::Order(OrderEvent{ kind: OrderEventKind::Canceled, provider_order_id: Some(prov.clone()), client_order_id: None, provider_seq: Some(8), leaves_qty: None, ts_ns: 2 }));
+        // Duplicate NewAck at same seq as first should not downgrade state
+        actor.apply(AccountEvent::Order(OrderEvent{ kind: OrderEventKind::NewAck { instrument: inst("CLZ5"), side: Side::Buy, qty: 1 }, provider_order_id: Some(prov.clone()), client_order_id: None, provider_seq: Some(7), leaves_qty: Some(1), ts_ns: 3 }));
+        let o = actor.orders_by_provider.get(&prov).unwrap();
+        assert_eq!(o.state, OrderState::Canceled);
+    }
+
+    #[test]
+    fn correction_event_is_noop_in_minimal_impl() {
+        let mut actor = AccountActor { orders_by_provider: HashMap::new(), orders_by_client: HashMap::new(), exec_by_id: HashSet::new(), positions: PositionLedger::new(), marks: HashMap::new(), state: AccountState::default(), wal: Vec::new() };
+        let before = actor.state.clone();
+        actor.apply(AccountEvent::Correction(CorrectionEvent{ exec_id_ref: ExecId("X1".into()), delta_qty: -1, ts_ns: 0 }));
+        let after = actor.state.clone();
+        assert_eq!(before.equity, after.equity);
+        assert_eq!(before.day_realized_pnl, after.day_realized_pnl);
+        assert_eq!(before.open_pnl, after.open_pnl);
+    }
+
+    #[test]
+    fn multi_instrument_marks_recompute_open_pnl() {
+        let mut actor = AccountActor { orders_by_provider: HashMap::new(), orders_by_client: HashMap::new(), exec_by_id: HashSet::new(), positions: PositionLedger::new(), marks: HashMap::new(), state: AccountState::default(), wal: Vec::new() };
+        // Long 2 ES @ 100, Short 1 NQ @ 200
+        actor.apply(AccountEvent::Exec(ExecutionEvent{ exec_id: ExecId("M1".into()), provider_order_id: None, client_order_id: None, side: Side::Buy, qty: 2, price: Decimal::from_i32(100).unwrap(), fee: Decimal::ZERO, ts_ns: 1, provider_seq: None, instrument: inst("ESZ5") }));
+        actor.apply(AccountEvent::Exec(ExecutionEvent{ exec_id: ExecId("M2".into()), provider_order_id: None, client_order_id: None, side: Side::Sell, qty: 1, price: Decimal::from_i32(200).unwrap(), fee: Decimal::ZERO, ts_ns: 2, provider_seq: None, instrument: inst("MNQZ5") }));
+        // Marks: ES 105 => +5*2 = +10; NQ 195 on short @200 => +5*1 = +5; total +15
+        actor.apply(AccountEvent::Mark(MarkEvent{ instrument: inst("ESZ5"), mark_px: Decimal::from_i32(105).unwrap(), ts_ns: 3 }));
+        actor.apply(AccountEvent::Mark(MarkEvent{ instrument: inst("MNQZ5"), mark_px: Decimal::from_i32(195).unwrap(), ts_ns: 4 }));
+        assert_eq!(actor.state.open_pnl, Decimal::from_i32(15).unwrap());
+    }
+
+    #[test]
+    fn wal_appends_for_events_and_admin_noop() {
+        let mut actor = AccountActor { orders_by_provider: HashMap::new(), orders_by_client: HashMap::new(), exec_by_id: HashSet::new(), positions: PositionLedger::new(), marks: HashMap::new(), state: AccountState::default(), wal: Vec::new() };
+        let base_wal = actor.wal.len();
+        // Order -> Ack
+        actor.apply(AccountEvent::Order(OrderEvent{
+            kind: OrderEventKind::NewAck { instrument: inst("ESZ5"), side: Side::Buy, qty: 1 },
+            provider_order_id: Some(ProviderOrderId("PX1".into())),
+            client_order_id: Some(ClientOrderId("CX1".into())),
+            provider_seq: Some(1),
+            leaves_qty: Some(1),
+            ts_ns: 1,
+        }));
+        // Exec
+        actor.apply(AccountEvent::Exec(ExecutionEvent{
+            exec_id: ExecId("EX1".into()), provider_order_id: Some(ProviderOrderId("PX1".into())), client_order_id: None,
+            side: Side::Buy, qty: 1, price: Decimal::from_i32(100).unwrap(), fee: Decimal::ZERO, ts_ns: 2, provider_seq: Some(2), instrument: inst("ESZ5")
+        }));
+        // Admin (noop)
+        let before_state = actor.state.clone();
+        actor.apply(AccountEvent::Admin(AdminEvent::ClockSync));
+        let after_state = actor.state.clone();
+        // Mark
+        actor.apply(AccountEvent::Mark(MarkEvent{ instrument: inst("ESZ5"), mark_px: Decimal::from_i32(101).unwrap(), ts_ns: 3 }));
+
+        assert_eq!(actor.wal.len(), base_wal + 4);
+        assert_eq!(before_state, after_state); // Admin did not change state
     }
 }

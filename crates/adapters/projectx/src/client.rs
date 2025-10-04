@@ -24,6 +24,9 @@ pub struct PXClient {
 }
 
 impl PXClient {
+    pub async fn instruments_map_snapshot(&self) -> AHashMap<tt_types::securities::symbols::Instrument, tt_types::securities::security::FuturesContract> {
+        self.http.instruments_snapshot().await
+    }
     async fn new_from_session(session: ProviderSessionSpec, bus: Arc<MessageBus>) -> anyhow::Result<Self> {
         let firm = session.creds.get("firm").expect(
             "PXClient requires a 'firm' credential to be set in the session credentials",

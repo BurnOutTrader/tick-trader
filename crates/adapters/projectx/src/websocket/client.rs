@@ -15,6 +15,8 @@ use rust_decimal::prelude::FromPrimitive;
 use rust_decimal_macros::dec;
 use tt_bus::MessageBus;
 use tt_types::accounts::account::{AccountName, AccountSnapShot};
+use tt_types::accounts::events::{AccountDelta, OrderUpdate, PositionDelta, ProviderOrderId, ClientOrderId};
+use tt_types::wire::{OrdersBatch, PositionsBatch, AccountDeltaBatch};
 use tt_types::base_data::{Price, Side, Tick, Volume};
 use tt_types::securities::futures_helpers::extract_root;
 use tt_types::securities::symbols::Instrument;
@@ -640,6 +642,10 @@ impl PxWebSocketClient {
                                     can_trade: account.can_trade,
                                 };
                                 info!(target: "projectx.ws", "AccountSnapShot: {:?}", snap_shot);
+                                                                // Publish minimal AccountDelta to bus
+                                                                let delta = AccountDelta { equity: balance, day_realized_pnl: dec!(0), open_pnl: dec!(0), ts_ns: Utc::now().timestamp_nanos_opt().unwrap_or(0) };
+                                                                let batch = AccountDeltaBatch { topic: tt_types::keys::Topic::AccountEvt, seq: 0, accounts: vec![delta] };
+                                                                if let Err(e) = self.bus.publish_account_delta_batch(batch).await { error!(target: "projectx.ws", "failed to publish AccountDelta: {:?}", e); }
                             }
                             "GatewayUserOrder" => {
                                 let order =
@@ -681,6 +687,28 @@ impl PxWebSocketClient {
 
 
                                 info!(target: "projectx.ws", "GatewayUserOrder standardized: id={} status={} side={:?} type={:?}", order.id, order.status, side, order_type);
+                                                                // Publish minimal OrderUpdate to bus
+                                                                let state_code: u8 = models::map_status(order.status) as u8;
+                                                                let cum_qty: i64 = order.fill_volume.unwrap_or(0);
+                                                                let leaves: i64 = (order.size - cum_qty).max(0);
+                                                                let avg_px = order.filled_price.and_then(|p| Price::from_f64(p)).unwrap_or(dec!(0));
+                                                                let ts_ns = DateTime::<Utc>::from_str(&order.update_timestamp)
+                                                                    .unwrap_or_else(|_| Utc::now())
+                                                                    .timestamp_nanos_opt()
+                                                                    .unwrap_or(0);
+                                                                let ou = OrderUpdate {
+                                                                    provider_order_id: Some(ProviderOrderId(order.id.to_string())),
+                                                                    client_order_id: None,
+                                                                    state_code,
+                                                                    leaves,
+                                                                    cum_qty,
+                                                                    avg_fill_px: avg_px,
+                                                                    ts_ns,
+                                                                };
+                                                                let batch = OrdersBatch { topic: tt_types::keys::Topic::Orders, seq: 0, orders: vec![ou] };
+                                                                if let Err(e) = self.bus.publish_orders_batch(batch).await {
+                                                                    error!(target: "projectx.ws", "failed to publish OrderUpdate: {:?}", e);
+                                                                }
                             }
                             "GatewayUserPosition" => {
                                 let position = match serde_json::from_value::<GatewayUserPosition>(
@@ -704,6 +732,18 @@ impl PxWebSocketClient {
 
                                 self.positions
                                     .insert(instrument_id.clone(), position.clone());
+
+                                // Publish minimal PositionDelta to bus (snapshot semantics)
+                                let after = if position.r#type == models::PositionType::Short as i32 { -position.size } else { position.size };
+                                let ts_ns = DateTime::<Utc>::from_str(&position.creation_timestamp)
+                                    .unwrap_or_else(|_| Utc::now())
+                                    .timestamp_nanos_opt()
+                                    .unwrap_or(0);
+                                let pd = PositionDelta { instrument: instrument_id.clone(), net_qty_before: 0, net_qty_after: after, realized_delta: dec!(0), open_pnl: dec!(0), ts_ns };
+                                let batch = PositionsBatch { topic: tt_types::keys::Topic::Positions, seq: 0, positions: vec![pd] };
+                                if let Err(e) = self.bus.publish_positions_batch(batch).await {
+                                    error!(target: "projectx.ws", "failed to publish PositionDelta: {:?}", e);
+                                }
 
                                 info!(target: "projectx.ws", "GatewayUserPosition cached: id={} account_id={} contract={}", position.id, position.account_id, position.contract_id);
                             }
@@ -1036,6 +1076,20 @@ impl PxWebSocketClient {
 }
 
 impl PxWebSocketClient {
+    fn contract_id_from_symbol_key_wire(&self, key_wire: &str) -> Option<String> {
+        use tt_types::keys::SymbolKey;
+        use tt_types::securities::symbols::Instrument;
+        use tt_types::securities::futures_helpers::{extract_month_year, extract_root};
+        let sk = SymbolKey::parse(key_wire).ok()?;
+        let instrument = Instrument::try_from(sk.instrument.as_str()).ok()?;
+        let root = extract_root(&instrument);
+        let cid = match extract_month_year(&instrument) {
+            None => format!("CON.F.US.{root}"),
+            Some((month, year)) => format!("CON.F.US.{root}.{month}{year}"),
+        };
+        Some(cid)
+    }
+
     /// Get a snapshot of currently subscribed contract IDs for tick stream.
     pub async fn active_contract_ids_ticks(&self) -> Vec<String> {
         self.market_contract_tick_subs.read().await.clone()
