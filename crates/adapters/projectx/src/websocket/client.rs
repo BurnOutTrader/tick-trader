@@ -242,7 +242,6 @@ impl PxWebSocketClient {
         let config = WebSocketConfig {
             url,
             headers,
-            message_handler: None,
             heartbeat: None,
             heartbeat_msg: None,
             ping_handler: None,
@@ -356,7 +355,6 @@ impl PxWebSocketClient {
         let config = WebSocketConfig {
             url,
             headers,
-            message_handler: None,
             heartbeat: None,
             heartbeat_msg: None,
             ping_handler: None,

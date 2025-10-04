@@ -1,4 +1,4 @@
-use projectx::http::client::PxHttpInnerClient;
+use projectx::http::inner_client::PxHttpInnerClient;
 
 #[test]
 fn rate_limit_overview_contains_expected_text() {

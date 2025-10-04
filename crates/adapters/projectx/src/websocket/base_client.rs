@@ -8,7 +8,6 @@ use tokio_tungstenite::tungstenite;
 pub struct WebSocketConfig {
     pub url: String,
     pub headers: Vec<(String, String)>,
-    pub message_handler: Option<()>,
     pub heartbeat: Option<u64>,
     pub heartbeat_msg: Option<String>,
     pub ping_handler: Option<()>,
@@ -83,7 +82,7 @@ impl WebSocketClient {
             }
         }
     }
-    
+
     pub async fn kill(&self) {
         let mut lock = self.recv_task.lock().await;
         if let Some(recv_task) = lock.take() {
