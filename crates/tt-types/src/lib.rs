@@ -7,6 +7,7 @@ pub mod securities;
 pub mod reality_models;
 pub mod accounts;
 pub mod order_models;
+pub mod consolidators;
 
 
 

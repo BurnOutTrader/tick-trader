@@ -6,6 +6,37 @@ use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 pub use crate::securities::symbols::Exchange;
 use crate::securities::symbols::Instrument;
 
+#[derive(Clone, PartialEq, Eq, Debug, Hash, Display)]
+pub enum Feed {
+    Bbo {
+        symbol: String,
+        exchange: Exchange,
+    },
+    Ticks {
+        symbol: String,
+        exchange: Exchange,
+    },
+    Candles {
+        symbol: String,
+        exchange: Exchange,
+        resolution: Resolution,
+    },
+    TickBars {
+        symbol: String,
+        exchange: Exchange,
+        ticks: u32
+    },
+    OrderBookL2 {
+        symbol: String,
+        exchange: Exchange,
+        depth: u8,
+    },
+    OrderBookL3 {
+        symbol: String,
+        exchange: Exchange,
+    },
+}
+
 pub type Price = Decimal;
 pub type Volume = Decimal;
 
@@ -179,6 +210,41 @@ impl Candle {
     pub fn range(&self) -> Decimal {
         self.high - self.low
     }
+}
+
+#[derive(Archive, RkyvDeserialize, RkyvSerialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct TickBar {
+    /// Symbol identifier (e.g. `"MNQ"`, `"AAPL"`).
+    pub symbol: String,
+    /// Symbol identifier (e.g. `"MNQZ5"`).
+    pub instrument: Instrument,
+    /// Start time of the candle (inclusive).
+    #[rkyv(with = crate::rkyv_types::DateTimeUtcDef)]
+    pub time_start: DateTime<Utc>,
+    /// End time of the candle (exclusive).
+    #[rkyv(with = crate::rkyv_types::DateTimeUtcDef)]
+    pub time_end: DateTime<Utc>,
+    /// Open price.
+    #[rkyv(with = crate::rkyv_types::DecimalDef)]
+    pub open: Price,
+    /// High price.
+    #[rkyv(with = crate::rkyv_types::DecimalDef)]
+    pub high: Price,
+    /// Low price.
+    #[rkyv(with = crate::rkyv_types::DecimalDef)]
+    pub low: Price,
+    #[rkyv(with = crate::rkyv_types::DecimalDef)]
+    pub close: Price,
+    /// Total traded volume.
+    #[rkyv(with = crate::rkyv_types::DecimalDef)]
+    pub volume: Volume,
+    /// Volume executed at the ask.
+    #[rkyv(with = crate::rkyv_types::DecimalDef)]
+    pub ask_volume: Volume,
+    /// Volume executed at the bid.
+    #[rkyv(with = crate::rkyv_types::DecimalDef)]
+    pub bid_volume: Volume,
 }
 
 /// Best bid and offer (BBO).

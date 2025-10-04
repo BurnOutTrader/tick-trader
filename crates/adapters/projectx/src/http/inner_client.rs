@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{watch, Mutex, RwLock};
+use tokio::sync::{watch, RwLock};
 use tokio::task::JoinHandle;
 use tt_types::api_helpers::retry_manager::{RetryConfig, RetryManager};
 use ustr::Ustr;
