@@ -1,8 +1,10 @@
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::time::Instant;
+use std::sync::Arc;
 use ahash::AHashMap;
 use tt_types::keys::{AccountKey, SymbolKey, Topic};
+use tt_types::providers::ProviderKind;
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum ConnectionState {
@@ -55,7 +57,7 @@ pub type ProviderParams = HashMap<String, String>;
 #[async_trait]
 pub trait MarketDataProvider: Send + Sync {
     // Identity
-    fn id(&self) -> &str; // ProviderId (interned elsewhere)
+    fn id(&self) -> ProviderKind; // ProviderId (interned elsewhere)
     fn supports(&self, topic: Topic) -> bool;
 
     // Lifecycle
@@ -82,7 +84,7 @@ pub trait MarketDataProvider: Send + Sync {
 #[async_trait]
 pub trait ExecutionProvider: Send + Sync {
     // Identity & lifecycle
-    fn id(&self) -> &str;
+    fn id(&self) -> ProviderKind;
     async fn connect(&self, session: ProviderSessionSpec) -> anyhow::Result<()>;
     async fn disconnect(&self, reason: DisconnectReason);
     async fn connection_state(&self) -> ConnectionState;
@@ -109,6 +111,13 @@ pub trait ExecutionProvider: Send + Sync {
 pub struct CommandAck {
     pub ok: bool,
     pub message: Option<String>,
+}
+
+/// Optional bootstrap interface the server can use to lazily construct providers
+#[async_trait]
+pub trait ProviderBootstrap: Send + Sync {
+    async fn make_market_data(&self, provider_id: &ProviderKind, session: ProviderSessionSpec) -> anyhow::Result<Arc<dyn MarketDataProvider>>;
+    async fn make_execution(&self, provider_id: &ProviderKind, session: ProviderSessionSpec) -> anyhow::Result<Arc<dyn ExecutionProvider>>;
 }
 
 

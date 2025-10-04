@@ -1,7 +1,8 @@
 use std::fmt::Display;
+use std::hash::Hash;
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
 #[rkyv(compare(PartialEq), derive(Debug))]
 pub enum ProjectXTenant {
     Topstep,
@@ -58,12 +59,11 @@ impl ProjectXTenant {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Copy, Archive, RkyvDeserialize, RkyvSerialize)]
 #[rkyv(compare(PartialEq), derive(Debug))]
 pub enum RithmicAffiliation {
     Topstep,
     Apex,
-    Generic(String),
 }
 
 impl RithmicAffiliation {
@@ -71,12 +71,11 @@ impl RithmicAffiliation {
         match self {
             RithmicAffiliation::Topstep => "topstep".to_string(),
             RithmicAffiliation::Apex => "apex".to_string(),
-            RithmicAffiliation::Generic(s) => s.to_lowercase(),
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
+#[derive(Debug, Clone, PartialEq, Eq,Copy, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
 #[rkyv(compare(PartialEq), derive(Debug))]
 pub enum ProviderKind {
     ProjectX(ProjectXTenant),
@@ -97,6 +96,35 @@ impl ProviderKind {
         match self {
             ProviderKind::ProjectX(t) => Some(t.to_url_string()),
             ProviderKind::Rithmic(_) => None,
+        }
+    }
+    
+    pub fn to_u64(&self) -> u64 {
+        match self {
+            ProviderKind::ProjectX(b) => {
+                match b {
+                    ProjectXTenant::Topstep => 11,
+                    ProjectXTenant::AlphaFutures => 12,
+                    ProjectXTenant::Demo => 13,
+                }
+            }
+            ProviderKind::Rithmic(b) => {
+                match b {
+                    RithmicAffiliation::Topstep => 54,
+                    RithmicAffiliation::Apex => 55,
+                }
+            }
+        }
+    }
+    
+    pub fn from_u64(id: u64) -> Option<ProviderKind> {
+        match id {
+            11 => Some(ProviderKind::ProjectX(ProjectXTenant::Topstep)),
+            12 => Some(ProviderKind::ProjectX(ProjectXTenant::AlphaFutures)),
+            13 => Some(ProviderKind::ProjectX(ProjectXTenant::Demo)),
+            54 => Some(ProviderKind::Rithmic(RithmicAffiliation::Topstep)),
+            55 => Some(ProviderKind::Rithmic(RithmicAffiliation::Apex)),
+            _ => None,
         }
     }
 }

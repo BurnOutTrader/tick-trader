@@ -1,7 +1,10 @@
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
-use crate::base_data::{Bbo, Candle, Tick};
-use crate::keys::Topic;
+use rust_decimal::Decimal;
+use crate::base_data::{Bbo, Candle, Exchange, Tick};
+use crate::keys::{SymbolKey, Topic};
+use crate::providers::ProviderKind;
 use crate::securities::security::FuturesContract;
+use crate::securities::symbols::Instrument;
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq, Eq)]
 #[rkyv(compare(PartialEq), derive(Debug))]
@@ -83,41 +86,42 @@ pub struct AccountDeltaBatch {
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq)]
 pub struct MdSubscribeCmd {
-    pub provider: String,
+    pub provider: ProviderKind,
     pub topic: Topic,
-    /// Symbol key in wire string form (SymbolKey::to_string_wire())
-    pub key: String,
+    pub key: SymbolKey,
 }
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq)]
 pub struct MdUnsubscribeCmd {
-    pub provider: String,
+    pub provider: ProviderKind,
     pub topic: Topic,
-    pub key: String,
+    pub key: SymbolKey,
 }
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq)]
 pub struct InstrumentsRequest {
-    pub provider: String,
+    pub provider: ProviderKind,
     pub pattern: Option<String>,
     pub corr_id: u64,
 }
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq)]
 pub struct InstrumentsResponse {
-    pub provider: String,
-    pub instruments: Vec<String>,
+    pub provider: ProviderKind,
+    pub instruments: Vec<Instrument>,
     pub corr_id: u64,
 }
 
 // Minimal wire representation of a FuturesContract
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq)]
 pub struct FuturesContractWire {
-    pub instrument: String,
-    pub provider_id: String,
-    pub exchange: String,
-    pub tick_size: String,
-    pub value_per_tick: String,
+    pub instrument: Instrument,
+    pub provider_id: ProviderKind,
+    pub exchange: Exchange,
+    #[rkyv(with = crate::rkyv_types::DecimalDef)]
+    pub tick_size: Decimal,
+    #[rkyv(with = crate::rkyv_types::DecimalDef)]
+    pub value_per_tick: Decimal,
     pub decimal_accuracy: u32,
     pub is_continuous: bool,
 }
@@ -125,11 +129,11 @@ pub struct FuturesContractWire {
 impl FuturesContractWire {
     pub fn from_contract(fc: &FuturesContract) -> Self {
         FuturesContractWire {
-            instrument: fc.instrument.to_string(),
+            instrument: fc.instrument.clone(),
             provider_id: fc.provider_id.clone(),
-            exchange: fc.exchange.to_string(),
-            tick_size: fc.tick_size.to_string(),
-            value_per_tick: fc.value_per_tick.to_string(),
+            exchange: fc.exchange.clone(),
+            tick_size: fc.tick_size.clone(),
+            value_per_tick: fc.value_per_tick.clone(),
             decimal_accuracy: fc.decimal_accuracy,
             is_continuous: fc.is_continuous,
         }
@@ -140,14 +144,14 @@ impl FuturesContractWire {
 pub struct InstrumentsMapResponse {
     pub provider: String,
     /// Pairs of (Instrument string, FuturesContractWire)
-    pub instruments: Vec<(String, FuturesContractWire)>,
+    pub instruments: Vec<(Instrument, FuturesContractWire)>,
     pub corr_id: u64,
 }
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq, Eq)]
 #[rkyv(compare(PartialEq), derive(Debug))]
 pub struct AuthCredentials {
-    pub provider: String,
+    pub provider: ProviderKind,
     pub username: Option<String>,
     pub password: Option<String>,
     pub api_key: Option<String>,

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use ahash::AHashMap;
 use async_trait::async_trait;
 use tokio::sync::RwLock;
-use provider::traits::{CommandAck, ConnectionState, DisconnectReason, ExecutionProvider, MarketDataProvider, ProviderParams, ProviderSessionSpec};
+use provider::traits::{CommandAck, ConnectionState, DisconnectReason, ExecutionProvider, MarketDataProvider, ProviderBootstrap, ProviderParams, ProviderSessionSpec};
 use tt_types::keys::{AccountKey, SymbolKey, Topic};
 use tt_types::securities::futures_helpers::{extract_month_year, extract_root};
 use tt_types::securities::symbols::Instrument;
@@ -12,14 +12,14 @@ use crate::http::credentials::PxCredential;
 use crate::http::error::PxError;
 use crate::websocket::client::PxWebSocketClient;
 use tt_bus::MessageBus;
-use tt_types::providers::ProjectXTenant;
+use tt_types::providers::{ProjectXTenant, ProviderKind};
 
 const PROVIDER: &'static str = "ProjectX";
 pub struct PXClient {
     firm: ProjectXTenant,
-    http: PxHttpClient,
-    websocket: PxWebSocketClient,
-    http_connection_state: RwLock<ConnectionState>,
+    http: Arc<PxHttpClient>,
+    websocket: Arc<PxWebSocketClient>,
+    http_connection_state: Arc<RwLock<ConnectionState>>,
     id: String,
     account_subscriptions: Arc<RwLock<Vec<AccountKey>>>,
 }
@@ -46,9 +46,9 @@ impl PXClient {
         Ok(Self {
             firm,
             id,
-            http,
-            websocket,
-            http_connection_state: RwLock::new(ConnectionState::Disconnected),
+            http: Arc::new(http),
+            websocket: Arc::new(websocket),
+            http_connection_state: Arc::new(RwLock::new(ConnectionState::Disconnected)),
             account_subscriptions: Arc::new(RwLock::new(vec![])),
         })
     }
@@ -104,16 +104,12 @@ impl PXClient {
 }
 
 fn parse_symbol_key(key: SymbolKey) -> anyhow::Result<String> {
-    match Instrument::try_from(key.instrument.as_str()) {
-        Ok(instrument) => {
-            let root = extract_root(&instrument);
-            match extract_month_year(&instrument) {
-                None => Ok(format!("CON.F.US.{root}")),
-                Some((month, year)) => Ok(format!("CON.F.US.{root}.{month}{year}")),
-            }
-        }
-        Err(e) => anyhow::bail!("Failed to parse symbol key: {}", e),
-    }
+    let instrument = key.instrument; // already an Instrument
+    let root = extract_root(&instrument);
+    Ok(match extract_month_year(&instrument) {
+        None => format!("CON.F.US.{root}"),
+        Some((month, year)) => format!("CON.F.US.{root}.{month}{year}"),
+    })
 }
 
 #[async_trait]
@@ -166,12 +162,9 @@ impl MarketDataProvider for PXClient {
         // Collect current active subscriptions from the websocket client which tracks
         // contract ids per topic internally.
         fn symbol_from_contract_id(firm: ProjectXTenant, instrument: &str) -> Option<SymbolKey> {
-            let firm = firm.to_string();
-            Some(SymbolKey {
-                instrument: instrument.to_string(),
-                provider: PROVIDER.to_string(),
-                broker: Some(firm),
-            })
+            let provider = ProviderKind::ProjectX(firm);
+            let instrument = Instrument::from_str(instrument).ok()?;
+            Some(SymbolKey { instrument, provider })
         };
 
         let ticks = {

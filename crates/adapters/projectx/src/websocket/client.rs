@@ -18,6 +18,7 @@ use tt_types::accounts::account::{AccountName, AccountSnapShot};
 use tt_types::accounts::events::{AccountDelta, OrderUpdate, PositionDelta, ProviderOrderId, ClientOrderId};
 use tt_types::wire::{OrdersBatch, PositionsBatch, AccountDeltaBatch};
 use tt_types::base_data::{Price, Side, Tick, Volume};
+use tt_types::keys::KeyId;
 use tt_types::providers::ProjectXTenant;
 use tt_types::securities::futures_helpers::extract_root;
 use tt_types::securities::symbols::Instrument;
@@ -1077,20 +1078,6 @@ impl PxWebSocketClient {
 }
 
 impl PxWebSocketClient {
-    fn contract_id_from_symbol_key_wire(&self, key_wire: &str) -> Option<String> {
-        use tt_types::keys::SymbolKey;
-        use tt_types::securities::symbols::Instrument;
-        use tt_types::securities::futures_helpers::{extract_month_year, extract_root};
-        let sk = SymbolKey::parse(key_wire).ok()?;
-        let instrument = Instrument::try_from(sk.instrument.as_str()).ok()?;
-        let root = extract_root(&instrument);
-        let cid = match extract_month_year(&instrument) {
-            None => format!("CON.F.US.{root}"),
-            Some((month, year)) => format!("CON.F.US.{root}.{month}{year}"),
-        };
-        Some(cid)
-    }
-
     /// Get a snapshot of currently subscribed contract IDs for tick stream.
     pub async fn active_contract_ids_ticks(&self) -> Vec<String> {
         self.market_contract_tick_subs.read().await.clone()
