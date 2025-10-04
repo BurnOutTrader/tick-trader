@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{watch, RwLock};
+use tokio::sync::{watch, Mutex, RwLock};
 use tokio::task::JoinHandle;
 use tt_types::api_helpers::retry_manager::{RetryConfig, RetryManager};
 use ustr::Ustr;
@@ -17,15 +17,16 @@ use crate::http::endpoints::PxEndpoints;
 use crate::http::error::PxError;
 use crate::http::models::{AccountSearchReq, AccountSearchResponse, AvailableContractsReq, CancelOrderReq, CancelOrderResponse, CloseContractReq, CloseContractResponse, ContractSearchByIdReq, ContractSearchByIdResponse, ContractSearchReq, ContractSearchResponse, ModifyOrderReq, ModifyOrderResponse, OrderSearchOpenReq, OrderSearchReq, OrderSearchResponse, PartialCloseContractReq, PlaceOrderReq, PlaceOrderResponse, PositionSearchOpenReq, PositionSearchResponse, RetrieveBarsReq, RetrieveBarsResponse, TradeSearchReq, TradeSearchResponse, ValidateResp};
 
-/// HTTP client for the ProjectX Gateway API
+/// inner HTTP client for the ProjectX Gateway API
+/// This client deals only with types used by the api, it does not output tick-trader specific types.
 pub struct PxHttpInnerClient {
     cfg: PxCredential,
     http: SimpleHttp,
     retry_manager: RetryManager<PxError>,
     pub(crate) token: Arc<RwLock<Option<String>>>,
-    auth_headers: Arc<RwLock<HashMap<String, String>>>,
-    pub(crate) stop_tx: Arc<watch::Sender<bool>>,
-    pub(crate) bg_task: Arc<RwLock<Option<JoinHandle<()>>>>,
+    auth_headers: RwLock<HashMap<String, String>>,
+    pub(crate) stop_tx: watch::Sender<bool>,
+    pub(crate) bg_task: RwLock<Option<JoinHandle<()>>>,
     end_points: PxEndpoints,
 }
 
@@ -96,9 +97,9 @@ impl PxHttpInnerClient {
             cfg,
             http,
             token: Arc::new(RwLock::new(None)),
-            auth_headers: Arc::new(RwLock::new(HashMap::new())),
-            stop_tx: Arc::new(tx),
-            bg_task: Arc::new(RwLock::new(None)),
+            auth_headers: RwLock::new(HashMap::new()),
+            stop_tx: tx,
+            bg_task: RwLock::new(None),
         })
     }
 

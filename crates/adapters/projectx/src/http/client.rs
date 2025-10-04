@@ -67,25 +67,19 @@ impl PxHttpClient {
 
     /// Authenticate once, then start background token validation on an interval,
     /// Returns Ok when the task is spawned.
-    pub async fn start(&self, token_update_sender: Sender<String>,) -> Result<(), PxError> {
+    pub async fn start(&self) -> Result<(), PxError> {
         // 1) authenticate once
         self.inner.authenticate().await?;
 
-        // 1.5) send initial token to downstream listeners (e.g., websocket client)
-        if let Some(tok) = self.inner.token.read().await.clone() {
-            // Send the freshly authenticated token so listeners can initialize
-            let _ = token_update_sender.send_replace(tok);
-        }
-
         // 2) spawn background validator (client-managed)
-        self.spawn_auto_validate(Duration::from_secs(12 * 3600), token_update_sender)
+        self.spawn_auto_validate(Duration::from_secs(12 * 3600))
             .await; // ~12h
         Ok(())
     }
 
     /// Spawns Autovalidate to update token every 12 hours.
     /// Stores the joinhandle in the inner client so that it is maintained on clone and drop of this object via the Arc<InnerClient>
-    async fn spawn_auto_validate(&self, period: Duration, token_update_sender: Sender<String>,) {
+    async fn spawn_auto_validate(&self, period: Duration) {
         let mut rx = self.inner.stop_tx.subscribe();
         let client = self.inner.clone();
         let handle = tokio::spawn(async move {
@@ -95,7 +89,6 @@ impl PxHttpClient {
             // attempt to read and send current token at startup
             if let Some(cur) = client.token.read().await.clone() {
                 last_token = Some(cur.clone());
-                let _ = token_update_sender.send_replace(cur);
             }
             loop {
                 tokio::select! {
@@ -104,7 +97,6 @@ impl PxHttpClient {
                             if let Some(cur) = client.token.read().await.clone() {
                                 if last_token.as_ref().map(|s| s.as_str()) != Some(cur.as_str()) {
                                     last_token = Some(cur.clone());
-                                    let _ = token_update_sender.send_replace(cur);
                                 }
                             }
                         }

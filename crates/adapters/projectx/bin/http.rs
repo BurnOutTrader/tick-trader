@@ -20,9 +20,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cfg = PxCredential::from_env().expect("Missing PX env vars");
     #[allow(unused)]
     let client = PxHttpClient::new(cfg, None, None, None, None,bus.clone())?;
-
-    let (_tx, _rx) = watch::channel(String::new());
-    let _ = client.start(_tx).await?;
+    
+    let _ = client.start().await?;
     tracing::info!("Authentication: Success");
 
     let resp = client.account_ids().await?;

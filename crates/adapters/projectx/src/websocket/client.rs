@@ -92,6 +92,8 @@ pub struct PxWebSocketClient {
 
 impl PxWebSocketClient {
     /// Create a new websocket client with optional bearer token
+    /// token is a clone or the Arc<RwLock<Option<String>>> managed by the http client.
+    /// If an update is made to the token, it will automatically be copied by the websocket client by way of arc.
     pub fn new(base_url: impl Into<String>, bearer_token: Arc<RwLock<Option<String>>>, firm: String, bus: Arc<MessageBus>) -> Self {
         // Dedicated per-hub message queues to avoid head-of-line blocking
         let (user_tx, mut user_rx) = mpsc::channel::<Value>(4096);
@@ -1030,26 +1032,5 @@ impl PxWebSocketClient {
     /// Generate a unique request ID for outbound messages
     pub fn next_request_id(&self) -> u64 {
         self.request_id_counter.fetch_add(1, Ordering::SeqCst)
-    }
-
-    /// Attach a watcher that updates the bearer token whenever the HTTP client refreshes it.
-    /// This allows subsequent (re)connections to use the updated token in hub URLs/headers.
-    /// Note: we do not force a reconnect here to keep changes minimal; existing reconnect
-    /// flows and manual reconnects will pick up the new token.
-    pub async fn watch_token_updates(&self, mut rx: WatchReceiver<String>) {
-        let this = self.clone();
-        tokio::spawn(async move {
-            loop {
-                if rx.changed().await.is_err() {
-                    break;
-                }
-                let new_tok = rx.borrow().clone();
-                {
-                    let mut guard = this.bearer_token.write().await;
-                    *guard = Some(new_tok);
-                }
-                info!(target: "projectx.ws", "bearer token updated from watch channel");
-            }
-        });
     }
 }

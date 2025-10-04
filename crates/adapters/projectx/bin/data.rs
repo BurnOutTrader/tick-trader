@@ -23,9 +23,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cfg = PxCredential::from_env().expect("Missing PX env vars");
     let bus = Arc::new(MessageBus::new());
     let http = PxHttpClient::new(cfg, None, None, None, None, bus.clone())?;
-    // Create a token update channel and pass the sender to HTTP; attach receiver to WS later
-    let (tx, rx) = watch::channel(String::new());
-    http.start(tx).await?;
+    http.start().await?;
     info!("Authentication: Success");
 
     // Resolve MNQ contract ID: allow override via env, else search
@@ -57,8 +55,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await;
     let base = http.inner.rtc_base();
     let rt = PxWebSocketClient::new(base, token, http.firm.clone(), bus.clone());
-    // Attach the token update receiver so WS picks up rotations
-    rt.watch_token_updates(rx).await;
 
     // Connect market hub and subscribe to trades for the contract
     rt.connect_market().await?;

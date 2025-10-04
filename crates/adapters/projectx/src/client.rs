@@ -59,12 +59,7 @@ impl PXClient {
         if *conn_state == ConnectionState::Disconnected {
             * conn_state = ConnectionState::Connecting;
 
-            // Wire token updates from HTTP to WebSocket via watch channel
-            let (tx, rx) = watch::channel(String::new());
-            // Start watching for token updates on the websocket side
-            self.websocket.watch_token_updates(rx).await;
-
-            match self.http.start(tx).await {
+            match self.http.start().await {
                 Ok(_) => {
                     *conn_state = ConnectionState::Connected;
                 }
