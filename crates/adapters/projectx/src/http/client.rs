@@ -15,7 +15,7 @@ use tokio::{
 };
 use ustr::Ustr;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
-use tokio::sync::watch::{Receiver, Sender};
+use tokio::sync::watch::Sender;
 use tt_bus::MessageBus;
 use tt_types::accounts::account::AccountName;
 use tt_types::api_helpers::rate_limiter::RateLimiter;
@@ -136,7 +136,6 @@ pub struct PxHttpInnerClient {
     stop_tx: Arc<watch::Sender<bool>>,
     bg_task: Arc<RwLock<Option<JoinHandle<()>>>>,
     end_points: PxEndpoints,
-    bus: Arc<MessageBus>
 }
 
 impl PxHttpInnerClient {
@@ -182,7 +181,6 @@ impl PxHttpInnerClient {
         max_retries: Option<u32>,
         retry_delay_ms: Option<u64>,
         retry_delay_max_ms: Option<u64>,
-        bus: Arc<MessageBus>
     ) -> anyhow::Result<Self> {
         let (tx, _rx) = watch::channel(false);
 
@@ -206,7 +204,6 @@ impl PxHttpInnerClient {
             end_points: crate::http::endpoints::PxEndpoints::from_firm(cfg.firm.as_str()),
             cfg,
             http,
-            bus,
             token: Arc::new(RwLock::new(None)),
             auth_headers: Arc::new(RwLock::new(HashMap::new())),
             stop_tx: Arc::new(tx),
@@ -660,6 +657,7 @@ pub struct PxHttpClient {
     pub inner: Arc<PxHttpInnerClient>,
     internal_accounts_ids: Arc<DashMap<AccountName, i64>>,
     cache_initialized: bool,
+    bus: Arc<MessageBus>,
 }
 
 impl PxHttpClient {
@@ -674,6 +672,7 @@ impl PxHttpClient {
         max_retries: Option<u32>,
         retry_delay_ms: Option<u64>,
         retry_delay_max_ms: Option<u64>,
+        bus: Arc<MessageBus>,
     ) -> anyhow::Result<Self> {
         Ok(Self {
             firm: px_credential.firm.clone(),
@@ -682,10 +681,11 @@ impl PxHttpClient {
                 timeout_secs,
                 max_retries,
                 retry_delay_ms,
-                retry_delay_max_ms,
+                retry_delay_max_ms
             )?),
             internal_accounts_ids: Arc::new(DashMap::new()),
             cache_initialized: false,
+            bus
         })
     }
 
@@ -754,7 +754,7 @@ impl PxHttpClient {
             let instrument = match Instrument::from_str(inst.id.as_str()) {
                 Ok(instrument) => instrument,
                 Err(e) => {
-                    log::error!("Failed to parse instrument: {}", inst.id);
+                    log::error!("Failed to parse instrument: {}: {:?}", inst.id, e);
                     continue
                 },
             };

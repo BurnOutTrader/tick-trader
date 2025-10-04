@@ -1,6 +1,8 @@
+use std::sync::Arc;
 use dotenvy::dotenv;
 use projectx::http::client::PxHttpInnerClient;
 use projectx::http::credentials::PxCredential;
+use tt_bus::MessageBus;
 
 #[ignore]
 #[tokio::test]
@@ -32,7 +34,7 @@ async fn test_authenticate_returns_token() {
 #[tokio::test]
 async fn auth_key_smoke_test() {
     dotenv().ok();
-
+    
     let cfg = PxCredential::from_env().expect("PX env var missing");
     let http = PxHttpInnerClient::new(cfg, None, None, None, None).unwrap();
 

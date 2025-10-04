@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::str::FromStr;
 use std::sync::Arc;
 use ahash::AHashMap;
 use async_trait::async_trait;
@@ -14,7 +13,6 @@ use crate::http::error::PxError;
 use crate::websocket::PxWebSocketClient;
 use tokio::sync::watch;
 use tt_bus::MessageBus;
-use tt_types::accounts::account::AccountName;
 
 pub struct PXClient {
     http: PxHttpClient,
@@ -34,7 +32,7 @@ impl PXClient {
             "PXClient requires a 'api_key' credential to be set in the session credentials",
         );
         let px_credentials = PxCredential::new(firm.clone(), user_name.clone(), api_key.clone());
-        let http = PxHttpClient::new(px_credentials, None, None, None, None)?;
+        let http = PxHttpClient::new(px_credentials, None, None, None, None, bus.clone())?;
         let base = http.inner.rtc_base();
         let token = http.inner.token_string().await;
         let websocket = PxWebSocketClient::new(base, token, firm.clone(), bus);
@@ -103,12 +101,16 @@ impl PXClient {
     }
 }
 
-fn parse_symbol_key(key: SymbolKey) -> String {
-    let instrument = Instrument::from(key.instrument.as_str());
-    let root = extract_root(&instrument);
-    match extract_month_year(&instrument) {
-        None => format!("CON.F.US.{root}"),
-        Some((month, year)) => format!("CON.F.US.{root}.{month}{year}"),
+fn parse_symbol_key(key: SymbolKey) -> anyhow::Result<String> {
+    match Instrument::try_from(key.instrument.as_str()) {
+        Ok(instrument) => {
+            let root = extract_root(&instrument);
+            match extract_month_year(&instrument) {
+                None => Ok(format!("CON.F.US.{root}")),
+                Some((month, year)) => Ok(format!("CON.F.US.{root}.{month}{year}")),
+            }
+        }
+        Err(e) => anyhow::bail!("Failed to parse symbol key: {}", e),
     }
 }
 
@@ -139,7 +141,7 @@ impl MarketDataProvider for PXClient {
     }
 
     async fn subscribe_md(&self, topic: Topic, key: &SymbolKey, params: Option<&ProviderParams>) -> anyhow::Result<()> {
-        let instrument = parse_symbol_key(key.clone());
+        let instrument = parse_symbol_key(key.clone())?;
         match topic {
             Topic::Ticks => self.websocket.subscribe_contract_ticks(instrument.as_str()).await,
             Topic::Quotes => self.websocket.subscribe_contract_quotes(instrument.as_str()).await,
@@ -149,7 +151,7 @@ impl MarketDataProvider for PXClient {
     }
 
     async fn unsubscribe_md(&self, topic: Topic, key: &SymbolKey) -> anyhow::Result<()> {
-        let instrument = parse_symbol_key(key.clone());
+        let instrument = parse_symbol_key(key.clone())?;
         match topic {
             Topic::Ticks => self.websocket.unsubscribe_contract_ticks(instrument.as_str()).await,
             Topic::Quotes => self.websocket.unsubscribe_contract_quotes(instrument.as_str()).await,

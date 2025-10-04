@@ -280,25 +280,25 @@ mod tests {
 
     #[test]
     fn test_extract_month_year_two_letter_root() {
-        let i = Instrument::from("ESZ25");
+        let i = Instrument::try_from("ESZ25").expect("ESZ25");
         assert_eq!(extract_month_year(&i), Some(('Z', 25)));
     }
 
     #[test]
     fn test_extract_month_year_three_letter_root() {
-        let i = Instrument::from("MNQZ5");
+        let i = Instrument::try_from("MNQZ5").expect("MNQZ5");
         assert_eq!(extract_month_year(&i), Some(('Z', 5)));
     }
 
     #[test]
     fn test_extract_month_year_other() {
-        let i = Instrument::from("HEG24");
+        let i = Instrument::try_from("HEG24").expect("HEG24");
         assert_eq!(extract_month_year(&i), Some(('G', 24)));
     }
 
     #[test]
     fn test_extract_month_year_none() {
-        let i = Instrument::from("CL");
+        let i = Instrument::try_from("CL").expect("CL");
         assert_eq!(extract_month_year(&i), None);
     }
 }

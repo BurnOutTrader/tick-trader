@@ -1,14 +1,14 @@
 //! Sandbox test bed: authenticate, connect realtime, subscribe MNQ trades, quotes or depth, print incoming.
-use std::env;
+use std::sync::Arc;
 use dotenvy::dotenv;
 use rustls::crypto::{CryptoProvider, ring};
-use tokio_tungstenite::tungstenite::client;
 use tracing::{error, info, level_filters::LevelFilter, warn};
 use projectx::http::client::PxHttpClient;
 use projectx::http::credentials::PxCredential;
 use projectx::http::models::ContractSearchResponse;
 use projectx::websocket::PxWebSocketClient;
 use tokio::sync::watch;
+use tt_bus::MessageBus;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -21,7 +21,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Authenticate via HTTP to obtain a JWT for the SignalR market hub
     let cfg = PxCredential::from_env().expect("Missing PX env vars");
-    let http = PxHttpClient::new(cfg, None, None, None, None)?;
+    let bus = Arc::new(MessageBus::new());
+    let http = PxHttpClient::new(cfg, None, None, None, None, bus.clone())?;
     // Create a token update channel and pass the sender to HTTP; attach receiver to WS later
     let (tx, rx) = watch::channel(String::new());
     http.start(tx).await?;
@@ -55,7 +56,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .token_string()
         .await;
     let base = http.inner.rtc_base();
-    let rt = PxWebSocketClient::new(base, token, http.firm.clone());
+    let rt = PxWebSocketClient::new(base, token, http.firm.clone(), bus.clone());
     // Attach the token update receiver so WS picks up rotations
     rt.watch_token_updates(rx).await;
 

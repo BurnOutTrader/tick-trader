@@ -15,9 +15,10 @@ use serde_json::Value;
 use tokio::{
     task::JoinHandle,
 };
+use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::{http, Message};
 use tracing::{error, info};
-use tt_types::securities::symbols::{Instrument, SymbolInfo};
+use tt_types::securities::symbols::{Instrument};
 
 // Minimal WebSocket client used by PxWebSocketClient
 use futures_util::stream::BoxStream;
@@ -33,7 +34,6 @@ use tokio_tungstenite::MaybeTlsStream;
 use tt_bus::MessageBus;
 use tt_types::accounts::account::{AccountName, AccountSnapShot};
 use tt_types::base_data::{Price, Side, Tick, Volume};
-use tt_types::keys::AccountKey;
 use tt_types::order_models::enums::{OrderEventType, OrderType};
 use tt_types::securities::futures_helpers::extract_root;
 
@@ -331,7 +331,10 @@ pub struct PxWebSocketClient {
     user_reader_task: Arc<tokio::sync::Mutex<Option<JoinHandle<()>>>>,
     market_ws: Arc<tokio::sync::Mutex<Option<WebSocketClient>>>,
     market_reader_task: Arc<tokio::sync::Mutex<Option<JoinHandle<()>>>>,
-    
+
+    // ---- Message processing offload ----
+    msg_tx: mpsc::Sender<Value>,
+    msg_task: Arc<tokio::sync::Mutex<Option<JoinHandle<()>>>>,
 
     precisions: Arc<DashMap<String, u8>>,
 
@@ -347,7 +350,8 @@ pub struct PxWebSocketClient {
 impl PxWebSocketClient {
     /// Create a new websocket client with optional bearer token
     pub fn new(base_url: impl Into<String>, bearer_token: Arc<RwLock<Option<String>>>, firm: String, bus: Arc<MessageBus>) -> Self {
-        Self {
+        let (tx, mut rx) = mpsc::channel::<Value>(4096);
+        let mut client = Self {
             bus,
             firm,
             base_url: base_url.into(),
@@ -369,11 +373,30 @@ impl PxWebSocketClient {
             user_reader_task: Arc::new(tokio::sync::Mutex::new(None)),
             market_ws: Arc::new(tokio::sync::Mutex::new(None)),
             market_reader_task: Arc::new(tokio::sync::Mutex::new(None)),
+            msg_tx: tx.clone(),
+            msg_task: Arc::new(tokio::sync::Mutex::new(None)),
             precisions: Arc::new(DashMap::new()),
             positions: Arc::new(Default::default()),
             pending_orders: Arc::new(Default::default()),
             trades: Arc::new(DashMap::new()),
-        }
+        };
+        // Spawn background processor to keep hot path free
+        let worker = client.clone();
+        let task = tokio::spawn(async move {
+            while let Some(val) = rx.recv().await {
+                worker.handle_signalr_message(val).await;
+            }
+        });
+        // Save task handle
+        tokio::spawn({
+            let task = Some(task);
+            let client_inner = client.clone();
+            async move {
+                let mut g = client_inner.msg_task.lock().await;
+                *g = task;
+            }
+        });
+        client
     }
 
     /// Returns the full URL for the user hub (ws/wss scheme)
@@ -462,7 +485,7 @@ impl PxWebSocketClient {
                                 continue;
                             }
                             if let Ok(val) = serde_json::from_str::<serde_json::Value>(frame) {
-                                this.handle_signalr_message(val);
+                                let _ = this.msg_tx.try_send(val);
                             }
                         }
                     }
@@ -473,7 +496,7 @@ impl PxWebSocketClient {
                                     continue;
                                 }
                                 if let Ok(val) = serde_json::from_str::<serde_json::Value>(frame) {
-                                    this.handle_signalr_message(val);
+                                    let _ = this.msg_tx.try_send(val);
                                 }
                             }
                         }
@@ -576,7 +599,7 @@ impl PxWebSocketClient {
                                 continue;
                             }
                             if let Ok(val) = serde_json::from_str::<serde_json::Value>(frame) {
-                                this.handle_signalr_message(val);
+                                let _ = this.msg_tx.try_send(val);
                             }
                         }
                     }
@@ -588,7 +611,7 @@ impl PxWebSocketClient {
                                     continue;
                                 }
                                 if let Ok(val) = serde_json::from_str::<serde_json::Value>(frame) {
-                                    this.handle_signalr_message(val);
+                                    let _ = this.msg_tx.try_send(val);
                                 }
                             }
                         }
@@ -697,7 +720,7 @@ impl PxWebSocketClient {
                                     } else {
                                         args.get(0).unwrap_or(&Value::Null)
                                     };
-                                    if let Ok(px_quote) = serde_json::from_value::<GatewayQuote>(data_val.clone()) {
+                                    if let Ok(px_quote) = serde_json::from_value::<GatewayQuote>(data_val.to_owned()) {
                                         if let Ok(instrument) = Instrument::from_str(px_quote.symbol.as_str()) {
                                             let symbol = extract_root(&instrument);
                                             let bid = Price::from_f64(px_quote.best_bid).unwrap_or_default();
@@ -743,62 +766,48 @@ impl PxWebSocketClient {
                                         args.get(0).unwrap_or(&Value::Null)
                                     };
 
-                                    // Helper to parse a single trade value into Tick and log it
-                                    let parse_and_log = |v: &Value| {
-                                        match serde_json::from_value::<GatewayTrade>(v.clone()) {
-                                            Ok(px_trade) => {
-                                                if let Ok(instrument) = Instrument::from_str(px_trade.symbol_id.as_str()) {
-                                                    let symbol = extract_root(&instrument);
-                                                    let price = match Price::from_f64(px_trade.price) {
-                                                        Some(p) => p,
-                                                        None => {
-                                                            log::warn!("invalid price for {}", px_trade.price);
-                                                            return;
-                                                        }
-                                                    };
-                                                    let volume = match Volume::from_i64(px_trade.volume) {
-                                                        Some(s) => s,
-                                                        None => {
-                                                            log::warn!("invalid size for {}", px_trade.volume);
-                                                            return;
-                                                        }
-                                                    };
-                                                    let side = match px_trade.r#type {
-                                                        0 => Side::Buy,
-                                                        1 => Side::Sell,
-                                                        _ => Side::None,
-                                                    };
-                                                    let time = match DateTime::<Utc>::from_str(px_trade.timestamp.as_str()) {
-                                                        Ok(t) => t,
-                                                        Err(e) => {
-                                                            log::warn!("invalid timestamp for {}: {}", px_trade.timestamp, e);
-                                                            Utc::now()
-                                                        }
-                                                    };
-                                                    let tick = Tick {
-                                                        symbol,
-                                                        instrument,
-                                                        price,
-                                                        volume,
-                                                        time,
-                                                        side,
-                                                        venue_seq: None,
-                                                    };
-                                                   if let Err(e) = self.bus.publish_tick(tick).await {
-                                                       log::warn!("failed to publish tick: {}", e);
-                                                   }
+                                    if let Ok(px_trade) = serde_json::from_value::<GatewayTrade>(data_val.to_owned()) {
+                                        if let Ok(instrument) = Instrument::from_str(px_trade.symbol_id.as_str()) {
+                                            let symbol = extract_root(&instrument);
+                                            let price = match Price::from_f64(px_trade.price) {
+                                                Some(p) => p,
+                                                None => {
+                                                    log::warn!("invalid price for {}", px_trade.price);
+                                                    return;
                                                 }
-                                            }
-                                            Err(_) => {
-                                                info!(target: "projectx.ws", "GatewayTrade (unparsed): {}", v);
+                                            };
+                                            let volume = match Volume::from_i64(px_trade.volume) {
+                                                Some(s) => s,
+                                                None => {
+                                                    log::warn!("invalid size for {}", px_trade.volume);
+                                                    return;
+                                                }
+                                            };
+                                            let side = match px_trade.r#type {
+                                                0 => Side::Buy,
+                                                1 => Side::Sell,
+                                                _ => Side::None,
+                                            };
+                                            let time = match DateTime::<Utc>::from_str(px_trade.timestamp.as_str()) {
+                                                Ok(t) => t,
+                                                Err(e) => {
+                                                    log::warn!("invalid timestamp for {}: {}", px_trade.timestamp, e);
+                                                    Utc::now()
+                                                }
+                                            };
+                                            let tick = Tick {
+                                                symbol,
+                                                instrument,
+                                                price,
+                                                volume,
+                                                time,
+                                                side,
+                                                venue_seq: None,
+                                            };
+                                            if let Err(e) = self.bus.publish_tick(tick).await {
+                                                log::warn!("failed to publish tick: {}", e);
                                             }
                                         }
-                                    };
-
-                                    if let Some(arr) = data_val.as_array() {
-                                        for item in arr { parse_and_log(item); }
-                                    } else {
-                                        parse_and_log(data_val);
                                     }
                                 }
                             }
@@ -873,6 +882,7 @@ impl PxWebSocketClient {
 
                                 let time_accepted = DateTime::<Utc>::from_str(&order.creation_timestamp).unwrap_or_else(|_| Utc::now());
                                 let time_last = DateTime::<Utc>::from_str(&order.update_timestamp).unwrap_or_else(|_| Utc::now());
+                                
 
                                 info!(target: "projectx.ws", "GatewayUserOrder standardized: id={} status={} side={:?} type={:?}", order.id, order.status, side, order_type);
                             }
@@ -887,7 +897,13 @@ impl PxWebSocketClient {
                                     }
                                 };
 
-                                let instrument_id = Instrument::from(&position.contract_id);
+                                let instrument_id = match Instrument::from_str(position.contract_id.as_str()) {
+                                                                    Ok(i) => i,
+                                                                    Err(e) => {
+                                                                        error!(target: "projectx.ws", "invalid instrument for position: {} ({:?})", position.contract_id, e);
+                                                                        return;
+                                                                    }
+                                                                };
                                 let symbol = extract_root(&instrument_id);
 
                                 self.positions
@@ -905,7 +921,13 @@ impl PxWebSocketClient {
                                         }
                                     };
 
-                                let instrument_id = Instrument::from(&trade.contract_id);
+                                let instrument_id = match Instrument::from_str(trade.contract_id.as_str()) {
+                                                                    Ok(i) => i,
+                                                                    Err(e) => {
+                                                                        error!(target: "projectx.ws", "invalid instrument for trade: {} ({:?})", trade.contract_id, e);
+                                                                        return;
+                                                                    }
+                                                                };
                                 let symbol = extract_root(&instrument_id);
 
                                 let side = if trade.side == 0 {

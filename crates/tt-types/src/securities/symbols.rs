@@ -124,8 +124,11 @@ impl Currency {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Instrument(String);
 impl Instrument {
-    pub fn from(name: &str) -> Instrument {
-        Self(name.to_string())
+    pub fn try_from(name: &str) -> anyhow::Result<Instrument> {
+        if name.len() > 5 {
+            return Err(anyhow!("Instrument name too long: {}", name));
+        }
+        Ok(Self(name.to_string()))
     }
 }
 impl FromStr for Instrument {
@@ -270,6 +273,7 @@ const SYMBOL_INFO_PAIRS: &[(&str, SymbolInfo)] = &[
 
 use once_cell::sync::Lazy;
 use ahash::AHashMap;
+use anyhow::anyhow;
 use rust_decimal::dec;
 
 static SYMBOL_INFO_MAP: Lazy<AHashMap<&'static str, SymbolInfo>> = Lazy::new(|| {

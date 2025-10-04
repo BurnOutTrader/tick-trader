@@ -1,9 +1,11 @@
+use std::sync::Arc;
 use dotenvy::dotenv;
 use rustls::crypto::{ring, CryptoProvider};
 use tracing::level_filters::LevelFilter;
 use projectx::http::client::PxHttpClient;
 use projectx::http::credentials::PxCredential;
 use tokio::sync::watch;
+use tt_bus::MessageBus;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -14,10 +16,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenv().ok();
 
     let _ = CryptoProvider::install_default(ring::default_provider());
-
+    let bus = Arc::new(MessageBus::new());
     let cfg = PxCredential::from_env().expect("Missing PX env vars");
     #[allow(unused)]
-    let client = PxHttpClient::new(cfg, None, None, None, None)?;
+    let client = PxHttpClient::new(cfg, None, None, None, None,bus.clone())?;
 
     let (_tx, _rx) = watch::channel(String::new());
     let _ = client.start(_tx).await?;
