@@ -2,7 +2,6 @@ use crate::securities::market_hours::{hours_for_exchange, MarketHours};
 use crate::securities::symbols::{get_symbol_info, Currency, Exchange, Instrument, SecurityType};
 use chrono::{DateTime, NaiveDate, Utc};
 use rust_decimal::Decimal;
-use crate::keys::ProviderId;
 use crate::securities::futures_helpers::{activation_ns_default, extract_root, parse_expiry_from_instrument};
 
 /// Handle that composes facts (props), calendar (hours), models, and small runtime cache.

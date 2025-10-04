@@ -5,7 +5,7 @@ use crate::securities::security::FuturesContract;
 // Somewhere common (e.g., engine_multi or a small models.rs)
 
 pub trait FeeModel: Send + Sync {
-    fn estimate(&self, root: &str, price: Decimal) -> Decimal;
+    fn estimate(&self, root: &str, price: Decimal, broker: &str) -> Decimal;
 }
 pub trait SlippageModel: Send + Sync {
     fn slip(&self, price: Decimal, qty: Decimal) -> Decimal;

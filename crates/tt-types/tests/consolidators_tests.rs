@@ -83,7 +83,6 @@ async fn ticks_to_m1_single_bar() {
         Resolution::Minutes(1),
         rx_in,
         symbol.to_string(),
-        Exchange::CME,
         None,
         Instrument::try_from(symbol).unwrap(),
         None,
@@ -202,7 +201,6 @@ async fn candles_to_m5_from_m1() {
         Resolution::Minutes(5),
         rx_in,
         symbol.to_string(),
-        Exchange::CME,
         None,
         Instrument::try_from(symbol).unwrap(),
     );
@@ -266,7 +264,6 @@ async fn bbo_to_m1_two_bars_midprice() {
         Resolution::Minutes(1),
         rx_in,
         symbol.to_string(),
-        Exchange::CME,
         None,
         Instrument::try_from(symbol).unwrap(),
         None,
@@ -322,7 +319,6 @@ async fn candles_to_m5_no_feedback_duplicate() {
         Resolution::Minutes(5),
         rx_in,
         symbol.to_string(),
-        Exchange::CME,
         None,
         Instrument::try_from(symbol).unwrap(),
     );

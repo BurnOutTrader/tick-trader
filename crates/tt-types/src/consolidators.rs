@@ -190,7 +190,6 @@ impl TicksToCandlesConsolidator {
         dst: Resolution,
         mut rx_tick: broadcast::Receiver<Tick>,
         out_symbol: String,
-        out_exchange: Exchange,
         hours: Option<Arc<MarketHours>>,
         instrument: Instrument,
         mut rx_time: Option<broadcast::Receiver<DateTime<Utc>>>,
@@ -383,7 +382,6 @@ impl BboToCandlesConsolidator {
         dst: Resolution,
         mut rx_bbo: broadcast::Receiver<Bbo>,
         out_symbol: String,
-        out_exchange: Exchange,
         hours: Option<Arc<MarketHours>>,
         instrument: Instrument,
         mut rx_time: Option<broadcast::Receiver<DateTime<Utc>>>,
@@ -565,7 +563,6 @@ impl CandlesToCandlesConsolidator {
         dst: Resolution,
         mut rx_candle: broadcast::Receiver<Candle>,
         out_symbol: String,
-        out_exchange: Exchange,
         hours: Option<Arc<MarketHours>>,
         instrument: Instrument,
     ) -> Self {
@@ -583,7 +580,6 @@ impl CandlesToCandlesConsolidator {
             let mut vol = Decimal::ZERO;
             let mut bid_vol = Decimal::ZERO;
             let mut ask_vol = Decimal::ZERO;
-            let mut trades = Decimal::ZERO;
 
             enum Win {
                 Fixed {
@@ -688,7 +684,6 @@ impl CandlesToCandlesConsolidator {
                     vol = Decimal::ZERO;
                     ask_vol = Decimal::ZERO;
                     bid_vol = Decimal::ZERO;
-                    trades = Decimal::ZERO;
                     let cur = win.take().unwrap();
                     win = Some(advance(ts, &cur, &hours));
                 }

@@ -18,11 +18,22 @@ lazy_static::lazy_static! {
 pub struct DefaultFeeModel;
 
 impl FeeModel for DefaultFeeModel {
-    fn estimate(&self, root: &str, quantity: Decimal) -> Decimal {
-        if let Some(info) = COMMISSION_PER_CONTRACT.get(root) {
-            return info.per_side * quantity
+    fn estimate(&self, root: &str, quantity: Decimal, broker: &str) -> Decimal {
+        match broker {
+            "RITHMIC" => {
+                if let Some(info) = COMMISSION_PER_CONTRACT_RITHMIC.get(root) {
+                    return info.per_side * quantity
+                }
+                dec!(0.00)
+            }
+            "ProjectX" => {
+                if let Some(info) = COMMISSION_PER_CONTRACT_X.get(root) {
+                    return info.per_side * quantity
+                }
+                dec!(0.00)
+            }
+            _ => dec!(0.00)
         }
-        dec!(0.00)
     }
 }
 
@@ -34,7 +45,7 @@ pub struct CommissionInfo {
 }
 
 lazy_static! {
-    static ref COMMISSION_PER_CONTRACT: AHashMap<&'static str, CommissionInfo> = {
+    static ref COMMISSION_PER_CONTRACT_RITHMIC: AHashMap<&'static str, CommissionInfo> = {
         let mut map = AHashMap::new();
 
         // Stock Index Futures (Exchange Fee: 0.50 USD)
@@ -148,6 +159,82 @@ lazy_static! {
         map.insert("GF", CommissionInfo { per_side: dec!(2.62) + dec!(0.55), currency: "USD".to_string() });
         map.insert("HE", CommissionInfo { per_side: dec!(2.62) + dec!(0.55), currency: "USD".to_string() });
         map.insert("LE", CommissionInfo { per_side: dec!(2.62) + dec!(0.55), currency: "USD".to_string() });
+
+        map
+    };
+}
+
+
+lazy_static! {
+    static ref COMMISSION_PER_CONTRACT_X: AHashMap<&'static str, CommissionInfo> = {
+        let mut map = AHashMap::new();
+        
+                // CME Equity Futures
+        map.insert("ES",  CommissionInfo { per_side: dec!(1.40), currency: "USD".to_string() });
+        map.insert("MES", CommissionInfo { per_side: dec!(0.37), currency: "USD".to_string() });
+        map.insert("NQ",  CommissionInfo { per_side: dec!(1.40), currency: "USD".to_string() });
+        map.insert("MNQ", CommissionInfo { per_side: dec!(0.37), currency: "USD".to_string() });
+        map.insert("RTY", CommissionInfo { per_side: dec!(1.40), currency: "USD".to_string() });
+        map.insert("M2K", CommissionInfo { per_side: dec!(0.37), currency: "USD".to_string() });
+        map.insert("NKD", CommissionInfo { per_side: dec!(2.17), currency: "USD".to_string() });
+        map.insert("MBT", CommissionInfo { per_side: dec!(1.17), currency: "USD".to_string() });
+        map.insert("MET", CommissionInfo { per_side: dec!(0.12), currency: "USD".to_string() });
+        
+        // CME NYMEX Futures
+        map.insert("CL",  CommissionInfo { per_side: dec!(1.52), currency: "USD".to_string() });
+        map.insert("MCL", CommissionInfo { per_side: dec!(0.52), currency: "USD".to_string() });
+        map.insert("QM",  CommissionInfo { per_side: dec!(1.22), currency: "USD".to_string() });
+        map.insert("PL",  CommissionInfo { per_side: dec!(1.62), currency: "USD".to_string() });
+        map.insert("QG",  CommissionInfo { per_side: dec!(0.52), currency: "USD".to_string() });
+        map.insert("RB",  CommissionInfo { per_side: dec!(1.52), currency: "USD".to_string() });
+        map.insert("HO",  CommissionInfo { per_side: dec!(1.52), currency: "USD".to_string() });
+        map.insert("NG",  CommissionInfo { per_side: dec!(1.60), currency: "USD".to_string() });
+        map.insert("MNG", CommissionInfo { per_side: dec!(0.62), currency: "USD".to_string() });
+        
+        // CME CBOT Equity Futures
+        map.insert("YM",  CommissionInfo { per_side: dec!(1.40), currency: "USD".to_string() });
+        map.insert("MYM", CommissionInfo { per_side: dec!(0.37), currency: "USD".to_string() });
+        
+        // CME Foreign Exchange Futures
+        map.insert("6A", CommissionInfo { per_side: dec!(1.62), currency: "USD".to_string() });
+        map.insert("M6A", CommissionInfo { per_side: dec!(0.26), currency: "USD".to_string() });
+        map.insert("6B", CommissionInfo { per_side: dec!(1.62), currency: "USD".to_string() });
+        map.insert("6C", CommissionInfo { per_side: dec!(1.62), currency: "USD".to_string() });
+        map.insert("6E", CommissionInfo { per_side: dec!(1.62), currency: "USD".to_string() });
+        map.insert("M6E", CommissionInfo { per_side: dec!(0.26), currency: "USD".to_string() });
+        map.insert("6J", CommissionInfo { per_side: dec!(1.62), currency: "USD".to_string() });
+        map.insert("6S", CommissionInfo { per_side: dec!(1.62), currency: "USD".to_string() });
+        map.insert("E7", CommissionInfo { per_side: dec!(0.87), currency: "USD".to_string() });
+        map.insert("6M", CommissionInfo { per_side: dec!(1.62), currency: "USD".to_string() });
+        map.insert("6N", CommissionInfo { per_side: dec!(1.62), currency: "USD".to_string() });
+        map.insert("M6B", CommissionInfo { per_side: dec!(0.26), currency: "USD".to_string() });
+        
+        // CME CBOT Financial/Interest Rate Futures
+        map.insert("ZT", CommissionInfo { per_side: dec!(0.67), currency: "USD".to_string() });
+        map.insert("ZF", CommissionInfo { per_side: dec!(0.67), currency: "USD".to_string() });
+        map.insert("ZN", CommissionInfo { per_side: dec!(0.80), currency: "USD".to_string() });
+        map.insert("ZB", CommissionInfo { per_side: dec!(0.89), currency: "USD".to_string() });
+        map.insert("UB", CommissionInfo { per_side: dec!(0.97), currency: "USD".to_string() });
+        map.insert("TN", CommissionInfo { per_side: dec!(0.82), currency: "USD".to_string() });
+        
+        // CME COMEX Futures
+        map.insert("GC",  CommissionInfo { per_side: dec!(1.62), currency: "USD".to_string() });
+        map.insert("MGC", CommissionInfo { per_side: dec!(0.62), currency: "USD".to_string() });
+        map.insert("SI",  CommissionInfo { per_side: dec!(1.62), currency: "USD".to_string() });
+        map.insert("SIL", CommissionInfo { per_side: dec!(1.02), currency: "USD".to_string() });
+        map.insert("HG",  CommissionInfo { per_side: dec!(1.62), currency: "USD".to_string() });
+        map.insert("MHG", CommissionInfo { per_side: dec!(0.62), currency: "USD".to_string() });
+        
+        // CME Agricultural Futures
+        map.insert("HE", CommissionInfo { per_side: dec!(2.12), currency: "USD".to_string() });
+        map.insert("LE", CommissionInfo { per_side: dec!(2.12), currency: "USD".to_string() });
+        
+        // CME CBOT Commodity Futures
+        map.insert("ZC", CommissionInfo { per_side: dec!(2.15), currency: "USD".to_string() });
+        map.insert("ZW", CommissionInfo { per_side: dec!(2.15), currency: "USD".to_string() });
+        map.insert("ZS", CommissionInfo { per_side: dec!(2.15), currency: "USD".to_string() });
+        map.insert("ZM", CommissionInfo { per_side: dec!(2.15), currency: "USD".to_string() });
+        map.insert("ZL", CommissionInfo { per_side: dec!(2.15), currency: "USD".to_string() });
 
         map
     };
