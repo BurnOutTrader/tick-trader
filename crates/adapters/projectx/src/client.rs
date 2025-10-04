@@ -13,8 +13,9 @@ use crate::http::error::PxError;
 use crate::websocket::client::PxWebSocketClient;
 use tokio::sync::watch;
 use tt_bus::MessageBus;
-
+const PROVIDER: &'static str = "ProjectX";
 pub struct PXClient {
+    firm: String,
     http: PxHttpClient,
     websocket: PxWebSocketClient,
     http_connection_state: RwLock<ConnectionState>,
@@ -38,6 +39,7 @@ impl PXClient {
         let websocket = PxWebSocketClient::new(base, token, firm.clone(), bus);
         let id = format!("ProjectX:{}", firm);
         Ok(Self {
+            firm: firm.to_string(),
             id,
             http,
             websocket,
@@ -155,15 +157,39 @@ impl MarketDataProvider for PXClient {
         }
     }
 
-    fn active_md_subscriptions(&self) -> AHashMap<Topic, Vec<SymbolKey>> {
-        let mut map = AHashMap::new();
-        // Minimal implementation: we currently track contract IDs internally.
-        // Returning empty vectors until a reverse mapping to SymbolKey is defined.
+    async fn active_md_subscriptions(&self) -> AHashMap<Topic, Vec<SymbolKey>> {
+        // Collect current active subscriptions from the websocket client which tracks
+        // contract ids per topic internally.
+        fn symbol_from_contract_id(firm: String, instrument: &str) -> Option<SymbolKey> {
+            Some(SymbolKey {
+                instrument: instrument.to_string(),
+                provider: PROVIDER.to_string(),
+                broker: Some(firm),
+            })
+        };
 
-        map.insert(Topic::Ticks, vec![]);
-        map.insert(Topic::Quotes, vec![]);
-        map.insert(Topic::Depth, vec![]);
+        let ticks = {
+            let g = self.websocket.active_contract_ids_ticks().await;
+            g.iter().filter_map(|s| symbol_from_contract_id(self.firm.to_string(), s)).collect::<Vec<_>>()
+        };
+        let quotes = {
+            let g = self.websocket.active_contract_ids_quotes().await;
+            g.iter().filter_map(|s| symbol_from_contract_id(self.firm.to_string(), s)).collect::<Vec<_>>()
+        };
+        let depth = {
+            let g = self.websocket.active_contract_ids_depth().await;
+            g.iter().filter_map(|s| symbol_from_contract_id(self.firm.to_string(), s)).collect::<Vec<_>>()
+        };
+
+        let mut map = AHashMap::new();
+        map.insert(Topic::Ticks, ticks);
+        map.insert(Topic::Quotes, quotes);
+        map.insert(Topic::Depth, depth);
         map
+    }
+
+    async fn auto_update(&self) -> anyhow::Result<()> {
+        self.http.auto_update().await
     }
 }
 
@@ -241,5 +267,9 @@ impl ExecutionProvider for PXClient {
 
     async fn replace(&self, order_replace_cmd: HashMap<String, String>) -> CommandAck {
         todo!()
+    }
+
+    async fn auto_update(&self) -> anyhow::Result<()> {
+        self.http.auto_update().await
     }
 }

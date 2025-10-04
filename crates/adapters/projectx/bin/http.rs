@@ -16,18 +16,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cfg = PxCredential::from_env().expect("Missing PX env vars");
     #[allow(unused)]
     let client = PxHttpClient::new(cfg, None, None, None, None)?;
-    
+
     let _ = client.start().await?;
     tracing::info!("Authentication: Success");
 
-    let resp = client.account_ids().await?;
+    let resp = client.account_snapshots().await?;
 
     if resp.is_empty() {
         println!("No contracts found");
     }
 
-    for acc in resp {
-        println!("{:?}", acc);
+    for acc in resp.iter() {
+        println!("{:?}", acc.value());
+    }
+
+    let resp = client.manual_update_instruments(false).await?;
+    let resp = resp.read().await;
+    for (_, inst) in resp.iter() {
+        println!("{:?}", inst);
     }
 
     /*let req = RetrieveBarsReq {

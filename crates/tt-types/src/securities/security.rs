@@ -6,7 +6,7 @@ use crate::keys::ProviderId;
 use crate::securities::futures_helpers::{activation_ns_default, extract_root, parse_expiry_from_instrument};
 
 /// Handle that composes facts (props), calendar (hours), models, and small runtime cache.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct FuturesContract {
     pub root: String,
     pub instrument: Instrument,

@@ -71,7 +71,8 @@ pub trait MarketDataProvider: Send + Sync {
         params: Option<&ProviderParams>,
     ) -> anyhow::Result<()>;
     async fn unsubscribe_md(&self, topic: Topic, key: &SymbolKey) -> anyhow::Result<()>;
-    fn active_md_subscriptions(&self) -> AHashMap<Topic, Vec<SymbolKey>>;
+    async fn active_md_subscriptions(&self) -> AHashMap<Topic, Vec<SymbolKey>>;
+    async fn auto_update(&self) -> anyhow::Result<()>;
 
     // Push callbacks (Engine will call into Bus using these rows of data)
     // In traits, we expose function hooks providers call on Engine; here we just declare signatures
@@ -101,6 +102,7 @@ pub trait ExecutionProvider: Send + Sync {
     async fn place(&self, order_cmd: HashMap<String, String>) -> CommandAck;
     async fn cancel(&self, order_id: String) -> CommandAck;
     async fn replace(&self, order_replace_cmd: HashMap<String, String>) -> CommandAck;
+    async fn auto_update(&self) -> anyhow::Result<()>;
 }
 
 #[derive(Debug, Clone)]

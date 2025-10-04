@@ -61,9 +61,9 @@ pub struct PxWebSocketClient {
     /// Tracked contract IDs for quotes subscription
     pub(crate) market_contract_quotes_subs: Arc<RwLock<Vec<String>>>,
     /// Tracked contract IDs for depth subscription
-    market_contract_depth_subs: Arc<RwLock<Vec<String>>>,
+    pub(crate) market_contract_depth_subs: Arc<RwLock<Vec<String>>>,
     /// Tracked contract IDs for trades subscription
-    market_contract_tick_subs: Arc<RwLock<Vec<String>>>,
+    pub(crate) market_contract_tick_subs: Arc<RwLock<Vec<String>>>,
 
     market_contract_bars_subs: Arc<RwLock<Vec<String>>>,
 
@@ -1032,5 +1032,20 @@ impl PxWebSocketClient {
     /// Generate a unique request ID for outbound messages
     pub fn next_request_id(&self) -> u64 {
         self.request_id_counter.fetch_add(1, Ordering::SeqCst)
+    }
+}
+
+impl PxWebSocketClient {
+    /// Get a snapshot of currently subscribed contract IDs for tick stream.
+    pub async fn active_contract_ids_ticks(&self) -> Vec<String> {
+        self.market_contract_tick_subs.read().await.clone()
+    }
+    /// Get a snapshot of currently subscribed contract IDs for quote stream.
+    pub async fn active_contract_ids_quotes(&self) -> Vec<String> {
+        self.market_contract_quotes_subs.read().await.clone()
+    }
+    /// Get a snapshot of currently subscribed contract IDs for market depth stream.
+    pub async fn active_contract_ids_depth(&self) -> Vec<String> {
+        self.market_contract_depth_subs.read().await.clone()
     }
 }

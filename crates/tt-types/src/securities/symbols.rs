@@ -269,6 +269,14 @@ const SYMBOL_INFO_PAIRS: &[(&str, SymbolInfo)] = &[
     ("M6B", SymbolInfo { symbol_name: "M6B", value_per_tick: dec!(0.0625), tick_size: dec!(0.0001), decimal_accuracy: 4, exchange: Exchange::CME }),
     ("M6E", SymbolInfo { symbol_name: "M6E", value_per_tick: dec!(0.125), tick_size: dec!(0.0001), decimal_accuracy: 4, exchange: Exchange::CME }),
     ("MJY", SymbolInfo { symbol_name: "MJY", value_per_tick: dec!(0.00125), tick_size: dec!(0.000001), decimal_accuracy: 6, exchange: Exchange::CME }),
+    ("MET", SymbolInfo { symbol_name: "MET", value_per_tick: dec!(1.25), tick_size: dec!(0.25), decimal_accuracy: 2, exchange: Exchange::CME }),
+    ("MHG", SymbolInfo { symbol_name: "MHG", value_per_tick: dec!(0.0025), tick_size: dec!(0.0005), decimal_accuracy: 4, exchange: Exchange::COMEX }),
+    ("MNG", SymbolInfo { symbol_name: "MNG", value_per_tick: dec!(2.5), tick_size: dec!(0.001), decimal_accuracy: 3, exchange: Exchange::NYMEX }),
+    ("NKD", SymbolInfo { symbol_name: "NKD", value_per_tick: dec!(5.0), tick_size: dec!(5.0), decimal_accuracy: 0, exchange: Exchange::CME }),
+    ("QG", SymbolInfo { symbol_name: "QG", value_per_tick: dec!(12.5), tick_size: dec!(0.0025), decimal_accuracy: 4, exchange: Exchange::NYMEX }),
+    ("RTY", SymbolInfo { symbol_name: "RTY", value_per_tick: dec!(5.0), tick_size: dec!(0.1), decimal_accuracy: 2, exchange: Exchange::CME }),
+    ("TN", SymbolInfo { symbol_name: "TN", value_per_tick: dec!(15.625), tick_size: dec!(0.015625), decimal_accuracy: 5, exchange: Exchange::CBOT }),
+    ("UB", SymbolInfo { symbol_name: "UB", value_per_tick: dec!(31.25), tick_size: dec!(0.03125), decimal_accuracy: 5, exchange: Exchange::CBOT }),
 ];
 
 use once_cell::sync::Lazy;
