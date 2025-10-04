@@ -12,3 +12,4 @@ tokio = { workspace = true }
 
 tt-provider = { path = "../provider" }
 tt-types = { path = "../tt-types" }
+ahash = {workspace = true}
