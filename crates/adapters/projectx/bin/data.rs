@@ -7,7 +7,6 @@ use projectx::http::client::PxHttpClient;
 use projectx::http::credentials::PxCredential;
 use projectx::http::models::ContractSearchResponse;
 use projectx::websocket::client::PxWebSocketClient;
-use tokio::sync::watch;
 use tt_bus::MessageBus;
 
 #[tokio::main]
@@ -54,7 +53,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await;
     let base = http.inner.rtc_base();
     let bus = Arc::new(MessageBus::new());
-    let rt = PxWebSocketClient::new(base, token, http.firm.clone(), bus.clone());
+    let rt = PxWebSocketClient::new(base, token,http.firm.clone(), bus.clone());
 
     // Connect market hub and subscribe to trades for the contract
     rt.connect_market().await?;

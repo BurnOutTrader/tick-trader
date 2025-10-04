@@ -3,7 +3,7 @@ use std::sync::RwLock;
 use once_cell::sync::Lazy;
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use crate::accounts::account::AccountName;
-use crate::providers::{ProviderKind, ProjectXTenant, RithmicAffiliation};
+use crate::providers::{ProviderKind};
 use crate::securities::symbols::Instrument;
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq, Copy, Eq, Hash)]
@@ -91,41 +91,6 @@ pub fn intern_key(s: &str) -> KeyId {
 pub fn resolve_key(id: KeyId) -> Option<String> {
     let g = INTERN.read().unwrap();
     g.resolve(id).map(|s| s.to_string())
-}
-
-fn escape(input: &str, special: char) -> String {
-    let mut out = String::with_capacity(input.len());
-    for ch in input.chars() {
-        match ch {
-            '\\' => {
-                out.push('\\');
-                out.push('\\');
-            }
-            c if c == special => {
-                out.push('\\');
-                out.push(c);
-            }
-            c => out.push(c),
-        }
-    }
-    out
-}
-
-fn unescape(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    let mut it = input.chars();
-    while let Some(c) = it.next() {
-        if c == '\\' {
-            if let Some(n) = it.next() {
-                out.push(n);
-            } else {
-                out.push('\\');
-            }
-        } else {
-            out.push(c);
-        }
-    }
-    out
 }
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone)]

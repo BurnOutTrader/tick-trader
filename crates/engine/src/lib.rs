@@ -260,6 +260,8 @@ impl<P: MarketDataProvider + 'static> Engine<P> {
 use tt_bus::bus::{MessageBus, SubId};
 use tokio::sync::mpsc;
 use tt_types::base_data::{Bbo, Candle, Tick};
+use tt_types::providers::ProviderKind;
+use tt_types::securities::symbols::Instrument;
 use tt_types::wire::{AccountDeltaBatch, BarBatch, Envelope, FlowCredit, OrdersBatch, PositionsBatch, Subscribe, TickBatch, QuoteBatch};
 
 #[async_trait]
@@ -283,14 +285,14 @@ pub struct EngineRuntime {
 }
 
 impl EngineRuntime { 
-    pub async fn list_instruments(&self, provider: &str, pattern: Option<String>) -> anyhow::Result<Vec<String>> {
+    pub async fn list_instruments(&self, provider: ProviderKind, pattern: Option<String>) -> anyhow::Result<Vec<Instrument>> {
         self.bus.request_instruments(provider, pattern).await
     }
-    pub async fn subscribe_symbol(&self, provider: &str, topic: Topic, key: &SymbolKey) -> anyhow::Result<()> {
-        self.bus.md_subscribe(provider, topic, key.to_string_wire()).await
+    pub async fn subscribe_symbol(&self, provider: ProviderKind, topic: Topic, key: SymbolKey) -> anyhow::Result<()> {
+        self.bus.md_subscribe(provider, topic, key).await
     }
-    pub async fn unsubscribe_symbol(&self, provider: &str, topic: Topic, key: &SymbolKey) -> anyhow::Result<()> {
-        self.bus.md_unsubscribe(provider, topic, key.to_string_wire()).await
+    pub async fn unsubscribe_symbol(&self, provider: ProviderKind, topic: Topic, key: SymbolKey) -> anyhow::Result<()> {
+        self.bus.md_unsubscribe(provider, topic, key).await
     }
     pub fn new(bus: Arc<MessageBus>) -> Self {
         Self { bus, sub_id: None, rx: None, task: None }

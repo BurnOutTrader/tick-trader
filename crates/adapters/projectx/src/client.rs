@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::Arc;
 use ahash::AHashMap;
 use async_trait::async_trait;
@@ -14,13 +15,11 @@ use crate::websocket::client::PxWebSocketClient;
 use tt_bus::MessageBus;
 use tt_types::providers::{ProjectXTenant, ProviderKind};
 
-const PROVIDER: &'static str = "ProjectX";
 pub struct PXClient {
-    firm: ProjectXTenant,
+    provider_kind: ProviderKind,
     http: Arc<PxHttpClient>,
     websocket: Arc<PxWebSocketClient>,
     http_connection_state: Arc<RwLock<ConnectionState>>,
-    id: String,
     account_subscriptions: Arc<RwLock<Vec<AccountKey>>>,
 }
 
@@ -28,24 +27,23 @@ impl PXClient {
     pub async fn instruments_map_snapshot(&self) -> AHashMap<tt_types::securities::symbols::Instrument, tt_types::securities::security::FuturesContract> {
         self.http.instruments_snapshot().await
     }
+    #[allow(dead_code)]
     async fn new_from_session(session: ProviderSessionSpec, bus: Arc<MessageBus>) -> anyhow::Result<Self> {
-        let firm = session.creds.get("firm").expect(
-            "PXClient requires a 'firm' credential to be set in the session credentials",
-        );
-        let firm = ProjectXTenant::try_from(firm.as_str())?;
         let user_name = session.creds.get("user_name").expect(">&user_name credential to be set in the session credentials");
         let api_key = session.creds.get("api_key").expect(
             "PXClient requires a 'api_key' credential to be set in the session credentials",
         );
-        let px_credentials = PxCredential::new(firm.clone(), user_name.clone(), api_key.clone());
+        let firm = match session.provider_kind {
+            ProviderKind::ProjectX(firm) => firm,
+            _ => anyhow::bail!("PXClient requires a ProjectX provider kind"),
+        };
+        let px_credentials = PxCredential::new(firm, user_name.clone(), api_key.clone());
         let http = PxHttpClient::new(px_credentials, None, None, None, None)?;
         let base = http.inner.rtc_base();
         let token = http.inner.token_string().await;
-        let websocket = PxWebSocketClient::new(base, token, firm.clone(), bus);
-        let id = format!("ProjectX:{:?}", firm);
+        let websocket = PxWebSocketClient::new(base, token, firm, bus);
         Ok(Self {
-            firm,
-            id,
+            provider_kind: session.provider_kind,
             http: Arc::new(http),
             websocket: Arc::new(websocket),
             http_connection_state: Arc::new(RwLock::new(ConnectionState::Disconnected)),
@@ -114,8 +112,8 @@ fn parse_symbol_key(key: SymbolKey) -> anyhow::Result<String> {
 
 #[async_trait]
 impl MarketDataProvider for PXClient {
-    fn id(&self) -> &str {
-        self.id.as_str()
+    fn id(&self) -> ProviderKind {
+        self.provider_kind
     }
 
     fn supports(&self, topic: Topic) -> bool {
@@ -165,19 +163,23 @@ impl MarketDataProvider for PXClient {
             let provider = ProviderKind::ProjectX(firm);
             let instrument = Instrument::from_str(instrument).ok()?;
             Some(SymbolKey { instrument, provider })
+        }
+        let firm = match self.provider_kind {
+            ProviderKind::ProjectX(firm) => firm,
+            _ => return AHashMap::new(),
         };
 
         let ticks = {
             let g = self.websocket.active_contract_ids_ticks().await;
-            g.iter().filter_map(|s| symbol_from_contract_id(self.firm.clone(), s)).collect::<Vec<_>>()
+            g.iter().filter_map(|s| symbol_from_contract_id(firm, s)).collect::<Vec<_>>()
         };
         let quotes = {
             let g = self.websocket.active_contract_ids_quotes().await;
-            g.iter().filter_map(|s| symbol_from_contract_id(self.firm.clone(), s)).collect::<Vec<_>>()
+            g.iter().filter_map(|s| symbol_from_contract_id(firm, s)).collect::<Vec<_>>()
         };
         let depth = {
             let g = self.websocket.active_contract_ids_depth().await;
-            g.iter().filter_map(|s| symbol_from_contract_id(self.firm.clone(), s)).collect::<Vec<_>>()
+            g.iter().filter_map(|s| symbol_from_contract_id(firm, s)).collect::<Vec<_>>()
         };
 
         let mut map = AHashMap::new();
@@ -194,8 +196,8 @@ impl MarketDataProvider for PXClient {
 
 #[async_trait]
 impl ExecutionProvider for PXClient {
-    fn id(&self) -> &str {
-        self.id.as_str()
+    fn id(&self) -> ProviderKind {
+        self.provider_kind
     }
 
     async fn connect(&self, session: ProviderSessionSpec) -> anyhow::Result<()> {

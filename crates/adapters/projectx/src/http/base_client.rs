@@ -14,7 +14,6 @@ pub(crate) struct SimpleResponse {
 
 pub struct SimpleHttp {
     client: reqwest::Client,
-    default_headers: HeaderMap,
     rate_limiter: RateLimiter<Ustr>,
 }
 
@@ -35,7 +34,7 @@ impl SimpleHttp {
             builder = builder.timeout(Duration::from_secs(secs));
         }
         let client = builder.build().expect("failed to build reqwest client");
-        Self { client, default_headers: headers, rate_limiter }
+        Self { client, rate_limiter }
     }
 
     async fn take_slots(&self, keys: &[Ustr]) {

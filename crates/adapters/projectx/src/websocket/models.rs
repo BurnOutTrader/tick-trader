@@ -127,6 +127,7 @@ pub struct GatewayQuote {
     pub timestamp: String,
 }
 
+#[allow(dead_code)]
 /// Market depth/DOM payload
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

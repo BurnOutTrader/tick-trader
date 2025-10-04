@@ -8,6 +8,7 @@ use tokio_tungstenite::tungstenite;
 pub struct WebSocketConfig {
     pub url: String,
     pub headers: Vec<(String, String)>,
+    #[allow(dead_code)]
     pub heartbeat: Option<u64>,
     pub heartbeat_msg: Option<String>,
     pub ping_handler: Option<()>,

@@ -10,7 +10,8 @@ use rust_decimal::Decimal;
 use rust_decimal::prelude::FromPrimitive;
 use tokio::sync::RwLock;
 use tt_types::accounts::account::{AccountName, AccountSnapShot};
-use tt_types::providers::ProjectXTenant;
+use tt_types::keys::ProviderId;
+use tt_types::providers::{ProjectXTenant, ProviderKind};
 use tt_types::securities::futures_helpers::extract_root;
 use tt_types::securities::security::FuturesContract;
 use tt_types::securities::symbols::{get_symbol_info, Instrument, SecurityType};
@@ -113,12 +114,12 @@ impl PxHttpClient {
     }
     
     pub async fn auto_update(&self) -> anyhow::Result<()> {
-        crate::http::client::PxHttpClient::auto_update_instruments(self.inner.clone(), self.instruments.clone()).await?;
+        crate::http::client::PxHttpClient::auto_update_instruments(self.inner.clone(), self.instruments.clone(),ProviderKind::ProjectX(self.firm)).await?;
         crate::http::client::PxHttpClient::auto_update_account_ids(self.inner.clone(), self.internal_accounts.clone()).await?;
         Ok(())
     }
 
-    pub async fn auto_update_instruments(inner: Arc<PxHttpInnerClient>, instruments: Arc<RwLock<AHashMap<Instrument, FuturesContract>>>) -> anyhow::Result<()> {
+    pub async fn auto_update_instruments(inner: Arc<PxHttpInnerClient>, instruments: Arc<RwLock<AHashMap<Instrument, FuturesContract>>>, id: ProviderKind) -> anyhow::Result<()> {
         info!("ProjectX Auto Updating instruments");
         let resp: ContractSearchResponse = inner
             .list_all_contracts(true)
@@ -147,7 +148,7 @@ impl PxHttpClient {
                     continue
                 },
             };
-            let mut s = match FuturesContract::from_root_with_default_models(&instrument, symbol_info.exchange, SecurityType::Future, inst.id.clone()) {
+            let mut s = match FuturesContract::from_root_with_default_models(&instrument, symbol_info.exchange, SecurityType::Future, inst.id.clone(), id) {
                 None => continue,
                 Some(s) => s
             };
@@ -190,7 +191,7 @@ impl PxHttpClient {
                     continue
                 },
             };
-            let mut s = match FuturesContract::from_root_with_default_models(&instrument, symbol_info.exchange, SecurityType::Future, inst.id.clone()) {
+            let mut s = match FuturesContract::from_root_with_default_models(&instrument, symbol_info.exchange, SecurityType::Future, inst.id.clone(), ProviderKind::ProjectX(self.firm.clone())) {
                 None => continue,
                 Some(s) => s
             };

@@ -13,6 +13,7 @@ pub struct FuturesContract {
     pub security_type: SecurityType,
     pub exchange: Exchange,
     /// Provider ID for this instrument, this is the id used to place orders on the exchange.
+    pub provider_contract_name: String,
     pub provider_id: ProviderKind,
     /// Trading calendar for this instrument
     pub hours: MarketHours,
@@ -35,7 +36,7 @@ pub struct FuturesContract {
 }
 
 impl FuturesContract {
-    pub fn from_root_with_default_models(instrument: &Instrument, exchange: Exchange, security_type: SecurityType, provider_id: ProviderKind) -> Option<Self> {
+    pub fn from_root_with_default_models(instrument: &Instrument, exchange: Exchange, security_type: SecurityType, provider_contract_name: String, provider_id: ProviderKind) -> Option<Self> {
         let root = extract_root(instrument);
         let market_hours = hours_for_exchange(exchange);
         let is_continuous = root == instrument.to_string();
@@ -53,6 +54,7 @@ impl FuturesContract {
 
         Some(Self {
             root,
+            provider_contract_name,
             provider_id,
             instrument: instrument.clone(),
             security_type,

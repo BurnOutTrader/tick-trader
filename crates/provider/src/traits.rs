@@ -17,10 +17,22 @@ pub enum ConnectionState {
 #[derive(Debug, Clone)]
 pub struct ProviderSessionSpec {
     // Opaque to bus/engine; provider-specific
+    pub provider_kind: ProviderKind,
     pub creds: HashMap<String, String>,
     pub endpoints: Vec<String>,
     pub env: Option<String>,
     pub rate_limits: HashMap<String, String>,
+}
+impl Default for ProviderSessionSpec {
+    fn default() -> Self {
+        Self {
+            provider_kind: ProviderKind::ProjectX(tt_types::providers::ProjectXTenant::Demo),
+            creds: HashMap::new(),
+            endpoints: vec![],
+            env: None,
+            rate_limits: HashMap::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
