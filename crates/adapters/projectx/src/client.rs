@@ -204,7 +204,9 @@ impl ExecutionProvider for PXClient {
     }
 
     async fn disconnect(&self, reason: DisconnectReason) {
-        todo!()
+        self.websocket.kill().await;
+        self.http.kill();
+        log::info!("Disconnected from ProjectX: {:?}", reason);
     }
 
     async fn connection_state(&self) -> ConnectionState {
