@@ -2268,6 +2268,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "tt-bus",
+ "tt-provider",
  "tt-types",
 ]
 
