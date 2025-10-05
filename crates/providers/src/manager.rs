@@ -68,7 +68,7 @@ impl ProviderManager {
                 }
                 // Build workers (shards) that share the same underlying MD provider
                 for shard in 0..self.shards {
-                    let w = Arc::new(crate::worker::InprocessWorker::new(md.clone()));
+                    let w = Arc::new(crate::worker::InprocessWorker::new(md.clone(), self.bus.clone()));
                     self.workers.insert((kind, shard), w);
                 }
                 self.md.insert(kind, md.clone());

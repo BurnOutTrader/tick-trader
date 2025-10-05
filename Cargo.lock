@@ -2731,6 +2731,7 @@ dependencies = [
  "tracing",
  "tt-bus",
  "tt-provider",
+ "tt-shm",
  "tt-types",
 ]
 
@@ -2775,6 +2776,13 @@ dependencies = [
  "tt-types",
  "ustr",
  "zeroize",
+]
+
+[[package]]
+name = "tt-shm"
+version = "0.1.0"
+dependencies = [
+ "tt-types",
 ]
 
 [[package]]

@@ -14,11 +14,12 @@ pub trait ProviderWorker: Send + Sync {
 pub struct InprocessWorker {
     md: Arc<dyn MarketDataProvider>,
     interest: DashMap<(Topic, SymbolKey), usize>,
+    router: std::sync::Arc<tt_bus::Router>,
 }
 
 impl InprocessWorker {
-    pub fn new(md: Arc<dyn MarketDataProvider>) -> Self {
-        Self { md, interest: DashMap::new() }
+    pub fn new(md: Arc<dyn MarketDataProvider>, router: std::sync::Arc<tt_bus::Router>) -> Self {
+        Self { md, interest: DashMap::new(), router }
     }
 }
 
@@ -27,7 +28,14 @@ impl ProviderWorker for InprocessWorker {
     async fn subscribe_md(&self, topic: Topic, key: &SymbolKey) -> Result<()> {
         let mut e = self.interest.entry((topic, key.clone())).or_insert(0);
         if *e == 0 {
+            // On first local subscriber, ensure upstream and announce SHM for hot snapshots
             self.md.subscribe_md(topic, key).await?;
+            if matches!(topic, Topic::Quotes | Topic::Depth) {
+                let name = tt_shm::suggest_name(topic, key);
+                let size = if matches!(topic, Topic::Depth) { tt_shm::DEFAULT_DEPTH_SNAPSHOT_SIZE } else { tt_shm::DEFAULT_QUOTE_SNAPSHOT_SIZE };
+                let ann = tt_types::wire::AnnounceShm { topic, key: key.clone(), name, layout_ver: 1, size };
+                let _ = self.router.announce_shm_for_key(ann).await;
+            }
         }
         *e += 1;
         Ok(())

@@ -6,7 +6,8 @@ members = [
     "crates/tt-types",
     "crates/adapters/projectx",
     "crates/server",
-    "crates/providers"
+    "crates/providers",
+    "crates/shm"
 ]
 resolver = "2"
 

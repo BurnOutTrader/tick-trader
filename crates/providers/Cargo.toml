@@ -14,3 +14,4 @@ provider = { path = "../provider", package = "tt-provider" }
 tt-types = { path = "../tt-types" }
 tt-bus = { path = "../bus", features = ["server"] }
 adapters-projectx = { package = "projectx", path = "../adapters/projectx" }
+tt-shm = { path = "../shm" }

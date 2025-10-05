@@ -170,8 +170,8 @@ let _ = req_tx.send(Request::SubscribeKey(SubscribeKey { topic: Topic::Depth, ke
 
 ## Current limitations and planned work
 
-- SHM data plane for Depth/Quotes: to be introduced for even lower latency and CPU overhead with AnnounceShm messages.
-- Full out-of-process ProviderWorker processes: protocol exists in outline; current workers are in-process.
+- SHM data plane for Depth/Quotes: AnnounceShm path implemented and cached in the Router; providers announce SHM on first subscribe for Quotes/Depth using tt-shm helpers. Next step: implement actual shared memory segments and seqlock snapshots with writers in workers and zero-copy readers in clients.
+- Full out-of-process ProviderWorker processes: Scaffolding added (providers::ipc) with a minimal command protocol; current workers are in-process. Next step: spawn/process management and UDS/TCP transport.
 - Remove legacy Request variants once all clients use key-based messages.
 
 
