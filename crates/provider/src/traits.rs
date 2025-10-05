@@ -4,7 +4,7 @@ use std::time::Instant;
 use std::sync::Arc;
 use ahash::AHashMap;
 use tt_types::keys::{AccountKey, SymbolKey, Topic};
-use tt_types::providers::ProviderKind;
+use tt_types::providers::{ProviderKind, ProjectXTenant, RithmicSystem};
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum ConnectionState {
@@ -17,20 +17,96 @@ pub enum ConnectionState {
 #[derive(Debug, Clone)]
 pub struct ProviderSessionSpec {
     // Opaque to bus/engine; provider-specific
-    pub provider_kind: ProviderKind,
-    pub creds: HashMap<String, String>,
-    pub endpoints: Vec<String>,
-    pub env: Option<String>,
-    pub rate_limits: HashMap<String, String>,
+    pub user_names: HashMap<ProviderKind, String>,
+    pub passwords: HashMap<ProviderKind, String>,
+    pub api_keys: HashMap<ProviderKind, String>,
+    pub other: HashMap<(ProviderKind, String), String>,
 }
-impl Default for ProviderSessionSpec {
-    fn default() -> Self {
+impl ProviderSessionSpec {
+    pub fn from_env() -> Self {
+        let mut user_names: HashMap<ProviderKind, String> = HashMap::new();
+        let mut passwords: HashMap<ProviderKind, String> = HashMap::new();
+        let mut api_keys: HashMap<ProviderKind, String> = HashMap::new();
+        let mut other: HashMap<(ProviderKind, String), String> = HashMap::new();
+
+        // Iterate all environment variables and extract credentials for PX_* and RITHMIC_* patterns.
+        for (key, value) in std::env::vars() {
+            // Normalize helper: collapse to uppercase and remove surrounding whitespace.
+            let key_trim = key.trim().to_string();
+            if let Some(rest) = key_trim.strip_prefix("PX_") {
+                // Expect: PX_{TENANT}_{CRED}
+                // Split only into 2 parts after the prefix to allow underscores in CRED.
+                let mut parts = rest.splitn(2, '_');
+                let tenant_str = match parts.next() {
+                    Some(s) if !s.is_empty() => s,
+                    _ => continue,
+                };
+                let cred_key_raw = match parts.next() {
+                    Some(s) if !s.is_empty() => s,
+                    _ => continue,
+                };
+
+                let tenant = ProjectXTenant::from_env_string(tenant_str);
+                let kind = ProviderKind::ProjectX(tenant);
+
+                // Normalize credential key: uppercase and remove non-alphanum underscores normalization
+                let norm = cred_key_raw
+                    .to_ascii_uppercase()
+                    .replace('-', "_");
+                let norm = norm.as_str();
+
+                match norm {
+                    // common variants
+                    "USERNAME" => { user_names.insert(kind, value); }
+                    "APIKEY" | "API_KEY" => { api_keys.insert(kind, value); }
+                    "PASSWORD" => { passwords.insert(kind, value); }
+                    // PX specific optional
+                    "FIRM" => { other.insert((kind, "FIRM".to_string()), value); }
+                    // anything else goes to other
+                    other_key => { other.insert((kind, other_key.to_string()), value); }
+                }
+            } else if let Some(rest) = key_trim.strip_prefix("RITHMIC_") {
+                // Expect: RITHMIC_{SYSTEM}_{CRED}
+                let mut parts = rest.splitn(2, '_');
+                let system_str = match parts.next() {
+                    Some(s) if !s.is_empty() => s,
+                    _ => continue,
+                };
+                let cred_key_raw = match parts.next() {
+                    Some(s) if !s.is_empty() => s,
+                    _ => continue,
+                };
+
+                // Try to decode using provided helper; skip if unknown system.
+                if let Some(system) = RithmicSystem::from_env_string(system_str) {
+                    let kind = ProviderKind::Rithmic(system);
+                    let norm = cred_key_raw
+                        .to_ascii_uppercase()
+                        .replace('-', "_");
+                    let norm = norm.as_str();
+
+                    match norm {
+                        "USERNAME" => { user_names.insert(kind, value); }
+                        "APIKEY" | "API_KEY" => { api_keys.insert(kind, value); }
+                        "PASSWORD" => { passwords.insert(kind, value); }
+                        // Rithmic specific extras go into 'other'
+                        "FCM_ID" | "IB_ID" | "USER_TYPE" => {
+                            other.insert((kind, norm.to_string()), value);
+                        }
+                        other_key => { other.insert((kind, other_key.to_string()), value); }
+                    }
+                } else {
+                    // Unknown system; ignore this env var.
+                    continue;
+                }
+            }
+        }
+
         Self {
-            provider_kind: ProviderKind::ProjectX(tt_types::providers::ProjectXTenant::Demo),
-            creds: HashMap::new(),
-            endpoints: vec![],
-            env: None,
-            rate_limits: HashMap::new(),
+            user_names,
+            passwords,
+            api_keys,
+            other,
         }
     }
 }
@@ -73,7 +149,7 @@ pub trait MarketDataProvider: Send + Sync {
     fn supports(&self, topic: Topic) -> bool;
 
     // Lifecycle
-    async fn connect_to_market(&self, session: ProviderSessionSpec) -> anyhow::Result<()>;
+    async fn connect_to_market(&self, kind: ProviderKind, session: ProviderSessionSpec) -> anyhow::Result<()>;
     async fn disconnect(&self, reason: DisconnectReason);
     async fn connection_state(&self) -> ConnectionState;
 
@@ -82,7 +158,6 @@ pub trait MarketDataProvider: Send + Sync {
         &self,
         topic: Topic,
         key: &SymbolKey,
-        params: Option<&ProviderParams>,
     ) -> anyhow::Result<()>;
     async fn unsubscribe_md(&self, topic: Topic, key: &SymbolKey) -> anyhow::Result<()>;
     async fn active_md_subscriptions(&self) -> AHashMap<Topic, Vec<SymbolKey>>;
@@ -97,7 +172,7 @@ pub trait MarketDataProvider: Send + Sync {
 pub trait ExecutionProvider: Send + Sync {
     // Identity & lifecycle
     fn id(&self) -> ProviderKind;
-    async fn connect_to_broker(&self, session: ProviderSessionSpec) -> anyhow::Result<()>;
+    async fn connect_to_broker(&self, kind: ProviderKind, session: ProviderSessionSpec) -> anyhow::Result<()>;
     async fn disconnect(&self, reason: DisconnectReason);
     async fn connection_state(&self) -> ConnectionState;
 

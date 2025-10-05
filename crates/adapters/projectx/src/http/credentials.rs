@@ -24,17 +24,6 @@ impl PxCredential {
             api_key: api_key.into(),
         }
     }
-
-    /// Load credentials from the process environment
-    ///
-    /// Expected variables: PX_FIRM, PX_USERNAME, PX_API_KEY.
-    pub fn from_env() -> anyhow::Result<Self> {
-        Ok(Self {
-            firm: ProjectXTenant::from(std::env::var("PX_FIRM")?.as_str()),
-            user_name: std::env::var("PX_USERNAME")?,
-            api_key: std::env::var("PX_API_KEY")?.into(),
-        })
-    }
 }
 
 impl Debug for PxCredential {

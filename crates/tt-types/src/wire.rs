@@ -173,7 +173,6 @@ pub enum Envelope {
     InstrumentsRequest(InstrumentsRequest),
     InstrumentsResponse(InstrumentsResponse),
     InstrumentsMapResponse(InstrumentsMapResponse),
-    AuthCredentials(AuthCredentials),
     // Data (batches first)
     TickBatch(TickBatch),
     QuoteBatch(QuoteBatch),

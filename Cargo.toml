@@ -16,6 +16,7 @@ anyhow = "1.0.100"
 ahash = "0.8.12"
 async-stream = "0.3.6"
 async-trait = "0.1.89"
+dotenvy = "0.15.7"
 chrono = { version = "0.4.42", features = ["clock", "std", "serde",] }
 chrono-tz = "0.10.4"
 bytes = "1.10.1"

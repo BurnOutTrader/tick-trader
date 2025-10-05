@@ -28,12 +28,12 @@ impl PXClient {
         self.http.instruments_snapshot().await
     }
     #[allow(dead_code)]
-    pub async fn new_from_session(session: ProviderSessionSpec, bus: Arc<MessageBus>) -> anyhow::Result<Self> {
-        let user_name = session.creds.get("user_name").expect(">&user_name credential to be set in the session credentials");
-        let api_key = session.creds.get("api_key").expect(
+    pub async fn new_from_session(kind: ProviderKind, session: ProviderSessionSpec, bus: Arc<MessageBus>) -> anyhow::Result<Self> {
+        let user_name = session.user_names.get(&kind).expect(">&user_name credential to be set in the session credentials");
+        let api_key = session.api_keys.get(&kind).expect(
             "PXClient requires a 'api_key' credential to be set in the session credentials",
         );
-        let firm = match session.provider_kind {
+        let firm = match kind {
             ProviderKind::ProjectX(firm) => firm,
             _ => anyhow::bail!("PXClient requires a ProjectX provider kind"),
         };
@@ -43,7 +43,7 @@ impl PXClient {
         let token = http.inner.token_string().await;
         let websocket = PxWebSocketClient::new(base, token, firm, bus);
         Ok(Self {
-            provider_kind: session.provider_kind,
+            provider_kind: kind,
             http: Arc::new(http),
             websocket: Arc::new(websocket),
             http_connection_state: Arc::new(RwLock::new(ConnectionState::Disconnected)),
@@ -123,7 +123,7 @@ impl MarketDataProvider for PXClient {
         }
     }
 
-    async fn connect_to_market(&self, _session: ProviderSessionSpec) -> anyhow::Result<()> {
+    async fn connect_to_market(&self, kind: ProviderKind, _session: ProviderSessionSpec) -> anyhow::Result<()> {
         self.connect_all().await
     }
 
@@ -136,7 +136,7 @@ impl MarketDataProvider for PXClient {
         self.state().await
     }
 
-    async fn subscribe_md(&self, topic: Topic, key: &SymbolKey, params: Option<&ProviderParams>) -> anyhow::Result<()> {
+    async fn subscribe_md(&self, topic: Topic, key: &SymbolKey) -> anyhow::Result<()> {
         let instrument = parse_symbol_key(key.clone())?;
         match topic {
             Topic::Ticks => self.websocket.subscribe_contract_ticks(instrument.as_str()).await,
@@ -200,7 +200,7 @@ impl ExecutionProvider for PXClient {
         self.provider_kind
     }
 
-    async fn connect_to_broker(&self, session: ProviderSessionSpec) -> anyhow::Result<()> {
+    async fn connect_to_broker(&self, kind: ProviderKind, session: ProviderSessionSpec) -> anyhow::Result<()> {
         self.connect_all().await
     }
 

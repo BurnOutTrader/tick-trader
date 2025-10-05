@@ -2666,18 +2666,14 @@ dependencies = [
  "ahash 0.8.12",
  "anyhow",
  "async-trait",
- "bytes",
  "criterion",
  "dashmap",
- "futures-util",
  "hdrhistogram",
- "libc",
  "rand 0.8.5",
  "tempfile",
  "tokio",
  "tokio-util",
  "tracing-subscriber",
- "tt-provider",
  "tt-types",
 ]
 
