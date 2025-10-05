@@ -193,6 +193,66 @@ pub struct AnnounceShm {
     pub size: u64,
 }
 
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OrderTypeWire {
+    Market,
+    Limit,
+    Stop,
+    StopLimit,
+    TrailingStop,
+    JoinBid,
+    JoinAsk,
+}
+
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq)]
+pub struct BracketWire {
+    pub ticks: i32,
+    pub r#type: OrderTypeWire,
+}
+
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq)]
+pub struct PlaceOrder {
+    pub account_id: i64,
+    pub key: SymbolKey,
+    pub side: crate::accounts::events::Side,
+    pub qty: i64,
+    pub r#type: OrderTypeWire,
+    pub limit_price: Option<f64>,
+    pub stop_price: Option<f64>,
+    pub trail_price: Option<f64>,
+    pub custom_tag: Option<String>,
+    pub stop_loss: Option<BracketWire>,
+    pub take_profit: Option<BracketWire>,
+}
+
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq)]
+pub struct CancelOrder {
+    pub account_id: i64,
+    pub provider_order_id: Option<String>,
+    pub client_order_id: Option<crate::accounts::events::ClientOrderId>,
+}
+
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq)]
+pub struct ReplaceOrder {
+    pub account_id: i64,
+    pub provider_order_id: Option<String>,
+    pub client_order_id: Option<crate::accounts::events::ClientOrderId>,
+    pub new_qty: Option<i64>,
+    pub new_limit_price: Option<f64>,
+    pub new_stop_price: Option<f64>,
+    pub new_trail_price: Option<f64>,
+}
+
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq)]
+pub struct SubscribeAccount {
+    pub key: crate::keys::AccountKey,
+}
+
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq)]
+pub struct UnsubscribeAccount {
+    pub key: crate::keys::AccountKey,
+}
+
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq)]
 pub enum Request {
     // Control from clients to server (coarse)
@@ -200,11 +260,18 @@ pub enum Request {
     // New key-based control
     SubscribeKey(SubscribeKey),
     UnsubscribeKey(UnsubscribeKey),
+    // Account-level execution streams control
+    SubscribeAccount(SubscribeAccount),
+    UnsubscribeAccount(UnsubscribeAccount),
     Ping(Ping),
     UnsubscribeAll(UnsubscribeAll),
     // Client-initiated disconnect (request to be kicked)
     Kick(Kick),
     InstrumentsRequest(InstrumentsRequest),
+    // Execution
+    PlaceOrder(PlaceOrder),
+    CancelOrder(CancelOrder),
+    ReplaceOrder(ReplaceOrder),
 }
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq)]

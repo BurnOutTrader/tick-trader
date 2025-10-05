@@ -338,11 +338,115 @@ impl EngineRuntime {
             .bus
             .handle_request(
                 &self.sub_id.as_ref().expect("engine started"),
-                Request::UnsubscribeKey(tt_types::wire::UnsubscribeKey { topic, key }),
+                tt_types::wire::Request::UnsubscribeKey(tt_types::wire::UnsubscribeKey { topic, key }),
             )
             .await?;
         Ok(())
     }
+
+    // Convenience: subscribe/unsubscribe by key without exposing sender
+    pub async fn subscribe_key(&self, topic: Topic, key: SymbolKey) -> anyhow::Result<()> {
+        let _ = self
+            .bus
+            .handle_request(
+                &self.sub_id.as_ref().expect("engine started"),
+                tt_types::wire::Request::SubscribeKey(tt_types::wire::SubscribeKey {
+                    topic,
+                    key,
+                    latest_only: false,
+                    from_seq: 0,
+                }),
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn unsubscribe_key(&self, topic: Topic, key: SymbolKey) -> anyhow::Result<()> {
+        self.unsubscribe_symbol(topic, key).await
+    }
+
+    // Orders API helpers
+    pub async fn place_order(&self, spec: tt_types::wire::PlaceOrder) -> anyhow::Result<()> {
+        let _ = self
+            .bus
+            .handle_request(
+                &self.sub_id.as_ref().expect("engine started"),
+                tt_types::wire::Request::PlaceOrder(spec),
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn cancel_order(&self, spec: tt_types::wire::CancelOrder) -> anyhow::Result<()> {
+        let _ = self
+            .bus
+            .handle_request(
+                &self.sub_id.as_ref().expect("engine started"),
+                tt_types::wire::Request::CancelOrder(spec),
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn replace_order(&self, spec: tt_types::wire::ReplaceOrder) -> anyhow::Result<()> {
+        let _ = self
+            .bus
+            .handle_request(
+                &self.sub_id.as_ref().expect("engine started"),
+                tt_types::wire::Request::ReplaceOrder(spec),
+            )
+            .await?;
+        Ok(())
+    }
+
+    // Account interest: auto-subscribe all execution streams for an account
+    pub async fn activate_account_interest(&self, key: tt_types::keys::AccountKey) -> anyhow::Result<()> {
+        let _ = self
+            .bus
+            .handle_request(
+                &self.sub_id.as_ref().expect("engine started"),
+                tt_types::wire::Request::SubscribeAccount(tt_types::wire::SubscribeAccount { key }),
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn deactivate_account_interest(&self, key: tt_types::keys::AccountKey) -> anyhow::Result<()> {
+        let _ = self
+            .bus
+            .handle_request(
+                &self.sub_id.as_ref().expect("engine started"),
+                tt_types::wire::Request::UnsubscribeAccount(tt_types::wire::UnsubscribeAccount { key }),
+            )
+            .await?;
+        Ok(())
+    }
+
+    // Portfolio helpers
+    pub async fn last_orders(&self) -> Option<tt_types::wire::OrdersBatch> {
+        let st = self.state.lock().await;
+        st.last_orders.clone()
+    }
+    pub async fn last_positions(&self) -> Option<tt_types::wire::PositionsBatch> {
+        let st = self.state.lock().await;
+        st.last_positions.clone()
+    }
+    pub async fn last_accounts(&self) -> Option<tt_types::wire::AccountDeltaBatch> {
+        let st = self.state.lock().await;
+        st.last_accounts.clone()
+    }
+    pub async fn find_position_delta(&self, instrument: &tt_types::securities::symbols::Instrument) -> Option<tt_types::accounts::events::PositionDelta> {
+        let st = self.state.lock().await;
+        st.last_positions.as_ref().and_then(|pb| pb.positions.iter().find(|p| &p.instrument == instrument).cloned())
+    }
+    pub async fn orders_for_instrument(&self, instrument: &tt_types::securities::symbols::Instrument) -> Vec<tt_types::accounts::events::OrderUpdate> {
+        let st = self.state.lock().await;
+        st.last_orders
+            .as_ref()
+            .map(|ob| ob.orders.iter().filter(|o| &o.instrument == instrument).cloned().collect())
+            .unwrap_or_default()
+    }
+
     pub fn new(bus: Arc<ClientMessageBus>) -> Self {
         Self {
             bus,

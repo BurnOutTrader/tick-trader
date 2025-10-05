@@ -43,6 +43,94 @@ impl UpstreamManager for ProviderManager {
         let _ = self.ensure_pair(kind).await?; // ensure present to have a worker map; returns immediately if already exists
         self.unsubscribe_md(topic, key).await
     }
+
+    async fn subscribe_account(&self, key: tt_types::keys::AccountKey) -> Result<()> {
+        let kind = key.provider;
+        self.ensure_pair(kind).await?;
+        let ex = self
+            .ex
+            .get(&kind)
+            .map(|e| e.value().clone())
+            .ok_or_else(|| anyhow::anyhow!("execution provider missing"))?;
+        // Subscribe all relevant execution streams for this account
+        ex.subscribe_account_events(&key).await?;
+        ex.subscribe_positions(&key).await?;
+        ex.subscribe_order_updates(&key).await?;
+        Ok(())
+    }
+
+    async fn unsubscribe_account(&self, key: tt_types::keys::AccountKey) -> Result<()> {
+        let kind = key.provider;
+        self.ensure_pair(kind).await?;
+        let ex = self
+            .ex
+            .get(&kind)
+            .map(|e| e.value().clone())
+            .ok_or_else(|| anyhow::anyhow!("execution provider missing"))?;
+        // Unsubscribe all relevant streams
+        let _ = ex.unsubscribe_order_updates(&key).await; // best-effort
+        let _ = ex.unsubscribe_positions(&key).await;
+        let _ = ex.unsubscribe_account_events(&key).await;
+        Ok(())
+    }
+
+    async fn place_order(&self, spec: tt_types::wire::PlaceOrder) -> Result<()> {
+        // Ensure execution provider for this key's provider kind
+        let kind = spec.key.provider;
+        self.ensure_pair(kind).await?;
+        let ex = self
+            .ex
+            .get(&kind)
+            .map(|e| e.value().clone())
+            .ok_or_else(|| anyhow::anyhow!("execution provider missing"))?;
+        let _ack = ex.place_order(spec).await;
+        Ok(())
+    }
+
+    async fn cancel_order(&self, spec: tt_types::wire::CancelOrder) -> Result<()> {
+        let kind = if let Some(p) = self.ex.iter().next().map(|e| *e.key()) {
+            p
+        } else {
+            return Err(anyhow::anyhow!("no providers"));
+        };
+        self.ensure_pair(kind).await?;
+        let ex = self
+            .ex
+            .get(&kind)
+            .map(|e| e.value().clone())
+            .ok_or_else(|| anyhow::anyhow!("execution provider missing"))?;
+        let _ = ex.cancel_order(spec).await;
+        Ok(())
+    }
+
+    async fn replace_order(&self, spec: tt_types::wire::ReplaceOrder) -> Result<()> {
+        let kind = if let Some(p) = self.ex.iter().next().map(|e| *e.key()) {
+            p
+        } else {
+            return Err(anyhow::anyhow!("no providers"));
+        };
+        self.ensure_pair(kind).await?;
+        let ex = self
+            .ex
+            .get(&kind)
+            .map(|e| e.value().clone())
+            .ok_or_else(|| anyhow::anyhow!("execution provider missing"))?;
+        let _ = ex.replace_order(spec).await;
+        Ok(())
+    }
+}
+
+#[allow(dead_code)]
+fn type_i_from(t: tt_types::wire::OrderTypeWire) -> i32 {
+    match t {
+        tt_types::wire::OrderTypeWire::Limit => 1,
+        tt_types::wire::OrderTypeWire::Market => 2,
+        tt_types::wire::OrderTypeWire::Stop => 4,
+        tt_types::wire::OrderTypeWire::TrailingStop => 5,
+        tt_types::wire::OrderTypeWire::JoinBid => 6,
+        tt_types::wire::OrderTypeWire::JoinAsk => 7,
+        tt_types::wire::OrderTypeWire::StopLimit => 4,
+    }
 }
 
 impl ProviderManager {

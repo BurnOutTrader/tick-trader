@@ -209,10 +209,10 @@ pub trait ExecutionProvider: Send + Sync {
     async fn subscribe_order_updates(&self, account_key: &AccountKey) -> anyhow::Result<()>;
     async fn unsubscribe_order_updates(&self, account_key: &AccountKey) -> anyhow::Result<()>;
 
-    // Order API
-    async fn place(&self, order_cmd: HashMap<String, String>) -> CommandAck;
-    async fn cancel(&self, order_id: String) -> CommandAck;
-    async fn replace(&self, order_replace_cmd: HashMap<String, String>) -> CommandAck;
+    // Order API (typed)
+    async fn place_order(&self, spec: tt_types::wire::PlaceOrder) -> CommandAck;
+    async fn cancel_order(&self, spec: tt_types::wire::CancelOrder) -> CommandAck;
+    async fn replace_order(&self, spec: tt_types::wire::ReplaceOrder) -> CommandAck;
     async fn auto_update(&self) -> anyhow::Result<()>;
 }
 

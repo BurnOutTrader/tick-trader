@@ -8,7 +8,6 @@ use provider::traits::{
     CommandAck, ConnectionState, DisconnectReason, ExecutionProvider, MarketDataProvider,
     ProviderSessionSpec,
 };
-use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -348,16 +347,131 @@ impl ExecutionProvider for PXClient {
         self.websocket.unsubscribe_account_orders(id).await
     }
 
-    async fn place(&self, _order_cmd: HashMap<String, String>) -> CommandAck {
-        todo!()
+    async fn place_order(&self, spec: tt_types::wire::PlaceOrder) -> CommandAck {
+        use crate::http::models::{BracketCfg, PlaceOrderReq};
+        // Map typed spec to ProjectX PlaceOrderReq
+        let type_i = match spec.r#type {
+            tt_types::wire::OrderTypeWire::Limit => 1,
+            tt_types::wire::OrderTypeWire::Market => 2,
+            tt_types::wire::OrderTypeWire::Stop => 4,
+            tt_types::wire::OrderTypeWire::TrailingStop => 5,
+            tt_types::wire::OrderTypeWire::JoinBid => 6,
+            tt_types::wire::OrderTypeWire::JoinAsk => 7,
+            tt_types::wire::OrderTypeWire::StopLimit => 4, // PX uses Stop with limit/stop provided
+        };
+        let side_i = match spec.side {
+            tt_types::accounts::events::Side::Buy => 0,
+            tt_types::accounts::events::Side::Sell => 1,
+        };
+        fn map_type(t: tt_types::wire::OrderTypeWire) -> i32 {
+            match t {
+                tt_types::wire::OrderTypeWire::Limit => 1,
+                tt_types::wire::OrderTypeWire::Market => 2,
+                tt_types::wire::OrderTypeWire::Stop => 4,
+                tt_types::wire::OrderTypeWire::TrailingStop => 5,
+                tt_types::wire::OrderTypeWire::JoinBid => 6,
+                tt_types::wire::OrderTypeWire::JoinAsk => 7,
+                tt_types::wire::OrderTypeWire::StopLimit => 4,
+            }
+        }
+        let stop_loss_bracket = spec.stop_loss.map(|b| BracketCfg {
+            ticks: b.ticks,
+            type_: map_type(b.r#type),
+        });
+        let take_profit_bracket = spec.take_profit.map(|b| BracketCfg {
+            ticks: b.ticks,
+            type_: map_type(b.r#type),
+        });
+        let req = PlaceOrderReq {
+            account_id: spec.account_id,
+            contract_id: spec.key.instrument.to_string(),
+            type_: type_i,
+            side: side_i,
+            size: spec.qty,
+            limit_price: spec.limit_price,
+            stop_price: spec.stop_price,
+            trail_price: spec.trail_price,
+            custom_tag: spec.custom_tag,
+            stop_loss_bracket,
+            take_profit_bracket,
+        };
+        let res = self.http.inner.place_order(&req).await;
+        match res {
+            Ok(r) => CommandAck {
+                ok: r.success,
+                message: r.error_message,
+            },
+            Err(e) => CommandAck {
+                ok: false,
+                message: Some(format!("place_order error: {}", e)),
+            },
+        }
     }
 
-    async fn cancel(&self, _order_id: String) -> CommandAck {
-        todo!()
+    async fn cancel_order(&self, spec: tt_types::wire::CancelOrder) -> CommandAck {
+        // Requires provider_order_id to be present for PX
+        let Some(poid) = spec.provider_order_id else {
+            return CommandAck {
+                ok: false,
+                message: Some("provider_order_id required for cancel on ProjectX".to_string()),
+            };
+        };
+        let Ok(order_id) = poid.parse::<i64>() else {
+            return CommandAck {
+                ok: false,
+                message: Some("invalid provider_order_id; expected numeric string".to_string()),
+            };
+        };
+        let res = self
+            .http
+            .inner
+            .cancel_order(spec.account_id, order_id)
+            .await;
+        match res {
+            Ok(r) => CommandAck {
+                ok: r.success,
+                message: r.error_message,
+            },
+            Err(e) => CommandAck {
+                ok: false,
+                message: Some(format!("cancel_order error: {}", e)),
+            },
+        }
     }
 
-    async fn replace(&self, _order_replace_cmd: HashMap<String, String>) -> CommandAck {
-        todo!()
+    async fn replace_order(&self, spec: tt_types::wire::ReplaceOrder) -> CommandAck {
+        use crate::http::models::ModifyOrderReq;
+        let Some(poid) = spec.provider_order_id else {
+            return CommandAck {
+                ok: false,
+                message: Some("provider_order_id required for replace on ProjectX".to_string()),
+            };
+        };
+        let Ok(order_id) = poid.parse::<i64>() else {
+            return CommandAck {
+                ok: false,
+                message: Some("invalid provider_order_id; expected numeric string".to_string()),
+            };
+        };
+        let req = ModifyOrderReq {
+            account_id: spec.account_id,
+            order_id,
+            size: spec.new_qty,
+            limit_price: spec.new_limit_price,
+            stop_price: spec.new_stop_price,
+            trail_price: spec.new_trail_price,
+        };
+        let res = self.http.inner.modify_order(&req).await;
+        match res {
+            Ok(r) => CommandAck {
+                ok: r.success,
+                message: r.error_message,
+            },
+            Err(e) => CommandAck {
+                ok: false,
+                message: Some(format!("modify_order error: {}", e)),
+            },
+        }
     }
 
     async fn auto_update(&self) -> anyhow::Result<()> {
