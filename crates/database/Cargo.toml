@@ -1,0 +1,30 @@
+[package]
+name = "tt-database"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+tt-provider = {path = "../provider"}
+async-trait = {workspace = true}
+tt-types = {path = "../types"}
+chrono = { workspace = true}
+chrono-tz = {workspace = true}
+rust_decimal = { workspace = true }
+serde = { workspace = true }
+strum_macros = {workspace = true}
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+serde_json = {workspace = true}
+once_cell = { workspace = true }
+rkyv = { workspace = true}
+futures = {workspace = true}
+tokio = { workspace = true }
+dashmap = { workspace = true }
+ahash = { workspace = true }
+duckdb = {version = "1.4.0", features = ["bundled"]}
+arrow = "56.1.0"
+parquet = "56.2.0"
+nanoid = "0.4.0"
+tempfile = "3.10.1"
+lazy_static = {workspace = true}
