@@ -3,7 +3,6 @@ pub mod api_helpers;
 pub mod base_data;
 pub mod consolidators;
 pub mod keys;
-pub mod order_models;
 pub mod providers;
 pub mod reality_models;
 pub mod rkyv_types;

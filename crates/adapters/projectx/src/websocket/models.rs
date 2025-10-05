@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use tt_types::order_models::enums::{OrderEventType, OrderType};
 
 /// DOM type for depth/DOM events
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -145,15 +144,17 @@ pub struct GatewayTrade {
     pub volume: i64,
 }
 
-pub fn map_status(status: i32) -> OrderEventType {
+use tt_types::accounts::order::OrderState;
+
+pub fn map_status(status: i32) -> OrderState {
     match status {
-        0 => OrderEventType::Initialized,
-        1 => OrderEventType::Accepted,
-        2 => OrderEventType::Filled,
-        3 => OrderEventType::Canceled,
-        4 => OrderEventType::Expired,
-        5 => OrderEventType::Rejected,
-        6 => OrderEventType::PendingUpdate,
-        _ => OrderEventType::Initialized,
+        0 => OrderState::New,
+        1 => OrderState::Acknowledged,
+        2 => OrderState::Filled,
+        3 => OrderState::Canceled,
+        4 => OrderState::Canceled, // Expired treated as Canceled in current engine model
+        5 => OrderState::Rejected,
+        6 => OrderState::Acknowledged, // PendingUpdate maps to acknowledged/working
+        _ => OrderState::New,
     }
 }
