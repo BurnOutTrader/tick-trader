@@ -7,23 +7,25 @@ use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[rkyv(remote = chrono::DateTime<chrono::Utc>)]
 pub struct DateTimeUtcDef {
-    // Store as UNIX epoch nanoseconds for compactness and precision
-    #[rkyv(getter = crate::rkyv_types::dt_to_ns)]
-    pub ts_ns: i64,
+    // Store as (secs, nanos) to avoid overflow on extreme ranges
+    #[rkyv(getter = crate::rkyv_types::dt_secs)]
+    pub secs: i64,
+    #[rkyv(getter = crate::rkyv_types::dt_nanos)]
+    pub nanos: u32,
 }
 
-pub fn dt_to_ns(dt: &chrono::DateTime<chrono::Utc>) -> i64 {
-    // Prefer nanos if available (always on Unix time range), fallback to micros
-    dt.timestamp_nanos_opt()
-        .unwrap_or_else(|| dt.timestamp_micros() * 1_000)
+pub fn dt_secs(dt: &chrono::DateTime<chrono::Utc>) -> i64 {
+    dt.timestamp()
+}
+
+pub fn dt_nanos(dt: &chrono::DateTime<chrono::Utc>) -> u32 {
+    dt.timestamp_subsec_nanos()
 }
 
 impl From<DateTimeUtcDef> for chrono::DateTime<chrono::Utc> {
     fn from(value: DateTimeUtcDef) -> Self {
-        let secs = value.ts_ns.div_euclid(1_000_000_000);
-        let nsub = value.ts_ns.rem_euclid(1_000_000_000) as u32;
         chrono::Utc
-            .timestamp_opt(secs, nsub)
+            .timestamp_opt(value.secs, value.nanos)
             .single()
             .expect("invalid ts")
     }

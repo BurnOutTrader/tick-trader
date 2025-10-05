@@ -30,9 +30,15 @@ impl ProviderWorker for InprocessWorker {
         if *e == 0 {
             // On first local subscriber, ensure upstream and announce SHM for hot snapshots
             self.md.subscribe_md(topic, key).await?;
-            if matches!(topic, Topic::Quotes | Topic::Depth) {
+            if matches!(topic, Topic::Quotes | Topic::Depth | Topic::Ticks) {
                 let name = tt_shm::suggest_name(topic, key);
-                let size = if matches!(topic, Topic::Depth) { tt_shm::DEFAULT_DEPTH_SNAPSHOT_SIZE } else { tt_shm::DEFAULT_QUOTE_SNAPSHOT_SIZE };
+                let size = if matches!(topic, Topic::Depth) {
+                    tt_shm::DEFAULT_DEPTH_SNAPSHOT_SIZE
+                } else if matches!(topic, Topic::Quotes) {
+                    tt_shm::DEFAULT_QUOTE_SNAPSHOT_SIZE
+                } else {
+                    tt_shm::DEFAULT_TICK_SNAPSHOT_SIZE
+                };
                 let ann = tt_types::wire::AnnounceShm { topic, key: key.clone(), name, layout_ver: 1, size };
                 let _ = self.router.announce_shm_for_key(ann).await;
             }

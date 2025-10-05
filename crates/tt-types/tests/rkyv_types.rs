@@ -1,6 +1,6 @@
 use chrono::{NaiveDate, Utc};
 use rust_decimal::Decimal;
-use tt_types::rkyv_types::{DateTimeUtcDef, RkyvDateTimeUtc, RkyvDecimal, dt_to_ns};
+use tt_types::rkyv_types::{DateTimeUtcDef, RkyvDateTimeUtc, RkyvDecimal};
 
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 
@@ -35,11 +35,8 @@ fn roundtrip_datetime_and_decimal() {
         .expect("access archived root");
 
     // Inspect archived representation matches our adapter logic
-    let expected_ns = dt_to_ns(&dt);
-    assert_eq!(
-        archived.dt.ts_ns, expected_ns,
-        "archived ts_ns should match dt_to_ns"
-    );
+    assert_eq!(archived.dt.secs, dt.timestamp());
+    assert_eq!(archived.dt.nanos, dt.timestamp_subsec_nanos());
 
     assert_eq!(archived.dec.mantissa, payload.dec.mantissa());
     assert_eq!(archived.dec.scale, payload.dec.scale() as u32);
@@ -81,31 +78,27 @@ fn archived_values_change_when_inputs_change() {
     let a1 = rkyv::access::<ArchivedTestPayload, rkyv::rancor::Error>(&a1_buf[..]).unwrap();
     let a2 = rkyv::access::<ArchivedTestPayload, rkyv::rancor::Error>(&a2_buf[..]).unwrap();
 
-    assert_ne!(a1.dt.ts_ns, a2.dt.ts_ns);
+    assert_ne!((a1.dt.secs, a1.dt.nanos), (a2.dt.secs, a2.dt.nanos));
     assert_ne!(a1.dec.mantissa, a2.dec.mantissa);
     assert_ne!(a1.dec.scale, a2.dec.scale);
 }
 
 #[test]
-fn datetime_def_from_ts_ns_roundtrips_negative_and_positive() {
+fn datetime_def_from_parts_roundtrips() {
     // Validate that our From<DateTimeUtcDef> reconstructs the exact instant for a set of tricky values
-    let cases: [i64; 6] = [
-        -1,                        // 1969-12-31T23:59:59.999999999Z
-        -999_999_999,              // 1969-12-31T23:59:59.000000001Z
-        -1_500_000_000,            // across -2s..-1s boundary
-        0,                         // epoch
-        1,                         // just after epoch
-        1_234_567_890_123_456_789, // a recent large value
+    let cases: &[(i64, u32)] = &[
+        (0, 0),                      // epoch
+        (0, 1),                      // just after epoch
+        (1, 0),                      // one second after epoch
+        (-1, 0),                     // one second before epoch
+        (-1, 999_999_999),           // last ns of the second before epoch
+        (1_234_567_890, 123_456_789) // a recent large value
     ];
 
-    for &ts_ns in &cases {
-        let def = DateTimeUtcDef { ts_ns };
+    for &(secs, nanos) in cases {
+        let def = DateTimeUtcDef { secs, nanos };
         let dt: chrono::DateTime<Utc> = def.into();
-        assert_eq!(
-            dt_to_ns(&dt),
-            ts_ns,
-            "reconstructed dt did not match ts_ns {}",
-            ts_ns
-        );
+        assert_eq!(dt.timestamp(), secs, "secs mismatch for case {:?}", (secs, nanos));
+        assert_eq!(dt.timestamp_subsec_nanos(), nanos, "nanos mismatch for case {:?}", (secs, nanos));
     }
 }

@@ -19,10 +19,10 @@ If you just want to try it quickly, see the Quick start section.
   - Router replies with Pong, SubscribeResponse, and fans out data Responses.
   - Kick allows server-initiated or client-initiated disconnection with full cleanup.
 
-- Data plane (implemented, in-process fanout):
-  - Hot feeds: ticks, quotes, depth/orderbook use high-priority fanout paths.
-  - Lossless streams (orders, positions, account events) are guarded: the Router tolerates transient backpressure and only disconnects a client after sustained backlog (serious slowdown) beyond an internal threshold, to avoid divergence.
-  - SHM-based plane for depth/quotes is planned but not implemented yet in this pass.
+- Data plane (implemented):
+  - Hot feeds: Ticks, Quotes, and Depth/OrderBook use high-priority fanout paths. In addition to framed rkyv, these streams have working shared-memory (SHM) snapshots per (Topic, Key) written by providers and announced to clients via AnnounceShm.
+  - Lossless streams (Orders, Positions, Account events) continue to use framed rkyv fanout. The Router tolerates transient backpressure and only disconnects a client after sustained backlog (serious slowdown) beyond an internal threshold to avoid divergence.
+  - Bars remain on framed rkyv.
 
 
 ## Key components
@@ -170,7 +170,7 @@ let _ = req_tx.send(Request::SubscribeKey(SubscribeKey { topic: Topic::Depth, ke
 
 ## Current limitations and planned work
 
-- SHM data plane for Depth/Quotes: AnnounceShm path implemented and cached in the Router; providers announce SHM on first subscribe for Quotes/Depth using tt-shm helpers. Next step: implement actual shared memory segments and seqlock snapshots with writers in workers and zero-copy readers in clients.
+- SHM data plane for Ticks/Quotes/Depth: Implemented. Providers write rkyv snapshots into SHM using a seqlock header via tt-shm and the Router announces streams with AnnounceShm (cached for late subscribers). Client-side zero-copy readers are a TODO (engine still consumes framed rkyv; sample SHM reader helpers to be added).
 - Full out-of-process ProviderWorker processes: Scaffolding added (providers::ipc) with a minimal command protocol; current workers are in-process. Next step: spawn/process management and UDS/TCP transport.
 - Remove legacy Request variants once all clients use key-based messages.
 

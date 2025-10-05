@@ -19,6 +19,7 @@ use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{error, info};
 use tt_bus::Router;
+use tt_types::keys::Topic;
 use tt_types::accounts::account::{AccountName, AccountSnapShot};
 use tt_types::accounts::events::{
     AccountDelta, ClientOrderId, OrderUpdate, PositionDelta, ProviderOrderId,
@@ -579,7 +580,7 @@ impl PxWebSocketClient {
                                             .unwrap_or_else(|_| Utc::now());
                                             let bbo = tt_types::base_data::Bbo {
                                                 symbol,
-                                                instrument,
+                                                instrument: instrument.clone(),
                                                 bid,
                                                 bid_size,
                                                 ask,
@@ -590,6 +591,13 @@ impl PxWebSocketClient {
                                                 venue_seq: None,
                                                 is_snapshot: Some(false),
                                             };
+                                            // Publish to SHM snapshot (Quotes)
+                                            let provider = tt_types::providers::ProviderKind::ProjectX(self.firm);
+                                            let key = tt_types::keys::SymbolKey { instrument: instrument.clone(), provider };
+                                            {
+                                                let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&bbo).unwrap_or_default();
+                                                tt_shm::write_snapshot(Topic::Quotes, &key, &bytes);
+                                            }
                                             // Publish to bus if attached
                                             if let Err(e) = self.bus.publish_quote(bbo).await {
                                                 log::warn!("failed to publish quote: {}", e);
@@ -659,13 +667,20 @@ impl PxWebSocketClient {
                                             };
                                             let tick = Tick {
                                                 symbol,
-                                                instrument,
+                                                instrument: instrument.clone(),
                                                 price,
                                                 volume,
                                                 time,
                                                 side,
                                                 venue_seq: None,
                                             };
+                                            // Write Tick snapshot to SHM
+                                            let provider = tt_types::providers::ProviderKind::ProjectX(self.firm);
+                                            let key = tt_types::keys::SymbolKey { instrument: instrument.clone(), provider };
+                                            {
+                                                let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&tick).unwrap_or_default();
+                                                tt_shm::write_snapshot(Topic::Ticks, &key, &bytes);
+                                            }
                                             if let Err(e) = self.bus.publish_tick(tick).await {
                                                 log::warn!("failed to publish tick: {}", e);
                                             }
@@ -710,6 +725,7 @@ impl PxWebSocketClient {
                                                 let mut latest_ts: Option<DateTime<Utc>> = None;
 
                                                 for it in items.into_iter() {
+                                                    println!("{:?}", it);
                                                     let price = match Price::from_f64(it.price) { Some(p) => p, None => continue };
                                                     let vol_i64 = if it.current_volume != 0 { it.current_volume } else { it.volume };
                                                     let volume = match Volume::from_i64(vol_i64) { Some(v) => v, None => continue };
@@ -718,10 +734,10 @@ impl PxWebSocketClient {
 
                                                     match it.r#type {
                                                         1 | 3 | 10 => { // Ask/BestAsk/NewBestAsk
-                                                            asks.push(BookLevel { price, volume, level: 0 });
+                                                            asks.insert(0,BookLevel { price, volume, level: 0 });
                                                         }
                                                         2 | 4 | 9 => { // Bid/BestBid/NewBestBid
-                                                            bids.push(BookLevel { price, volume, level: 0 });
+                                                            bids.insert(0,BookLevel { price, volume, level: 0 });
                                                         }
                                                         _ => { /* ignore other DOM types in orderbook snapshot */ }
                                                     }
@@ -733,14 +749,22 @@ impl PxWebSocketClient {
 
                                                 let ob = OrderBook {
                                                     symbol,
-                                                    instrument,
+                                                    instrument: instrument.clone(),
                                                     bids,
                                                     asks,
                                                     time: latest_ts.unwrap_or_else(|| Utc::now()),
                                                 };
 
-                                                // Publish rkyv OrderBook snapshot with high-priority throughput (like ticks/quotes)
-                                                if let Err(e) = self.bus.publish_orderbook(ob).await {
+                                                // Build SymbolKey for this stream
+                                                let provider = tt_types::providers::ProviderKind::ProjectX(self.firm);
+                                                let key = tt_types::keys::SymbolKey { instrument: instrument.clone(), provider };
+                                                // Write OrderBook snapshot to SHM
+                                                {
+                                                    let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&ob).unwrap_or_default();
+                                                    tt_shm::write_snapshot(Topic::Depth, &key, &bytes);
+                                                }
+                                                // Publish rkyv OrderBook snapshot via key-based fanout for precise routing
+                                                if let Err(e) = self.bus.publish_orderbook_for_key(&key, ob).await {
                                                     error!(target: "projectx.ws", "failed to publish OrderBook: {:?}", e);
                                                 }
 
