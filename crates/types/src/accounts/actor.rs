@@ -267,7 +267,7 @@ mod tests {
             wal: Vec::new(),
         };
         let prov = ProviderOrderId("P1".to_string());
-        let cli = ClientOrderId("C1".to_string());
+        let cli = ClientOrderId::new();
         // Ack new order
         actor.apply(AccountEvent::Order(OrderEvent {
             kind: OrderEventKind::NewAck {
@@ -336,8 +336,9 @@ mod tests {
             ts_ns: 1,
         }));
         // Exec 1 @ 100
+        let ex1 = ExecId::new();
         actor.apply(AccountEvent::Exec(ExecutionEvent {
-            exec_id: ExecId("E1".into()),
+            exec_id: ex1.clone(),
             provider_order_id: Some(prov.clone()),
             client_order_id: None,
             side: Side::Buy,
@@ -350,7 +351,7 @@ mod tests {
         }));
         // Duplicate exec should be ignored
         actor.apply(AccountEvent::Exec(ExecutionEvent {
-            exec_id: ExecId("E1".into()),
+            exec_id: ex1.clone(),
             provider_order_id: Some(prov.clone()),
             client_order_id: None,
             side: Side::Buy,
@@ -373,8 +374,9 @@ mod tests {
         }));
         assert_eq!(actor.state.open_pnl, Decimal::from_i32(5).unwrap());
         // Fill remaining 2 @ 110; realized pnl accumulates when crossing opposite side later
+        let ex2 = ExecId::new();
         actor.apply(AccountEvent::Exec(ExecutionEvent {
-            exec_id: ExecId("E2".into()),
+            exec_id: ex2.clone(),
             provider_order_id: Some(prov.clone()),
             client_order_id: None,
             side: Side::Buy,
@@ -389,8 +391,9 @@ mod tests {
         assert_eq!(o.leaves, 0);
         assert_eq!(o.state, OrderState::Filled);
         // Now sell 3 @ 120 to close and realize PnL: avg cost = (100*1 + 110*2)/3 = 106.666.. -> realized = (120-106.666..)*3 ~= 40
+        let ex3 = ExecId::new();
         actor.apply(AccountEvent::Exec(ExecutionEvent {
-            exec_id: ExecId("E3".into()),
+            exec_id: ex3.clone(),
             provider_order_id: None,
             client_order_id: None,
             side: Side::Sell,
@@ -432,7 +435,7 @@ mod tests {
             ts_ns: 1,
         }));
         actor.apply(AccountEvent::Exec(ExecutionEvent {
-            exec_id: ExecId("E10".into()),
+            exec_id: ExecId::new(),
             provider_order_id: Some(prov.clone()),
             client_order_id: None,
             side: Side::Buy,
@@ -523,7 +526,7 @@ mod tests {
         }));
         // Fill via exec (order last seq stays at 2)
         actor.apply(AccountEvent::Exec(ExecutionEvent {
-            exec_id: ExecId("E20".into()),
+            exec_id: ExecId::new(),
             provider_order_id: Some(prov.clone()),
             client_order_id: None,
             side: Side::Buy,
@@ -584,7 +587,7 @@ mod tests {
         }));
         // Late fill shows up (older seq) -> position updates to short 1
         actor.apply(AccountEvent::Exec(ExecutionEvent {
-            exec_id: ExecId("E30".into()),
+            exec_id: ExecId::new(),
             provider_order_id: Some(prov.clone()),
             client_order_id: None,
             side: Side::Sell,
@@ -668,7 +671,7 @@ mod tests {
         };
         let before = actor.state.clone();
         actor.apply(AccountEvent::Correction(CorrectionEvent {
-            exec_id_ref: ExecId("X1".into()),
+            exec_id_ref: ExecId::new(),
             delta_qty: -1,
             ts_ns: 0,
         }));
@@ -691,7 +694,7 @@ mod tests {
         };
         // Long 2 ES @ 100, Short 1 NQ @ 200
         actor.apply(AccountEvent::Exec(ExecutionEvent {
-            exec_id: ExecId("M1".into()),
+            exec_id: ExecId::new(),
             provider_order_id: None,
             client_order_id: None,
             side: Side::Buy,
@@ -703,7 +706,7 @@ mod tests {
             instrument: inst("ESZ5"),
         }));
         actor.apply(AccountEvent::Exec(ExecutionEvent {
-            exec_id: ExecId("M2".into()),
+            exec_id: ExecId::new(),
             provider_order_id: None,
             client_order_id: None,
             side: Side::Sell,
@@ -748,14 +751,14 @@ mod tests {
                 qty: 1,
             },
             provider_order_id: Some(ProviderOrderId("PX1".into())),
-            client_order_id: Some(ClientOrderId("CX1".into())),
+            client_order_id: Some(ClientOrderId::new()),
             provider_seq: Some(1),
             leaves_qty: Some(1),
             ts_ns: 1,
         }));
         // Exec
         actor.apply(AccountEvent::Exec(ExecutionEvent {
-            exec_id: ExecId("EX1".into()),
+            exec_id: ExecId::new(),
             provider_order_id: Some(ProviderOrderId("PX1".into())),
             client_order_id: None,
             side: Side::Buy,
