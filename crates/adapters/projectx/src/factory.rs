@@ -1,7 +1,7 @@
+use provider::traits::{ExecutionProvider, MarketDataProvider, ProviderSessionSpec};
 use std::sync::Arc;
-use provider::traits::{MarketDataProvider, ExecutionProvider, ProviderSessionSpec};
-use tt_types::providers::ProviderKind;
 use tt_bus::Router;
+use tt_types::providers::ProviderKind;
 
 use crate::client::PXClient;
 

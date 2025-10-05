@@ -87,18 +87,28 @@ fn archived_values_change_when_inputs_change() {
 fn datetime_def_from_parts_roundtrips() {
     // Validate that our From<DateTimeUtcDef> reconstructs the exact instant for a set of tricky values
     let cases: &[(i64, u32)] = &[
-        (0, 0),                      // epoch
-        (0, 1),                      // just after epoch
-        (1, 0),                      // one second after epoch
-        (-1, 0),                     // one second before epoch
-        (-1, 999_999_999),           // last ns of the second before epoch
-        (1_234_567_890, 123_456_789) // a recent large value
+        (0, 0),                       // epoch
+        (0, 1),                       // just after epoch
+        (1, 0),                       // one second after epoch
+        (-1, 0),                      // one second before epoch
+        (-1, 999_999_999),            // last ns of the second before epoch
+        (1_234_567_890, 123_456_789), // a recent large value
     ];
 
     for &(secs, nanos) in cases {
         let def = DateTimeUtcDef { secs, nanos };
         let dt: chrono::DateTime<Utc> = def.into();
-        assert_eq!(dt.timestamp(), secs, "secs mismatch for case {:?}", (secs, nanos));
-        assert_eq!(dt.timestamp_subsec_nanos(), nanos, "nanos mismatch for case {:?}", (secs, nanos));
+        assert_eq!(
+            dt.timestamp(),
+            secs,
+            "secs mismatch for case {:?}",
+            (secs, nanos)
+        );
+        assert_eq!(
+            dt.timestamp_subsec_nanos(),
+            nanos,
+            "nanos mismatch for case {:?}",
+            (secs, nanos)
+        );
     }
 }

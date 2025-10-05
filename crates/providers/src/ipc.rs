@@ -24,15 +24,27 @@ pub struct OutOfProcessWorker {
 }
 
 impl OutOfProcessWorker {
-    pub fn new(proc: Box<dyn ProviderProcess>) -> Self { Self { proc } }
+    pub fn new(proc: Box<dyn ProviderProcess>) -> Self {
+        Self { proc }
+    }
 }
 
 #[async_trait]
 impl super::worker::ProviderWorker for OutOfProcessWorker {
     async fn subscribe_md(&self, topic: Topic, key: &SymbolKey) -> Result<()> {
-        self.proc.send(ProviderCmd::SubscribeMd { topic, key: key.clone() }).await
+        self.proc
+            .send(ProviderCmd::SubscribeMd {
+                topic,
+                key: key.clone(),
+            })
+            .await
     }
     async fn unsubscribe_md(&self, topic: Topic, key: &SymbolKey) -> Result<()> {
-        self.proc.send(ProviderCmd::UnsubscribeMd { topic, key: key.clone() }).await
+        self.proc
+            .send(ProviderCmd::UnsubscribeMd {
+                topic,
+                key: key.clone(),
+            })
+            .await
     }
 }

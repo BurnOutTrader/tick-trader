@@ -5,11 +5,11 @@ use projectx::http::client::PxHttpClient;
 use projectx::http::credentials::PxCredential;
 use projectx::http::models::ContractSearchResponse;
 use projectx::websocket::client::PxWebSocketClient;
+use provider::traits::ProviderSessionSpec;
 use rustls::crypto::{CryptoProvider, ring};
 use std::sync::Arc;
 use tracing::{error, info, level_filters::LevelFilter, warn};
-use provider::traits::ProviderSessionSpec;
-use tt_bus::{Router};
+use tt_bus::Router;
 use tt_types::providers::{ProjectXTenant, ProviderKind};
 
 #[tokio::main]
@@ -22,7 +22,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let session_creds = ProviderSessionSpec::from_env();
     let firm = ProjectXTenant::Topstep;
     let provider = ProviderKind::ProjectX(firm);
-    let cfg = PxCredential::new(firm, session_creds.user_names.get(&provider).unwrap().clone(), session_creds.api_keys.get(&provider).unwrap().clone() );
+    let cfg = PxCredential::new(
+        firm,
+        session_creds.user_names.get(&provider).unwrap().clone(),
+        session_creds.api_keys.get(&provider).unwrap().clone(),
+    );
     let _ = CryptoProvider::install_default(ring::default_provider());
 
     let http = PxHttpClient::new(cfg, None, None, None, None)?;

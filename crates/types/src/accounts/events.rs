@@ -34,7 +34,9 @@ pub struct ClientOrderId(pub crate::Guid);
 
 impl ClientOrderId {
     #[inline]
-    pub fn new() -> Self { Self(crate::Guid::new_v4()) }
+    pub fn new() -> Self {
+        Self(crate::Guid::new_v4())
+    }
 }
 
 #[derive(
@@ -53,7 +55,9 @@ pub struct ExecId(pub crate::Guid);
 
 impl ExecId {
     #[inline]
-    pub fn new() -> Self { Self(crate::Guid::new_v4()) }
+    pub fn new() -> Self {
+        Self(crate::Guid::new_v4())
+    }
 }
 
 #[derive(

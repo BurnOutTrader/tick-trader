@@ -17,7 +17,6 @@ use crate::http::inner_client::PxHttpInnerClient;
 use crate::http::{
     credentials::PxCredential,
     error::PxError,
-
     models::{
         CloseContractReq, CloseContractResponse, ContractSearchByIdReq, ContractSearchByIdResponse,
         ContractSearchReq, ContractSearchResponse, ModifyOrderReq, ModifyOrderResponse,

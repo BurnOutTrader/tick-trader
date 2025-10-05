@@ -1,8 +1,8 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use dashmap::DashMap;
-use std::sync::Arc;
 use provider::traits::MarketDataProvider;
+use std::sync::Arc;
 use tt_types::keys::{SymbolKey, Topic};
 
 #[async_trait]
@@ -19,7 +19,11 @@ pub struct InprocessWorker {
 
 impl InprocessWorker {
     pub fn new(md: Arc<dyn MarketDataProvider>, router: std::sync::Arc<tt_bus::Router>) -> Self {
-        Self { md, interest: DashMap::new(), router }
+        Self {
+            md,
+            interest: DashMap::new(),
+            router,
+        }
     }
 }
 
@@ -39,7 +43,13 @@ impl ProviderWorker for InprocessWorker {
                 } else {
                     tt_shm::DEFAULT_TICK_SNAPSHOT_SIZE
                 };
-                let ann = tt_types::wire::AnnounceShm { topic, key: key.clone(), name, layout_ver: 1, size: size as u64 };
+                let ann = tt_types::wire::AnnounceShm {
+                    topic,
+                    key: key.clone(),
+                    name,
+                    layout_ver: 1,
+                    size: size as u64,
+                };
                 let _ = self.router.announce_shm_for_key(ann).await;
             }
         }
@@ -49,7 +59,9 @@ impl ProviderWorker for InprocessWorker {
 
     async fn unsubscribe_md(&self, topic: Topic, key: &SymbolKey) -> Result<()> {
         if let Some(mut e) = self.interest.get_mut(&(topic, key.clone())) {
-            if *e > 0 { *e -= 1; }
+            if *e > 0 {
+                *e -= 1;
+            }
             if *e == 0 {
                 drop(e);
                 self.interest.remove(&(topic, key.clone()));

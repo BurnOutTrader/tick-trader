@@ -32,15 +32,21 @@ impl Guid {
 }
 
 impl Default for Guid {
-    fn default() -> Self { Self::new_v4() }
+    fn default() -> Self {
+        Self::new_v4()
+    }
 }
 
 impl From<uuid::Uuid> for Guid {
-    fn from(v: uuid::Uuid) -> Self { Self(*v.as_bytes()) }
+    fn from(v: uuid::Uuid) -> Self {
+        Self(*v.as_bytes())
+    }
 }
 
 impl From<Guid> for uuid::Uuid {
-    fn from(g: Guid) -> Self { uuid::Uuid::from_bytes(g.0) }
+    fn from(g: Guid) -> Self {
+        uuid::Uuid::from_bytes(g.0)
+    }
 }
 
 impl fmt::Display for Guid {

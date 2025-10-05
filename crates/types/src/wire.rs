@@ -28,10 +28,13 @@ pub struct SubscribeKey {
     pub from_seq: u64,
 }
 impl SubscribeKey {
-    pub fn topic(&self) -> Topic { self.topic }
-    pub fn key(&self) -> &SymbolKey { &self.key }
+    pub fn topic(&self) -> Topic {
+        self.topic
+    }
+    pub fn key(&self) -> &SymbolKey {
+        &self.key
+    }
 }
-
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq, Eq)]
 #[rkyv(compare(PartialEq), derive(Debug))]
@@ -100,7 +103,6 @@ pub struct AccountDeltaBatch {
     pub seq: u64,
     pub accounts: Vec<crate::accounts::events::AccountDelta>,
 }
-
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq)]
 pub struct InstrumentsRequest {
@@ -182,7 +184,6 @@ pub struct UnsubscribeKey {
     pub key: SymbolKey,
 }
 
-
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq)]
 pub struct AnnounceShm {
     pub topic: Topic,
@@ -224,8 +225,15 @@ pub enum Response {
     OrdersBatch(OrdersBatch),
     PositionsBatch(PositionsBatch),
     AccountDeltaBatch(AccountDeltaBatch),
-    SubscribeResponse{topic: Topic, instrument: Instrument, success: bool},
-    UnsubscribeResponse{topic: Topic, instrument: Instrument},
+    SubscribeResponse {
+        topic: Topic,
+        instrument: Instrument,
+        success: bool,
+    },
+    UnsubscribeResponse {
+        topic: Topic,
+        instrument: Instrument,
+    },
     // Single items (for completeness; bus generally batches)
     Tick(Tick),
     Quote(Bbo),

@@ -1,9 +1,9 @@
+use dashmap::DashMap;
+use memmap2::MmapMut;
 use std::fs::{File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
-use dashmap::DashMap;
-use memmap2::MmapMut;
 use tt_types::keys::{SymbolKey, Topic};
 
 /// Minimal SHM helper providing file-backed shared memory segments and a simple seqlock writer.
@@ -23,7 +23,9 @@ pub const DEFAULT_DEPTH_SNAPSHOT_SIZE: usize = 256 * 1024; // 256 KiB placeholde
 const HEADER_MAGIC: u32 = u32::from_le_bytes(*b"TSHM");
 const HEADER_VERSION: u32 = 1;
 #[inline]
-const fn header_len() -> usize { 20 } // 5 * u32
+const fn header_len() -> usize {
+    20
+} // 5 * u32
 
 pub fn suggest_name(topic: Topic, key: &SymbolKey) -> String {
     // Keep names filesystem/OS friendly; no spaces
@@ -49,7 +51,9 @@ pub struct ShmWriter {
 impl ShmWriter {
     pub fn new(name: &str, size: usize) -> std::io::Result<Self> {
         let path = backing_path(name);
-        let parent = path.parent().unwrap_or_else(|| std::path::Path::new("/tmp"));
+        let parent = path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("/tmp"));
         std::fs::create_dir_all(parent).ok();
         let file_exists = path.exists();
         #[cfg(unix)]
@@ -57,7 +61,9 @@ impl ShmWriter {
         let mut oo = OpenOptions::new();
         oo.create(true).read(true).write(true);
         #[cfg(unix)]
-        { oo.mode(0o600); }
+        {
+            oo.mode(0o600);
+        }
         let mut file: File = oo.open(&path)?;
         if !file_exists {
             file.set_len(size as u64)?;
@@ -77,11 +83,15 @@ impl ShmWriter {
 
     /// Write a payload using seqlock protocol into the mmap.
     pub fn write_bytes(&mut self, bytes: &[u8]) {
-        use std::sync::atomic::{fence, Ordering};
+        use std::sync::atomic::{Ordering, fence};
         // Capacity from header (offset 8..12)
-        if self.mmap.len() < header_len() { return; }
-        let cap = u32::from_le_bytes(self.mmap[8..12].try_into().unwrap_or([0,0,0,0])) as usize;
-        if bytes.len() > cap { return; }
+        if self.mmap.len() < header_len() {
+            return;
+        }
+        let cap = u32::from_le_bytes(self.mmap[8..12].try_into().unwrap_or([0, 0, 0, 0])) as usize;
+        if bytes.len() > cap {
+            return;
+        }
         // read current seq at offset 12..16
         let seq0 = u32::from_le_bytes(self.mmap[12..16].try_into().unwrap_or([0, 0, 0, 0]));
         // next odd sequence (writer-enter)
@@ -108,9 +118,15 @@ impl ShmWriter {
 }
 
 // Global writers registry to reuse mappings
-static WRITERS: once_cell::sync::Lazy<DashMap<(Topic, SymbolKey), Arc<std::sync::Mutex<ShmWriter>>>> = once_cell::sync::Lazy::new(|| DashMap::new());
+static WRITERS: once_cell::sync::Lazy<
+    DashMap<(Topic, SymbolKey), Arc<std::sync::Mutex<ShmWriter>>>,
+> = once_cell::sync::Lazy::new(|| DashMap::new());
 
-pub fn ensure_writer(topic: Topic, key: &SymbolKey, size: usize) -> Arc<std::sync::Mutex<ShmWriter>> {
+pub fn ensure_writer(
+    topic: Topic,
+    key: &SymbolKey,
+    size: usize,
+) -> Arc<std::sync::Mutex<ShmWriter>> {
     if let Some(w) = WRITERS.get(&(topic, key.clone())) {
         return w.value().clone();
     }

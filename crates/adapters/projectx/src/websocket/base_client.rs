@@ -92,12 +92,11 @@ impl WebSocketClient {
         // Respond to a Ping with a Pong frame.
         match self.write_tx.try_send(Message::Pong(payload.clone())) {
             Ok(_) => Ok(()),
-            Err(tokio::sync::mpsc::error::TrySendError::Full(_m)) => {
-                self.write_tx
-                    .send(Message::Pong(payload))
-                    .await
-                    .map_err(|e| anyhow::anyhow!(e.to_string()))
-            }
+            Err(tokio::sync::mpsc::error::TrySendError::Full(_m)) => self
+                .write_tx
+                .send(Message::Pong(payload))
+                .await
+                .map_err(|e| anyhow::anyhow!(e.to_string())),
             Err(tokio::sync::mpsc::error::TrySendError::Closed(_m)) => {
                 Err(anyhow::anyhow!("websocket writer closed"))
             }

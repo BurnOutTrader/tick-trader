@@ -11,7 +11,11 @@ async fn test_authenticate_returns_token() {
     let session_creds = ProviderSessionSpec::from_env();
     let firm = ProjectXTenant::Topstep;
     let provider = ProviderKind::ProjectX(firm);
-    let cfg = PxCredential::new(firm, session_creds.user_names.get(&provider).unwrap().clone(), session_creds.api_keys.get(&provider).unwrap().clone() );
+    let cfg = PxCredential::new(
+        firm,
+        session_creds.user_names.get(&provider).unwrap().clone(),
+        session_creds.api_keys.get(&provider).unwrap().clone(),
+    );
     let http = PxHttpInnerClient::new(cfg, None, None, None, None).unwrap();
 
     // now returns Result<(), PxError>
@@ -41,7 +45,11 @@ async fn auth_key_smoke_test() {
     let session_creds = ProviderSessionSpec::from_env();
     let firm = ProjectXTenant::Topstep;
     let provider = ProviderKind::ProjectX(firm);
-    let cfg = PxCredential::new(firm, session_creds.user_names.get(&provider).unwrap().clone(), session_creds.api_keys.get(&provider).unwrap().clone() );
+    let cfg = PxCredential::new(
+        firm,
+        session_creds.user_names.get(&provider).unwrap().clone(),
+        session_creds.api_keys.get(&provider).unwrap().clone(),
+    );
     let http = PxHttpInnerClient::new(cfg, None, None, None, None).unwrap();
 
     http.authenticate().await.expect("Failed to auth");
@@ -65,7 +73,11 @@ async fn validate_returns_new_token() {
     let session_creds = ProviderSessionSpec::from_env();
     let firm = ProjectXTenant::Topstep;
     let provider = ProviderKind::ProjectX(firm);
-    let cfg = PxCredential::new(firm, session_creds.user_names.get(&provider).unwrap().clone(), session_creds.api_keys.get(&provider).unwrap().clone() );
+    let cfg = PxCredential::new(
+        firm,
+        session_creds.user_names.get(&provider).unwrap().clone(),
+        session_creds.api_keys.get(&provider).unwrap().clone(),
+    );
     let http = PxHttpInnerClient::new(cfg, None, None, None, None).unwrap();
 
     // initial auth

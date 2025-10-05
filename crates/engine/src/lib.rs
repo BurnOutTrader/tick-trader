@@ -166,10 +166,7 @@ impl<P: MarketDataProvider + 'static> Engine<P> {
                 drop(inner);
                 info!(?sk, "upstream subscribe start");
                 // idempotency: only call if not already Subscribed/Subscribing
-                let _ = self
-                    .provider
-                    .subscribe_md(topic, &key)
-                    .await;
+                let _ = self.provider.subscribe_md(topic, &key).await;
                 let mut inner2 = self.inner.lock().await;
                 if let Some(ent2) = inner2.interest.get_mut(&sk) {
                     ent2.state = SubState::Subscribed;
@@ -261,8 +258,8 @@ use tt_types::base_data::{Bbo, Candle, OrderBook, Tick};
 use tt_types::providers::ProviderKind;
 use tt_types::securities::symbols::Instrument;
 use tt_types::wire::{
-    AccountDeltaBatch, BarBatch, OrdersBatch, PositionsBatch, QuoteBatch,
-    Request, Response, Subscribe, TickBatch,
+    AccountDeltaBatch, BarBatch, OrdersBatch, PositionsBatch, QuoteBatch, Request, Response,
+    Subscribe, TickBatch,
 };
 
 #[async_trait]
@@ -301,15 +298,17 @@ impl EngineRuntime {
         provider: ProviderKind,
         pattern: Option<String>,
     ) -> anyhow::Result<Vec<Instrument>> {
-        use tt_types::wire::{InstrumentsRequest, Response as WireResp};
         use tokio::time::timeout;
+        use tt_types::wire::{InstrumentsRequest, Response as WireResp};
         let rx = self
             .bus
-            .request_with_corr(|corr_id| Request::InstrumentsRequest(InstrumentsRequest {
-                provider,
-                pattern,
-                corr_id,
-            }))
+            .request_with_corr(|corr_id| {
+                Request::InstrumentsRequest(InstrumentsRequest {
+                    provider,
+                    pattern,
+                    corr_id,
+                })
+            })
             .await;
         // Wait briefly for the server to respond; if unsupported, return empty
         match timeout(Duration::from_millis(750), rx).await {
@@ -318,26 +317,29 @@ impl EngineRuntime {
             _ => Ok(vec![]),
         }
     }
-    pub async fn subscribe_symbol(
-        &self,
-        topic: Topic,
-        key: SymbolKey,
-    ) -> anyhow::Result<()> {
+    pub async fn subscribe_symbol(&self, topic: Topic, key: SymbolKey) -> anyhow::Result<()> {
         // Forward to server
         let _ = self
             .bus
-            .handle_request(&self.sub_id.as_ref().expect("engine started"), Request::SubscribeKey(tt_types::wire::SubscribeKey { topic, key, latest_only: false, from_seq: 0 }))
+            .handle_request(
+                &self.sub_id.as_ref().expect("engine started"),
+                Request::SubscribeKey(tt_types::wire::SubscribeKey {
+                    topic,
+                    key,
+                    latest_only: false,
+                    from_seq: 0,
+                }),
+            )
             .await?;
         Ok(())
     }
-    pub async fn unsubscribe_symbol(
-        &self,
-        topic: Topic,
-        key: SymbolKey,
-    ) -> anyhow::Result<()> {
+    pub async fn unsubscribe_symbol(&self, topic: Topic, key: SymbolKey) -> anyhow::Result<()> {
         let _ = self
             .bus
-            .handle_request(&self.sub_id.as_ref().expect("engine started"), Request::UnsubscribeKey(tt_types::wire::UnsubscribeKey { topic, key }))
+            .handle_request(
+                &self.sub_id.as_ref().expect("engine started"),
+                Request::UnsubscribeKey(tt_types::wire::UnsubscribeKey { topic, key }),
+            )
             .await?;
         Ok(())
     }
@@ -347,7 +349,11 @@ impl EngineRuntime {
             sub_id: None,
             rx: None,
             task: None,
-            state: Arc::new(Mutex::new(EngineAccountsState { last_orders: None, last_positions: None, last_accounts: None })),
+            state: Arc::new(Mutex::new(EngineAccountsState {
+                last_orders: None,
+                last_positions: None,
+                last_accounts: None,
+            })),
         }
     }
 
@@ -362,25 +368,35 @@ impl EngineRuntime {
                 latest_only: false,
                 from_seq: 0,
             };
-            self.bus.handle_request(&sub_id, Request::Subscribe(sub)).await?;
+            self.bus
+                .handle_request(&sub_id, Request::Subscribe(sub))
+                .await?;
         }
         let mut rx = self.rx.take().expect("rx present after start");
         let state = self.state.clone();
         strategy.on_start().await;
-        let handle = tokio::spawn(async move { 
+        let handle = tokio::spawn(async move {
             while let Some(resp) = rx.recv().await {
                 match resp {
                     Response::TickBatch(TickBatch { ticks, .. }) => {
-                        for t in ticks { strategy.on_tick(t).await; }
+                        for t in ticks {
+                            strategy.on_tick(t).await;
+                        }
                     }
                     Response::QuoteBatch(QuoteBatch { quotes, .. }) => {
-                        for q in quotes { strategy.on_quote(q).await; }
+                        for q in quotes {
+                            strategy.on_quote(q).await;
+                        }
                     }
                     Response::BarBatch(BarBatch { bars, .. }) => {
-                        for b in bars { strategy.on_bar(b).await; }
+                        for b in bars {
+                            strategy.on_bar(b).await;
+                        }
                     }
                     Response::OrderBookBatch(ob) => {
-                        for book in ob.books { strategy.on_depth(book).await; }
+                        for book in ob.books {
+                            strategy.on_depth(book).await;
+                        }
                     }
                     Response::OrdersBatch(ob) => {
                         // Update engine account state cache then notify strategy
@@ -405,13 +421,22 @@ impl EngineRuntime {
                         }
                         strategy.on_account_delta_batch(ab.clone()).await;
                     }
-                    Response::Pong(_) | Response::InstrumentsResponse(_) | Response::InstrumentsMapResponse(_)
-                    | Response::VendorData(_) | Response::Tick(_) | Response::Quote(_) | Response::Bar(_)
+                    Response::Pong(_)
+                    | Response::InstrumentsResponse(_)
+                    | Response::InstrumentsMapResponse(_)
+                    | Response::VendorData(_)
+                    | Response::Tick(_)
+                    | Response::Quote(_)
+                    | Response::Bar(_)
                     | Response::AnnounceShm(_) => {}
-                    Response::SubscribeResponse{topic, instrument, success} => {
+                    Response::SubscribeResponse {
+                        topic,
+                        instrument,
+                        success,
+                    } => {
                         strategy.on_subscribe(instrument, topic, success).await;
                     }
-                    Response::UnsubscribeResponse{topic, instrument} => {
+                    Response::UnsubscribeResponse { topic, instrument } => {
                         strategy.on_unsubscribe(instrument, topic).await;
                     }
                 }
@@ -443,4 +468,3 @@ impl EngineRuntime {
         st.last_accounts.clone()
     }
 }
-

@@ -1,20 +1,20 @@
+use bytes::Bytes;
+use futures_util::{SinkExt, StreamExt};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::sleep;
 use tokio_util::codec::length_delimited::LengthDelimitedCodec;
 use tokio_util::codec::{FramedRead, FramedWrite};
-use futures_util::{SinkExt, StreamExt};
-use bytes::Bytes;
-use tt_bus::ClientMessageBus;
-use tt_types::wire::{Kick, Request, WireMessage};
-use tt_types::wire as wire;
-use tt_types::keys::Topic;
 use tracing::{info, warn};
+use tt_bus::ClientMessageBus;
 use tt_engine::EngineRuntime;
 use tt_engine::Strategy;
 use tt_types::base_data::OrderBook;
+use tt_types::keys::Topic;
 use tt_types::securities::symbols::Instrument;
+use tt_types::wire;
+use tt_types::wire::{Kick, Request, WireMessage};
 
 #[derive(Clone, Default)]
 struct TestStrategy;
@@ -34,16 +34,22 @@ impl Strategy for TestStrategy {
         s.insert(Topic::AccountEvt);
         s
     }
-    async fn on_start(&self) { info!("strategy start"); }
-    async fn on_stop(&self) { info!("strategy stop"); }
-    async fn on_tick(&self, t: tt_types::base_data::Tick) { println!("{:?}", t)}
+    async fn on_start(&self) {
+        info!("strategy start");
+    }
+    async fn on_stop(&self) {
+        info!("strategy stop");
+    }
+    async fn on_tick(&self, t: tt_types::base_data::Tick) {
+        println!("{:?}", t)
+    }
     async fn on_quote(&self, q: tt_types::base_data::Bbo) {
         println!("{:?}", q);
     }
     async fn on_depth(&self, d: OrderBook) {
         println!("{:?}", d);
     }
-    async fn on_bar(&self, _b: tt_types::base_data::Candle) { }
+    async fn on_bar(&self, _b: tt_types::base_data::Candle) {}
     async fn on_orders_batch(&self, b: wire::OrdersBatch) {
         println!("{:?}", b);
     }
@@ -75,7 +81,8 @@ async fn main() -> anyhow::Result<()> {
 
     // Connect to Router over UDS (filesystem path)
     // Note: for Linux abstract UDS, set TT_BUS_ADDR to a filesystem path like /tmp/tick-trader.sock for this test binary.
-    let default_addr = std::env::var("TT_BUS_ADDR").unwrap_or_else(|_| "/tmp/tick-trader.sock".to_string());
+    let default_addr =
+        std::env::var("TT_BUS_ADDR").unwrap_or_else(|_| "/tmp/tick-trader.sock".to_string());
     let sock = match tokio::net::UnixStream::connect(&default_addr).await {
         Ok(s) => s,
         Err(e) => {
@@ -85,7 +92,9 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let (read_half, write_half) = sock.into_split();
-    let codec = LengthDelimitedCodec::builder().max_frame_length(8 * 1024 * 1024).new_codec();
+    let codec = LengthDelimitedCodec::builder()
+        .max_frame_length(8 * 1024 * 1024)
+        .new_codec();
     let mut framed_reader = FramedRead::new(read_half, codec.clone());
     let mut framed_writer = FramedWrite::new(write_half, codec);
 
@@ -126,24 +135,48 @@ async fn main() -> anyhow::Result<()> {
 
     // After the engine is running (topic-level subscribe/credits are in place),
     // request a specific key subscription for MNQZ5 ticks via ProjectX tenant from env.
-    use tt_types::providers::{ProviderKind, ProjectXTenant};
-    use tt_types::securities::symbols::Instrument;
     use std::str::FromStr;
+    use tt_types::providers::{ProjectXTenant, ProviderKind};
+    use tt_types::securities::symbols::Instrument;
 
     let tenant = ProjectXTenant::Topstep;
     let provider = ProviderKind::ProjectX(tenant);
     let instrument = Instrument::from_str("MNQZ25").expect("valid instrument MNQZ5");
-    let key = tt_types::keys::SymbolKey { instrument, provider };
+    let key = tt_types::keys::SymbolKey {
+        instrument,
+        provider,
+    };
 
     // Send key-based subscribe and initial credits directly over the transport channel.
-    let _ = req_tx.send(Request::SubscribeKey(tt_types::wire::SubscribeKey { topic: Topic::Ticks, key: key.clone(), latest_only: false, from_seq: 0 })).await;
-    let _ = req_tx.send(Request::SubscribeKey(tt_types::wire::SubscribeKey { topic: Topic::Depth, key: key.clone(), latest_only: false, from_seq: 0 })).await;
-    info!(?key, "sent SubscribeKey for MNQZ5 ticks + depth (server-managed backpressure; no credits)");
+    let _ = req_tx
+        .send(Request::SubscribeKey(tt_types::wire::SubscribeKey {
+            topic: Topic::Ticks,
+            key: key.clone(),
+            latest_only: false,
+            from_seq: 0,
+        }))
+        .await;
+    let _ = req_tx
+        .send(Request::SubscribeKey(tt_types::wire::SubscribeKey {
+            topic: Topic::Depth,
+            key: key.clone(),
+            latest_only: false,
+            from_seq: 0,
+        }))
+        .await;
+    info!(
+        ?key,
+        "sent SubscribeKey for MNQZ5 ticks + depth (server-managed backpressure; no credits)"
+    );
 
     // Keep running for a bit to receive live data
     sleep(Duration::from_secs(15)).await;
 
-    let _ = req_tx.send(Request::Kick(Kick {reason: Some("Want to".to_string())})).await;
+    let _ = req_tx
+        .send(Request::Kick(Kick {
+            reason: Some("Want to".to_string()),
+        }))
+        .await;
 
     // Graceful shutdown
     engine.stop().await;

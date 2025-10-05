@@ -19,12 +19,12 @@ use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{error, info};
 use tt_bus::Router;
-use tt_types::keys::Topic;
 #[allow(unused)]
 use tt_types::accounts::events::{
     AccountDelta, ClientOrderId, OrderUpdate, PositionDelta, ProviderOrderId,
 };
-use tt_types::base_data::{Price, Side, Tick, Volume, OrderBook, BookLevel};
+use tt_types::base_data::{BookLevel, OrderBook, Price, Side, Tick, Volume};
+use tt_types::keys::Topic;
 use tt_types::providers::ProjectXTenant;
 use tt_types::securities::futures_helpers::extract_root;
 use tt_types::securities::symbols::Instrument;
@@ -38,7 +38,7 @@ use tt_types::wire::{AccountDeltaBatch, OrdersBatch, PositionsBatch};
 /// a bearer for SignalR access tokens.
 #[derive(Clone)]
 pub struct PxWebSocketClient {
-    bus: Arc<Router>, 
+    bus: Arc<Router>,
     firm: ProjectXTenant,
     /// Base URL for the websocket service, e.g. `https://rtc.tradeify.projectx.com`
     pub base_url: String,
@@ -574,9 +574,9 @@ impl PxWebSocketClient {
                                     if let Ok(px_quote) =
                                         serde_json::from_value::<GatewayQuote>(data_val.to_owned())
                                     {
-                                        if let Ok(instrument) =
-                                            Instrument::from_str(&parse_px_instrument(px_quote.symbol.as_str()))
-                                        {
+                                        if let Ok(instrument) = Instrument::from_str(
+                                            &parse_px_instrument(px_quote.symbol.as_str()),
+                                        ) {
                                             let symbol = extract_root(&instrument);
                                             let bid = Price::from_f64(px_quote.best_bid)
                                                 .unwrap_or_default();
@@ -608,10 +608,18 @@ impl PxWebSocketClient {
                                                 is_snapshot: Some(false),
                                             };
                                             // Publish to SHM snapshot (Quotes)
-                                            let provider = tt_types::providers::ProviderKind::ProjectX(self.firm);
-                                            let key = tt_types::keys::SymbolKey { instrument: instrument.clone(), provider };
+                                            let provider =
+                                                tt_types::providers::ProviderKind::ProjectX(
+                                                    self.firm,
+                                                );
+                                            let key = tt_types::keys::SymbolKey {
+                                                instrument: instrument.clone(),
+                                                provider,
+                                            };
                                             {
-                                                let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&bbo).unwrap_or_default();
+                                                let bytes =
+                                                    rkyv::to_bytes::<rkyv::rancor::Error>(&bbo)
+                                                        .unwrap_or_default();
                                                 tt_shm::write_snapshot(Topic::Quotes, &key, &bytes);
                                             }
                                             // Publish to bus if attached
@@ -639,9 +647,9 @@ impl PxWebSocketClient {
                                     if let Ok(px_trade) =
                                         serde_json::from_value::<GatewayTrade>(data_val.to_owned())
                                     {
-                                        if let Ok(instrument) =
-                                            Instrument::from_str(&parse_px_instrument(px_trade.symbol_id.as_str()))
-                                        {
+                                        if let Ok(instrument) = Instrument::from_str(
+                                            &parse_px_instrument(px_trade.symbol_id.as_str()),
+                                        ) {
                                             let symbol = extract_root(&instrument);
                                             let price = match Price::from_f64(px_trade.price) {
                                                 Some(p) => p,
@@ -691,10 +699,18 @@ impl PxWebSocketClient {
                                                 venue_seq: None,
                                             };
                                             // Write Tick snapshot to SHM
-                                            let provider = tt_types::providers::ProviderKind::ProjectX(self.firm);
-                                            let key = tt_types::keys::SymbolKey { instrument: instrument.clone(), provider };
+                                            let provider =
+                                                tt_types::providers::ProviderKind::ProjectX(
+                                                    self.firm,
+                                                );
+                                            let key = tt_types::keys::SymbolKey {
+                                                instrument: instrument.clone(),
+                                                provider,
+                                            };
                                             {
-                                                let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&tick).unwrap_or_default();
+                                                let bytes =
+                                                    rkyv::to_bytes::<rkyv::rancor::Error>(&tick)
+                                                        .unwrap_or_default();
                                                 tt_shm::write_snapshot(Topic::Ticks, &key, &bytes);
                                             }
                                             if let Err(e) = self.bus.publish_tick(tick).await {
@@ -709,14 +725,26 @@ impl PxWebSocketClient {
                                 let args_opt = val.get("arguments").and_then(|a| a.as_array());
                                 if let Some(args) = args_opt {
                                     let (instrument_opt, data_val) = if args.len() >= 2 {
-                                        (args.get(0).and_then(|v| v.as_str()).map(|s| s.to_string()), &args[1])
+                                        (
+                                            args.get(0)
+                                                .and_then(|v| v.as_str())
+                                                .map(|s| s.to_string()),
+                                            &args[1],
+                                        )
                                     } else {
-                                        (args.get(0).and_then(|v| v.as_str()).map(|s| s.to_string()), args.get(0).unwrap_or(&Value::Null))
+                                        (
+                                            args.get(0)
+                                                .and_then(|v| v.as_str())
+                                                .map(|s| s.to_string()),
+                                            args.get(0).unwrap_or(&Value::Null),
+                                        )
                                     };
 
                                     // Resolve instrument from the first argument if present
                                     if let Some(instr_str) = instrument_opt {
-                                        if let Ok(instrument) = Instrument::from_str(&parse_px_instrument(instr_str.as_str())) {
+                                        if let Ok(instrument) = Instrument::from_str(
+                                            &parse_px_instrument(instr_str.as_str()),
+                                        ) {
                                             let symbol = extract_root(&instrument);
 
                                             // Normalize payload to a vector of depth items
@@ -724,13 +752,21 @@ impl PxWebSocketClient {
                                             if data_val.is_array() {
                                                 if let Some(arr) = data_val.as_array() {
                                                     for v in arr {
-                                                        if let Ok(it) = serde_json::from_value::<models::GatewayDepth>(v.clone()) {
+                                                        if let Ok(it) = serde_json::from_value::<
+                                                            models::GatewayDepth,
+                                                        >(
+                                                            v.clone()
+                                                        ) {
                                                             items.push(it);
                                                         }
                                                     }
                                                 }
                                             } else if data_val.is_object() {
-                                                if let Ok(it) = serde_json::from_value::<models::GatewayDepth>(data_val.clone()) {
+                                                if let Ok(it) =
+                                                    serde_json::from_value::<models::GatewayDepth>(
+                                                        data_val.clone(),
+                                                    )
+                                                {
                                                     items.push(it);
                                                 }
                                             }
@@ -741,35 +777,80 @@ impl PxWebSocketClient {
                                                 let mut latest_ts: Option<DateTime<Utc>> = None;
 
                                                 for it in items.into_iter() {
-                                                    let price = match Price::from_f64(it.price) { Some(p) => p, None => continue };
-                                                    let vol_i64 = if it.current_volume != 0 { it.current_volume } else { it.volume };
-                                                    let volume = match Volume::from_i64(vol_i64) { Some(v) => v, None => continue };
-                                                    let ts = DateTime::<Utc>::from_str(it.timestamp.as_str()).unwrap_or_else(|_| Utc::now());
-                                                    if latest_ts.map(|t| ts > t).unwrap_or(true) { latest_ts = Some(ts); }
-
+                                                    let price = match Price::from_f64(it.price) {
+                                                        Some(p) => p,
+                                                        None => continue,
+                                                    };
+                                                    let vol_i64 = if it.current_volume != 0 {
+                                                        it.current_volume
+                                                    } else {
+                                                        it.volume
+                                                    };
+                                                    let volume = match Volume::from_i64(vol_i64) {
+                                                        Some(v) => v,
+                                                        None => continue,
+                                                    };
+                                                    let ts = DateTime::<Utc>::from_str(
+                                                        it.timestamp.as_str(),
+                                                    )
+                                                    .unwrap_or_else(|_| Utc::now());
+                                                    if latest_ts.map(|t| ts > t).unwrap_or(true) {
+                                                        latest_ts = Some(ts);
+                                                    }
 
                                                     if let Some(index) = it.index {
                                                         match it.r#type {
-                                                            1 => { // Ask/BestAsk/NewBestAsk
-                                                                asks.insert(index as usize,BookLevel { price, volume, level: index as u32 });
+                                                            1 => {
+                                                                // Ask/BestAsk/NewBestAsk
+                                                                asks.insert(
+                                                                    index as usize,
+                                                                    BookLevel {
+                                                                        price,
+                                                                        volume,
+                                                                        level: index as u32,
+                                                                    },
+                                                                );
                                                             }
-                                                            2 => { // Bid/BestBid/NewBestBid
-                                                                bids.insert(index as usize,BookLevel { price, volume, level: index as u32 });
+                                                            2 => {
+                                                                // Bid/BestBid/NewBestBid
+                                                                bids.insert(
+                                                                    index as usize,
+                                                                    BookLevel {
+                                                                        price,
+                                                                        volume,
+                                                                        level: index as u32,
+                                                                    },
+                                                                );
                                                             }
-                                                            _ => { /* ignore other DOM types in orderbook snapshot */ }
+                                                            _ => { /* ignore other DOM types in orderbook snapshot */
+                                                            }
                                                         }
                                                     } else {
                                                         match it.r#type {
-                                                            3 | 10 => { // Ask/BestAsk/NewBestAsk
-                                                                asks.insert(0,BookLevel { price, volume, level: 0 });
+                                                            3 | 10 => {
+                                                                // Ask/BestAsk/NewBestAsk
+                                                                asks.insert(
+                                                                    0,
+                                                                    BookLevel {
+                                                                        price,
+                                                                        volume,
+                                                                        level: 0,
+                                                                    },
+                                                                );
                                                             }
-                                                            4 | 9 => { // Bid/BestBid/NewBestBid
-                                                                bids.insert(0,BookLevel { price, volume, level: 0 });
+                                                            4 | 9 => {
+                                                                // Bid/BestBid/NewBestBid
+                                                                bids.insert(
+                                                                    0,
+                                                                    BookLevel {
+                                                                        price,
+                                                                        volume,
+                                                                        level: 0,
+                                                                    },
+                                                                );
                                                             }
                                                             //todo, handle other types, ticks and quotes to be generated
-                                                            _ => {
-
-                                                            }
+                                                            _ => {}
                                                         }
                                                     }
                                                 }
@@ -787,18 +868,33 @@ impl PxWebSocketClient {
                                                 };
 
                                                 // Build SymbolKey for this stream
-                                                let provider = tt_types::providers::ProviderKind::ProjectX(self.firm);
-                                                let key = tt_types::keys::SymbolKey { instrument: instrument.clone(), provider };
+                                                let provider =
+                                                    tt_types::providers::ProviderKind::ProjectX(
+                                                        self.firm,
+                                                    );
+                                                let key = tt_types::keys::SymbolKey {
+                                                    instrument: instrument.clone(),
+                                                    provider,
+                                                };
                                                 // Write OrderBook snapshot to SHM
                                                 {
-                                                    let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&ob).unwrap_or_default();
-                                                    tt_shm::write_snapshot(Topic::Depth, &key, &bytes);
+                                                    let bytes =
+                                                        rkyv::to_bytes::<rkyv::rancor::Error>(&ob)
+                                                            .unwrap_or_default();
+                                                    tt_shm::write_snapshot(
+                                                        Topic::Depth,
+                                                        &key,
+                                                        &bytes,
+                                                    );
                                                 }
                                                 // Publish rkyv OrderBook snapshot via key-based fanout for precise routing
-                                                if let Err(e) = self.bus.publish_orderbook_for_key(&key, ob).await {
+                                                if let Err(e) = self
+                                                    .bus
+                                                    .publish_orderbook_for_key(&key, ob)
+                                                    .await
+                                                {
                                                     error!(target: "projectx.ws", "failed to publish OrderBook: {:?}", e);
                                                 }
-
                                             }
                                         } else {
                                             info!(target: "projectx.ws", "GatewayDepth: invalid instrument in args: {}", instr_str);
@@ -833,7 +929,7 @@ impl PxWebSocketClient {
                                     day_realized_pnl: dec!(0),
                                     open_pnl: dec!(0),
                                     ts_ns: Utc::now().timestamp_nanos_opt().unwrap_or(0),
-                                    can_trade: account.can_trade
+                                    can_trade: account.can_trade,
                                 };
                                 let batch = AccountDeltaBatch {
                                     topic: tt_types::keys::Topic::AccountEvt,
