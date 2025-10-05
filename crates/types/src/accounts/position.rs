@@ -4,7 +4,7 @@ use crate::securities::symbols::Instrument;
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use rust_decimal::Decimal;
 use rust_decimal::prelude::FromPrimitive;
-use ahash::AHashMap;
++use ahash::AHashMap;
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone)]
 pub struct Lot {

@@ -166,7 +166,10 @@ mod tests {
     #[test]
     fn writer_initializes_header_and_writes() {
         // Use a unique temp name to avoid collisions
-        let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let name = format!("ttshm.test.{}", ts);
         let size = 4096usize;
         let mut w = ShmWriter::new(&name, size).expect("create shm");
