@@ -2672,8 +2672,10 @@ dependencies = [
  "ahash 0.8.12",
  "anyhow",
  "async-trait",
+ "bytes",
  "criterion",
  "dashmap",
+ "futures-util",
  "hdrhistogram",
  "rand 0.8.5",
  "tempfile",
@@ -2727,20 +2729,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tt-router"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bytes",
- "dashmap",
- "futures-util",
- "tokio",
- "tokio-util",
- "tracing",
- "tt-types",
-]
-
-[[package]]
 name = "tt-server"
 version = "0.1.0"
 dependencies = [
@@ -2777,7 +2765,6 @@ dependencies = [
  "tracing-subscriber",
  "tt-bus",
  "tt-provider",
- "tt-router",
  "tt-types",
  "ustr",
  "zeroize",

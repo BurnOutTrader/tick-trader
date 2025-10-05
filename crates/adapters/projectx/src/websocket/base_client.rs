@@ -5,6 +5,7 @@ use tokio_tungstenite::tungstenite;
 use tokio_tungstenite::tungstenite::{Message, http};
 
 #[derive(Debug, Clone)]
+#[allow(unused)]
 pub struct WebSocketConfig {
     pub url: String,
     pub headers: Vec<(String, String)>,

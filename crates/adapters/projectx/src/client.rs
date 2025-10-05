@@ -6,7 +6,7 @@ use ahash::AHashMap;
 use async_trait::async_trait;
 use provider::traits::{
     CommandAck, ConnectionState, DisconnectReason, ExecutionProvider, MarketDataProvider,
-    ProviderParams, ProviderSessionSpec,
+    ProviderSessionSpec,
 };
 use std::collections::HashMap;
 use std::str::FromStr;

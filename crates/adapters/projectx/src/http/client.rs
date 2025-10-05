@@ -7,7 +7,6 @@ use std::str::FromStr;
 use std::{sync::Arc, time::Duration};
 use tokio::sync::RwLock;
 use tt_types::accounts::account::{AccountName, AccountSnapShot};
-use tt_types::keys::ProviderId;
 use tt_types::providers::{ProjectXTenant, ProviderKind};
 use tt_types::securities::futures_helpers::extract_root;
 use tt_types::securities::security::FuturesContract;

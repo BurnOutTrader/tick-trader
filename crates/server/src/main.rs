@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use tt_router::Router;
 use std::io;
 #[cfg(target_os = "linux")]
 use std::os::fd::FromRawFd;
@@ -7,6 +6,7 @@ use std::os::fd::FromRawFd;
 use std::os::unix::net::UnixListener as StdUnixListener;
 use std::path::Path;
 use tokio::net::UnixListener;
+use tt_bus::Router;
 
 #[cfg(target_os = "linux")]
 pub fn bind_uds(path: &str) -> io::Result<UnixListener> {

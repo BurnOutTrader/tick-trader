@@ -1,7 +1,6 @@
 use ahash::AHashMap;
 use async_trait::async_trait;
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::Instant;
 use tt_types::keys::{AccountKey, SymbolKey, Topic};
 use tt_types::providers::{ProjectXTenant, ProviderKind, RithmicSystem};

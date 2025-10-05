@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 use std::hash::Hash;
 use strum_macros::Display;
-use zeroize::{Zeroize, ZeroizeOnDrop};
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
 #[rkyv(compare(PartialEq), derive(Debug))]
@@ -72,6 +71,7 @@ impl RithmicSystem {
 }
 
 #[derive(Deserialize)]
+#[allow(unused)]
 pub struct RithmicCredentials {
     pub(crate) user: String,
     pub(crate) server_name: RithmicServer,

@@ -4,6 +4,7 @@ use tt_types::order_models::enums::{OrderEventType, OrderType};
 /// DOM type for depth/DOM events
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[repr(i32)]
+#[allow(unused)]
 pub enum DomType {
     Unknown = 0,
     Ask = 1,
@@ -17,14 +18,6 @@ pub enum DomType {
     NewBestBid = 9,
     NewBestAsk = 10,
     Fill = 11,
-}
-
-/// Trade log type for market trades
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Serialize, Deserialize)]
-#[repr(i32)]
-pub enum TradeLogType {
-    Buy = 0,
-    Sell = 1,
 }
 
 /// Position type for positions
@@ -150,13 +143,6 @@ pub struct GatewayTrade {
     pub timestamp: String,
     pub r#type: i32,
     pub volume: i64,
-}
-
-/// A minimal ProjectX websocket error payload for surfacing client/server errors
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct PxWebSocketError {
-    pub code: Option<String>,
-    pub message: String,
 }
 
 pub fn map_order_type(order_type: i32) -> OrderType {
