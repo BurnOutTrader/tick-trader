@@ -5,7 +5,10 @@ use std::os::fd::FromRawFd;
 #[cfg(target_os = "linux")]
 use std::os::unix::net::UnixListener as StdUnixListener;
 use std::path::Path;
+use dotenvy::dotenv;
 use tokio::net::UnixListener;
+use tracing::level_filters::LevelFilter;
+use tracing_subscriber::EnvFilter;
 use tt_bus::Router;
 
 #[cfg(target_os = "linux")]
@@ -86,9 +89,11 @@ pub fn bind_uds(path: &str) -> io::Result<UnixListener> {
     }
 }
 
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt()
+        .with_max_level(LevelFilter::INFO)
+        .init();
     // Allow overriding the UDS path via env. Defaults:
     // - Linux: abstract namespace '@tick-trader.sock' (no filesystem artifact)
     // - Others: filesystem path '/tmp/tick-trader.sock'
@@ -98,6 +103,7 @@ async fn main() -> anyhow::Result<()> {
     let default_addr: &str = "/tmp/tick-trader.sock";
     // Load environment from .env if present
     let _ = dotenvy::dotenv();
+    dotenv().ok();
     let path = std::env::var("TT_BUS_ADDR").unwrap_or_else(|_| default_addr.to_string());
     let listener = bind_uds(&path)?;
     eprintln!("tick-trader server listening on UDS: {}", path);

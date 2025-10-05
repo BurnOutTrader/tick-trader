@@ -186,6 +186,12 @@ pub struct UnsubscribeAll {
     pub reason: Option<String>,
 }
 
+// Client-initiated disconnect request (ask the router to kick this connection)
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq)]
+pub struct Kick {
+    pub reason: Option<String>,
+}
+
 // Key-based unsubscribe and flow credit
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq, Eq)]
 pub struct UnsubscribeKey {
@@ -220,6 +226,8 @@ pub enum Request {
     FlowCreditKey(FlowCreditKey),
     Ping(Ping),
     UnsubscribeAll(UnsubscribeAll),
+    // Client-initiated disconnect (request to be kicked)
+    Kick(Kick),
     // Provider commands initiated by clients (legacy; to be removed)
     MdSubscribe(MdSubscribeCmd),
     MdUnsubscribe(MdUnsubscribeCmd),
@@ -243,7 +251,7 @@ pub enum Response {
     OrdersBatch(OrdersBatch),
     PositionsBatch(PositionsBatch),
     AccountDeltaBatch(AccountDeltaBatch),
-    SubscribeResponse(Topic),
+    SubscribeResponse{topic: Topic, success: bool},
     UnsubscribeResponse(Topic),
     // Single items (for completeness; bus generally batches)
     Tick(Tick),

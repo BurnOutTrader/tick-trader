@@ -2,6 +2,7 @@ use ahash::AHashMap;
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::time::Instant;
+use dotenvy::dotenv;
 use tt_types::keys::{AccountKey, SymbolKey, Topic};
 use tt_types::providers::{ProjectXTenant, ProviderKind, RithmicSystem};
 
@@ -23,6 +24,10 @@ pub struct ProviderSessionSpec {
 }
 impl ProviderSessionSpec {
     pub fn from_env() -> Self {
+        // Ensure .env is loaded for any binary or test that didn't call dotenv explicitly
+        let _ = dotenvy::dotenv();
+        dotenv().ok();
+
         let mut user_names: HashMap<ProviderKind, String> = HashMap::new();
         let mut passwords: HashMap<ProviderKind, String> = HashMap::new();
         let mut api_keys: HashMap<ProviderKind, String> = HashMap::new();

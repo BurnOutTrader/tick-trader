@@ -41,18 +41,29 @@ impl PXClient {
         session: ProviderSessionSpec,
         bus: Arc<Router>,
     ) -> anyhow::Result<Self> {
-        let user_name = session
-            .user_names
-            .get(&kind)
-            .expect(">&user_name credential to be set in the session credentials");
-        let api_key = session.api_keys.get(&kind).expect(
-            "PXClient requires a 'api_key' credential to be set in the session credentials",
-        );
+        let user_name: String = match session.user_names.get(&kind) {
+            Some(s) => s.clone(),
+            None => {
+                anyhow::bail!(
+                    "PXClient missing username for {:?}. Ensure PX_{{TENANT}}_USERNAME is set for this provider.",
+                    kind
+                )
+            }
+        };
+        let api_key: String = match session.api_keys.get(&kind) {
+            Some(s) => s.clone(),
+            None => {
+                anyhow::bail!(
+                    "PXClient missing api_key for {:?}. Ensure PX_{{TENANT}}_APIKEY is set for this provider.",
+                    kind
+                )
+            }
+        };
         let firm = match kind {
             ProviderKind::ProjectX(firm) => firm,
             _ => anyhow::bail!("PXClient requires a ProjectX provider kind"),
         };
-        let px_credentials = PxCredential::new(firm, user_name.clone(), api_key.clone());
+        let px_credentials = PxCredential::new(firm, user_name, api_key);
         let http = PxHttpClient::new(px_credentials, None, None, None, None)?;
         let base = http.inner.rtc_base();
         let token = http.inner.token_string().await;

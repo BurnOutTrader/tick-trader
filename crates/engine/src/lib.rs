@@ -277,7 +277,7 @@ pub trait Strategy: Send + Sync + 'static {
     async fn on_orders_batch(&self, _b: OrdersBatch) {}
     async fn on_positions_batch(&self, _b: PositionsBatch) {}
     async fn on_account_delta_batch(&self, _b: AccountDeltaBatch) {}
-    async fn on_subscribe(&self, topic: Topic) {}
+    async fn on_subscribe(&self, topic: Topic, success: bool) {}
     async fn on_unsubscribe(&self, topic: Topic) {}
 }
 
@@ -409,8 +409,8 @@ impl EngineRuntime {
                     Response::Pong(_) | Response::InstrumentsResponse(_) | Response::InstrumentsMapResponse(_)
                     | Response::VendorData(_) | Response::Tick(_) | Response::Quote(_) | Response::Bar(_)
                     | Response::AnnounceShm(_) => {}
-                    Response::SubscribeResponse(r) => {
-                        strategy.on_subscribe(r).await;
+                    Response::SubscribeResponse{topic, success} => {
+                        strategy.on_subscribe(topic, success).await;
                     }
                     Response::UnsubscribeResponse(r) => {
                         strategy.on_unsubscribe(r).await;
