@@ -23,7 +23,7 @@ use tt_types::accounts::account::{AccountName, AccountSnapShot};
 use tt_types::accounts::events::{
     AccountDelta, ClientOrderId, OrderUpdate, PositionDelta, ProviderOrderId,
 };
-use tt_types::base_data::{Price, Side, Tick, Volume};
+use tt_types::base_data::{Price, Side, Tick, Volume, OrderBook, BookLevel};
 use tt_types::providers::ProjectXTenant;
 use tt_types::securities::futures_helpers::extract_root;
 use tt_types::securities::symbols::Instrument;
@@ -95,6 +95,17 @@ pub struct PxWebSocketClient {
     pending_orders: Arc<DashMap<Instrument, GatewayUserOrder>>,
 
     trades: Arc<DashMap<Instrument, Vec<GatewayUserTrade>>>,
+}
+
+pub fn parse_px_instrument(input: &str) -> String {
+    let mut parts: Vec<&str> = input.split('.').collect();
+    if parts.len() >= 2 {
+        let expiry = parts.pop().unwrap();
+        let root = parts.pop().unwrap();
+        format!("{}{}", root, expiry)
+    } else {
+        input.to_string()
+    }
 }
 
 impl PxWebSocketClient {
@@ -547,7 +558,7 @@ impl PxWebSocketClient {
                                         serde_json::from_value::<GatewayQuote>(data_val.to_owned())
                                     {
                                         if let Ok(instrument) =
-                                            Instrument::from_str(px_quote.symbol.as_str())
+                                            Instrument::from_str(&parse_px_instrument(px_quote.symbol.as_str()))
                                         {
                                             let symbol = extract_root(&instrument);
                                             let bid = Price::from_f64(px_quote.best_bid)
@@ -605,7 +616,7 @@ impl PxWebSocketClient {
                                         serde_json::from_value::<GatewayTrade>(data_val.to_owned())
                                     {
                                         if let Ok(instrument) =
-                                            Instrument::from_str(px_trade.symbol_id.as_str())
+                                            Instrument::from_str(&parse_px_instrument(px_trade.symbol_id.as_str()))
                                         {
                                             let symbol = extract_root(&instrument);
                                             let price = match Price::from_f64(px_trade.price) {
@@ -666,7 +677,80 @@ impl PxWebSocketClient {
                                 // Extract args and handle payload which may be an array of up to 10 levels
                                 let args_opt = val.get("arguments").and_then(|a| a.as_array());
                                 if let Some(args) = args_opt {
-                                    info!("GatewayDepth: {:?}", args);
+                                    let (instrument_opt, data_val) = if args.len() >= 2 {
+                                        (args.get(0).and_then(|v| v.as_str()).map(|s| s.to_string()), &args[1])
+                                    } else {
+                                        (args.get(0).and_then(|v| v.as_str()).map(|s| s.to_string()), args.get(0).unwrap_or(&Value::Null))
+                                    };
+
+                                    // Resolve instrument from the first argument if present
+                                    if let Some(instr_str) = instrument_opt {
+                                        if let Ok(instrument) = Instrument::from_str(&parse_px_instrument(instr_str.as_str())) {
+                                            let symbol = extract_root(&instrument);
+
+                                            // Normalize payload to a vector of depth items
+                                            let mut items: Vec<models::GatewayDepth> = Vec::new();
+                                            if data_val.is_array() {
+                                                if let Some(arr) = data_val.as_array() {
+                                                    for v in arr {
+                                                        if let Ok(it) = serde_json::from_value::<models::GatewayDepth>(v.clone()) {
+                                                            items.push(it);
+                                                        }
+                                                    }
+                                                }
+                                            } else if data_val.is_object() {
+                                                if let Ok(it) = serde_json::from_value::<models::GatewayDepth>(data_val.clone()) {
+                                                    items.push(it);
+                                                }
+                                            }
+
+                                            if !items.is_empty() {
+                                                let mut bids: Vec<BookLevel> = Vec::new();
+                                                let mut asks: Vec<BookLevel> = Vec::new();
+                                                let mut latest_ts: Option<DateTime<Utc>> = None;
+
+                                                for it in items.into_iter() {
+                                                    let price = match Price::from_f64(it.price) { Some(p) => p, None => continue };
+                                                    let vol_i64 = if it.current_volume != 0 { it.current_volume } else { it.volume };
+                                                    let volume = match Volume::from_i64(vol_i64) { Some(v) => v, None => continue };
+                                                    let ts = DateTime::<Utc>::from_str(it.timestamp.as_str()).unwrap_or_else(|_| Utc::now());
+                                                    if latest_ts.map(|t| ts > t).unwrap_or(true) { latest_ts = Some(ts); }
+
+                                                    match it.r#type {
+                                                        1 | 3 | 10 => { // Ask/BestAsk/NewBestAsk
+                                                            asks.push(BookLevel { price, volume, level: 0 });
+                                                        }
+                                                        2 | 4 | 9 => { // Bid/BestBid/NewBestBid
+                                                            bids.push(BookLevel { price, volume, level: 0 });
+                                                        }
+                                                        _ => { /* ignore other DOM types in orderbook snapshot */ }
+                                                    }
+                                                }
+
+                                                // Sort levels: bids desc (best first), asks asc (best first)
+                                                bids.sort_by(|a, b| b.price.cmp(&a.price));
+                                                asks.sort_by(|a, b| a.price.cmp(&b.price));
+
+                                                let ob = OrderBook {
+                                                    symbol,
+                                                    instrument,
+                                                    bids,
+                                                    asks,
+                                                    time: latest_ts.unwrap_or_else(|| Utc::now()),
+                                                };
+
+                                                // Publish rkyv OrderBook snapshot with high-priority throughput (like ticks/quotes)
+                                                if let Err(e) = self.bus.publish_orderbook(ob).await {
+                                                    error!(target: "projectx.ws", "failed to publish OrderBook: {:?}", e);
+                                                }
+
+                                            }
+                                        } else {
+                                            info!(target: "projectx.ws", "GatewayDepth: invalid instrument in args: {}", instr_str);
+                                        }
+                                    } else {
+                                        info!(target: "projectx.ws", "GatewayDepth: missing instrument in arguments");
+                                    }
                                 }
                             }
                             // User hub events
@@ -794,7 +878,7 @@ impl PxWebSocketClient {
                                 };
 
                                 let instrument_id = match Instrument::from_str(
-                                    position.contract_id.as_str(),
+                                    &parse_px_instrument(position.contract_id.as_str()),
                                 ) {
                                     Ok(i) => i,
                                     Err(e) => {
@@ -848,7 +932,7 @@ impl PxWebSocketClient {
                                     };
 
                                 let instrument_id = match Instrument::from_str(
-                                    trade.contract_id.as_str(),
+                                    &parse_px_instrument(trade.contract_id.as_str()),
                                 ) {
                                     Ok(i) => i,
                                     Err(e) => {

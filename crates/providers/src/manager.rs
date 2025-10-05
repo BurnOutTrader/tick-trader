@@ -54,9 +54,9 @@ impl ProviderManager {
     pub async fn ensure_pair(
         &self,
         kind: ProviderKind,
-    ) -> Result<(Arc<dyn MarketDataProvider>, Arc<dyn ExecutionProvider>)> {
+    ) -> anyhow::Result<(())> {
         if let (Some(m), Some(e)) = (self.md.get(&kind), self.ex.get(&kind)) {
-            return Ok((m.clone(), e.clone()));
+            return Ok(());
         }
         match kind {
             ProviderKind::ProjectX(_) => {
@@ -73,7 +73,7 @@ impl ProviderManager {
                 }
                 self.md.insert(kind, md.clone());
                 self.ex.insert(kind, ex.clone());
-                Ok((md, ex))
+                Ok(())
             }
             ProviderKind::Rithmic(_) => anyhow::bail!("Rithmic not implemented"),
         }

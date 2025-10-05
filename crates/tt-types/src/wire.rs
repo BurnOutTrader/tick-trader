@@ -76,6 +76,13 @@ pub struct BarBatch {
     pub bars: Vec<Candle>,
 }
 
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq)]
+pub struct OrderBookBatch {
+    pub topic: Topic,
+    pub seq: u64,
+    pub books: Vec<crate::base_data::OrderBook>,
+}
+
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq, Eq)]
 #[rkyv(compare(PartialEq), derive(Debug))]
 pub struct VendorData {
@@ -247,12 +254,13 @@ pub enum Response {
     TickBatch(TickBatch),
     QuoteBatch(QuoteBatch),
     BarBatch(BarBatch),
+    OrderBookBatch(OrderBookBatch),
     VendorData(VendorData),
     OrdersBatch(OrdersBatch),
     PositionsBatch(PositionsBatch),
     AccountDeltaBatch(AccountDeltaBatch),
-    SubscribeResponse{topic: Topic, success: bool},
-    UnsubscribeResponse(Topic),
+    SubscribeResponse{topic: Topic, instrument: Instrument, success: bool},
+    UnsubscribeResponse{topic: Topic, instrument: Instrument},
     // Single items (for completeness; bus generally batches)
     Tick(Tick),
     Quote(Bbo),

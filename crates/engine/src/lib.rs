@@ -278,8 +278,8 @@ pub trait Strategy: Send + Sync + 'static {
     async fn on_orders_batch(&self, _b: OrdersBatch) {}
     async fn on_positions_batch(&self, _b: PositionsBatch) {}
     async fn on_account_delta_batch(&self, _b: AccountDeltaBatch) {}
-    async fn on_subscribe(&self, topic: Topic, success: bool) {}
-    async fn on_unsubscribe(&self, topic: Topic) {}
+    async fn on_subscribe(&self, instrument: Instrument, topic: Topic, success: bool) {}
+    async fn on_unsubscribe(&self, instrument: Instrument, topic: Topic) {}
 }
 
 struct EngineAccountsState {
@@ -384,6 +384,9 @@ impl EngineRuntime {
                     Response::BarBatch(BarBatch { bars, .. }) => {
                         for b in bars { strategy.on_bar(b).await; }
                     }
+                    Response::OrderBookBatch(ob) => {
+                        for book in ob.books { strategy.on_depth(book).await; }
+                    }
                     Response::OrdersBatch(ob) => {
                         // Update engine account state cache then notify strategy
                         // Clone minimal to move into async call
@@ -410,11 +413,11 @@ impl EngineRuntime {
                     Response::Pong(_) | Response::InstrumentsResponse(_) | Response::InstrumentsMapResponse(_)
                     | Response::VendorData(_) | Response::Tick(_) | Response::Quote(_) | Response::Bar(_)
                     | Response::AnnounceShm(_) => {}
-                    Response::SubscribeResponse{topic, success} => {
-                        strategy.on_subscribe(topic, success).await;
+                    Response::SubscribeResponse{topic, instrument, success} => {
+                        strategy.on_subscribe(instrument, topic, success).await;
                     }
-                    Response::UnsubscribeResponse(r) => {
-                        strategy.on_unsubscribe(r).await;
+                    Response::UnsubscribeResponse{topic, instrument} => {
+                        strategy.on_unsubscribe(instrument, topic).await;
                     }
                 }
             }

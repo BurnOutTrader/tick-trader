@@ -13,6 +13,8 @@ use tt_types::keys::Topic;
 use tracing::{info, warn};
 use tt_engine::EngineRuntime;
 use tt_engine::Strategy;
+use tt_types::base_data::OrderBook;
+use tt_types::securities::symbols::Instrument;
 
 #[derive(Clone, Default)]
 struct TestStrategy;
@@ -32,6 +34,9 @@ impl Strategy for TestStrategy {
     async fn on_quote(&self, q: tt_types::base_data::Bbo) {
         println!("{:?}", q);
     }
+    async fn on_depth(&self, d: OrderBook) {
+        println!("{:?}", d);
+    }
     async fn on_bar(&self, b: tt_types::base_data::Candle) { }
     async fn on_orders_batch(&self, b: wire::OrdersBatch) {
         println!("{:?}", b);
@@ -42,10 +47,10 @@ impl Strategy for TestStrategy {
     async fn on_account_delta_batch(&self, b: wire::AccountDeltaBatch) {
         println!("{:?}", b);
     }
-    async fn on_subscribe(&self, topic: Topic, success: bool) {
+    async fn on_subscribe(&self, instrument: Instrument, topic: Topic, success: bool) {
         println!("{:?}: {}", topic, success);
     }
-    async fn on_unsubscribe(&self, topic: Topic) {
+    async fn on_unsubscribe(&self, instrument: Instrument, topic: Topic) {
         println!("{:?}", topic);
     }
 }
