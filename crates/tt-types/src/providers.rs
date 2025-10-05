@@ -1,8 +1,8 @@
-use std::fmt::Display;
-use std::hash::Hash;
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use serde::{Deserialize, Serialize};
-use strum_macros::{Display};
+use std::fmt::Display;
+use std::hash::Hash;
+use strum_macros::Display;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
@@ -10,7 +10,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 pub enum ProjectXTenant {
     Topstep,
     AlphaFutures,
-    Demo
+    Demo,
 }
 
 impl Display for ProjectXTenant {
@@ -66,11 +66,10 @@ impl RithmicSystem {
         match self {
             RithmicSystem::TopstepTrader => "topstep".to_string(),
             RithmicSystem::Apex => "apex".to_string(),
-            _ => unimplemented!()
+            _ => unimplemented!(),
         }
     }
 }
-
 
 #[derive(Deserialize)]
 pub struct RithmicCredentials {
@@ -111,7 +110,6 @@ impl RithmicCredentials {
     }
 }
 
-
 #[derive(
     Serialize,
     Deserialize,
@@ -124,7 +122,9 @@ impl RithmicCredentials {
     Ord,
     Display,
     Copy,
-    Archive, RkyvDeserialize, RkyvSerialize,
+    Archive,
+    RkyvDeserialize,
+    RkyvSerialize,
 )]
 #[rkyv(compare(PartialEq), derive(Debug))]
 pub enum RithmicSystem {
@@ -189,7 +189,19 @@ impl RithmicSystem {
 }
 
 #[derive(
-    Serialize, Deserialize, Clone, Eq, PartialEq, Debug, Hash, PartialOrd, Ord, Display, Archive, RkyvDeserialize, RkyvSerialize,
+    Serialize,
+    Deserialize,
+    Clone,
+    Eq,
+    PartialEq,
+    Debug,
+    Hash,
+    PartialOrd,
+    Ord,
+    Display,
+    Archive,
+    RkyvDeserialize,
+    RkyvSerialize,
 )]
 #[rkyv(compare(PartialEq), derive(Debug))]
 pub enum RithmicServer {
@@ -208,7 +220,7 @@ pub enum RithmicServer {
     Test,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq,Copy, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
 #[rkyv(compare(PartialEq), derive(Debug))]
 pub enum ProviderKind {
     ProjectX(ProjectXTenant),

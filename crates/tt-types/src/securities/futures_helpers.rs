@@ -1,9 +1,9 @@
-use std::borrow::Cow;
+use crate::base_data::Price;
+use crate::securities::symbols::Instrument;
 use chrono::{Datelike, Duration, Months, NaiveDate, NaiveTime};
 use rust_decimal::Decimal;
 use rust_decimal::prelude::FromPrimitive;
-use crate::base_data::Price;
-use crate::securities::symbols::Instrument;
+use std::borrow::Cow;
 
 #[inline]
 fn sanitize_code(s: &str) -> Cow<'_, str> {
@@ -57,7 +57,10 @@ fn unix_nanos_midnight_utc(date: NaiveDate) -> u64 {
 
 /// Compute activation (u64 ns) from a contract code with a chosen policy.
 /// Returns `None` if the code cannot be parsed.
-pub fn activation_ns_from_code_with_policy(instrument: &Instrument, policy: ActivationPolicy) -> Option<u64> {
+pub fn activation_ns_from_code_with_policy(
+    instrument: &Instrument,
+    policy: ActivationPolicy,
+) -> Option<u64> {
     let expiry_month_start = parse_expiry_from_instrument(&instrument)?;
     let activation_date = match policy {
         ActivationPolicy::MonthsBefore(m) => {
@@ -146,7 +149,6 @@ pub fn parse_expiry_from_instrument(instrument: &Instrument) -> Option<NaiveDate
 
     NaiveDate::from_ymd_opt(year, month, 1)
 }
-
 
 #[allow(dead_code)]
 /// Extract a futures **root** from a vendor symbol code.
@@ -259,16 +261,22 @@ pub fn extract_month_year(instrument: &Instrument) -> Option<(char, u8)> {
         i -= 1;
         year_digits += 1;
     }
-    if year_digits == 0 || i == 0 { return None; }
+    if year_digits == 0 || i == 0 {
+        return None;
+    }
 
     // Preceding char is the month
     let month_ch = s.as_bytes()[i - 1] as char;
     // Validate month
-    if month_from_code(month_ch).is_none() { return None; }
+    if month_from_code(month_ch).is_none() {
+        return None;
+    }
 
     // Parse year (keep as 1–2 digit code, not a full year)
     let year_slice = &s[i..];
-    if year_slice.is_empty() || year_slice.len() > 2 { return None; }
+    if year_slice.is_empty() || year_slice.len() > 2 {
+        return None;
+    }
     let year_u8 = year_slice.parse::<u8>().ok()?;
     Some((month_ch, year_u8))
 }

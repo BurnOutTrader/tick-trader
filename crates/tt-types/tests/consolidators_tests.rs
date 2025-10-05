@@ -2,7 +2,10 @@ use chrono::{Duration, TimeZone, Utc};
 use rust_decimal::Decimal;
 use tokio::sync::broadcast;
 use tt_types::base_data::{Bbo, Candle, Exchange, Feed, Resolution, Side, Tick};
-use tt_types::consolidators::{BboToCandlesConsolidator, CandlesToCandlesConsolidator, Consolidator, TicksToCandlesConsolidator, TicksToTickBarsConsolidator};
+use tt_types::consolidators::{
+    BboToCandlesConsolidator, CandlesToCandlesConsolidator, Consolidator,
+    TicksToCandlesConsolidator, TicksToTickBarsConsolidator,
+};
 use tt_types::securities::symbols::Instrument;
 
 fn d(v: i64) -> Decimal {
@@ -147,11 +150,17 @@ async fn ticks_to_m1_single_bar() {
 async fn ticks_to_tickbars_two_bars() {
     let symbol = "MNQZ5";
     let (tx_in, rx_in) = broadcast::channel::<Tick>(64);
-    let cons = TicksToTickBarsConsolidator::new(3, rx_in, symbol.to_string(), Exchange::CME, Instrument::try_from(symbol).unwrap(),);
+    let cons = TicksToTickBarsConsolidator::new(
+        3,
+        rx_in,
+        symbol.to_string(),
+        Exchange::CME,
+        Instrument::try_from(symbol).unwrap(),
+    );
     let mut rx_out = cons.subscribe(Feed::TickBars {
         symbol: symbol.to_string(),
         exchange: Exchange::CME,
-        ticks: 3
+        ticks: 3,
     });
 
     let base = Utc

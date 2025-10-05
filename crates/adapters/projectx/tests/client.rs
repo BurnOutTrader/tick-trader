@@ -1,6 +1,6 @@
 use dotenvy::dotenv;
-use projectx::http::inner_client::PxHttpInnerClient;
 use projectx::http::credentials::PxCredential;
+use projectx::http::inner_client::PxHttpInnerClient;
 
 #[ignore]
 #[tokio::test]
@@ -15,7 +15,11 @@ async fn test_authenticate_returns_token() {
 
     // read token for assertions
     let token_guard = http.token_string().await;
-    let token = token_guard.read().await.clone().expect("Token guard poisoned");
+    let token = token_guard
+        .read()
+        .await
+        .clone()
+        .expect("Token guard poisoned");
 
     // Basic sanity checks
     assert!(!token.is_empty(), "Token was empty");
@@ -26,7 +30,6 @@ async fn test_authenticate_returns_token() {
         token
     );
 }
-
 
 #[ignore]
 #[tokio::test]
@@ -39,12 +42,15 @@ async fn auth_key_smoke_test() {
     http.authenticate().await.expect("Failed to auth");
 
     let token_guard = http.token_string().await;
-    let token = token_guard.read().await.clone().expect("Token guard poisoned");
+    let token = token_guard
+        .read()
+        .await
+        .clone()
+        .expect("Token guard poisoned");
     assert!(!token.is_empty());
     assert!(token.len() > 10);
     assert!(token.starts_with("eyJ"));
 }
-
 
 #[ignore]
 #[tokio::test]
@@ -59,13 +65,21 @@ async fn validate_returns_new_token() {
 
     #[allow(unused)]
     let token_guard = http.token_string().await;
-    let _ = token_guard.read().await.clone().expect("Token guard poisoned");
-    
+    let _ = token_guard
+        .read()
+        .await
+        .clone()
+        .expect("Token guard poisoned");
+
     // rotate/validate (now Result<()>)
     http.validate().await.expect("validate");
 
     let token_guard = http.token_string().await;
-    let tok2 = token_guard.read().await.clone().expect("Token guard poisoned");
+    let tok2 = token_guard
+        .read()
+        .await
+        .clone()
+        .expect("Token guard poisoned");
 
     assert!(!tok2.is_empty(), "empty token after validate");
     // Depending on tenant, token may or may not change; if it should rotate:

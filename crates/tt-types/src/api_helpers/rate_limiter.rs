@@ -1,12 +1,12 @@
+use chrono::Duration as ChronoDuration;
+use futures::StreamExt;
 use std::{
     collections::{HashMap, VecDeque},
     hash::Hash,
     sync::Mutex,
     time::Duration as StdDuration,
 };
-use futures::StreamExt;
-use tokio::time::{sleep, Instant as TokioInstant};
-use chrono::Duration as ChronoDuration;
+use tokio::time::{Instant as TokioInstant, sleep};
 
 /// A per-key sliding-window rate limiter using the system (tokio) clock.
 ///
@@ -186,7 +186,10 @@ mod tests {
     async fn per_key_limits_independent() {
         let rl = RateLimiter::new_with_limits(
             None,
-            vec![("a".to_string(), limit(1, 1)), ("b".to_string(), limit(2, 1))],
+            vec![
+                ("a".to_string(), limit(1, 1)),
+                ("b".to_string(), limit(2, 1)),
+            ],
         );
         // a allows 1
         assert!(rl.check_key(&"a".to_string()).is_ok());
@@ -226,7 +229,10 @@ mod tests {
     async fn await_keys_ready_for_multiple_windows() {
         let rl = RateLimiter::new_with_limits(
             None,
-            vec![("a".to_string(), limit(1, 1)), ("b".to_string(), limit(1, 2))],
+            vec![
+                ("a".to_string(), limit(1, 1)),
+                ("b".to_string(), limit(1, 2)),
+            ],
         );
         let _ = rl.check_key(&"a".to_string());
         let _ = rl.check_key(&"b".to_string());

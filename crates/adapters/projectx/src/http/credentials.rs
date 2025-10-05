@@ -1,6 +1,6 @@
 use std::fmt::Debug;
-use ustr::Ustr;
 use tt_types::providers::ProjectXTenant;
+use ustr::Ustr;
 
 /// ProjectX credentials used to authenticate HTTP requests
 ///

@@ -1,5 +1,5 @@
-use std::time::Duration;
 use std::marker::PhantomData;
+use std::time::Duration;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct RetryConfig {
@@ -16,7 +16,10 @@ pub struct RetryConfig {
 impl RetryConfig {
     pub fn validate(&self) -> anyhow::Result<()> {
         anyhow::ensure!(self.backoff_factor >= 1.0, "backoff_factor must be >= 1.0");
-        anyhow::ensure!(self.max_delay_ms >= self.initial_delay_ms, "max_delay_ms must be >= initial_delay_ms");
+        anyhow::ensure!(
+            self.max_delay_ms >= self.initial_delay_ms,
+            "max_delay_ms must be >= initial_delay_ms"
+        );
         Ok(())
     }
 }
@@ -83,7 +86,8 @@ impl ExponentialBackoff {
             (r % (self.jitter_ms as u64 + 1)) as u64
         };
 
-        base.saturating_add(Duration::from_millis(jitter)).min(self.max)
+        base.saturating_add(Duration::from_millis(jitter))
+            .min(self.max)
     }
 }
 
@@ -243,7 +247,8 @@ mod tests {
             2.0,
             0,
             true,
-        ).unwrap();
+        )
+        .unwrap();
         // First call should be zero if immediate_first
         assert_eq!(backoff.next_duration(), Duration::from_millis(0));
         // Next call should be initial
@@ -267,7 +272,8 @@ mod tests {
             2.0,
             10,
             false,
-        ).unwrap();
+        )
+        .unwrap();
         let d1 = backoff.next_duration();
         let d2 = backoff.next_duration();
         let d3 = backoff.next_duration();

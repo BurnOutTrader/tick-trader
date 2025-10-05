@@ -1,9 +1,9 @@
+use reqwest::Method;
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use std::collections::HashMap;
 use std::time::Duration;
 use tt_types::api_helpers::rate_limiter::RateLimiter;
 use ustr::Ustr;
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
-use reqwest::Method;
 
 // Lightweight reqwest-based HTTP client with per-key rate limiting
 #[derive(Clone, Debug)]
@@ -25,7 +25,10 @@ impl SimpleHttp {
     ) -> Self {
         let mut headers = HeaderMap::new();
         for (k, v) in default_headers {
-            if let (Ok(name), Ok(val)) = (HeaderName::from_bytes(k.as_bytes()), HeaderValue::from_str(&v)) {
+            if let (Ok(name), Ok(val)) = (
+                HeaderName::from_bytes(k.as_bytes()),
+                HeaderValue::from_str(&v),
+            ) {
                 headers.insert(name, val);
             }
         }
@@ -34,16 +37,21 @@ impl SimpleHttp {
             builder = builder.timeout(Duration::from_secs(secs));
         }
         let client = builder.build().expect("failed to build reqwest client");
-        Self { client, rate_limiter }
+        Self {
+            client,
+            rate_limiter,
+        }
     }
 
     async fn take_slots(&self, keys: &[Ustr]) {
-        if keys.is_empty() { return; }
+        if keys.is_empty() {
+            return;
+        }
         loop {
             let mut waits = Vec::new();
             for k in keys {
                 match self.rate_limiter.check_key(k) {
-                    Ok(()) => {},
+                    Ok(()) => {}
                     Err(d) => waits.push(d),
                 }
             }
@@ -72,7 +80,10 @@ impl SimpleHttp {
         if let Some(hs) = headers {
             let mut hmap = HeaderMap::new();
             for (k, v) in hs {
-                if let (Ok(name), Ok(val)) = (HeaderName::from_bytes(k.as_bytes()), HeaderValue::from_str(&v)) {
+                if let (Ok(name), Ok(val)) = (
+                    HeaderName::from_bytes(k.as_bytes()),
+                    HeaderValue::from_str(&v),
+                ) {
                     hmap.insert(name, val);
                 }
             }

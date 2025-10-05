@@ -1,30 +1,35 @@
+use crate::websocket::base_client::{WebSocketClient, WebSocketConfig};
+use crate::websocket::models;
+use crate::websocket::models::{
+    GatewayQuote, GatewayTrade, GatewayUserAccount, GatewayUserOrder, GatewayUserPosition,
+    GatewayUserTrade,
+};
+use chrono::{DateTime, Utc};
+use dashmap::DashMap;
+use futures_util::StreamExt;
+use rust_decimal::Decimal;
+use rust_decimal::prelude::FromPrimitive;
+use rust_decimal_macros::dec;
+use serde_json::Value;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use tokio::sync::{mpsc, RwLock};
-use serde_json::Value;
-use dashmap::DashMap;
-use tokio_tungstenite::tungstenite::Message;
-use chrono::{DateTime, Utc};
-use tracing::{error, info};
-use rust_decimal::Decimal;
 use tokio::sync::watch::Receiver as WatchReceiver;
+use tokio::sync::{RwLock, mpsc};
 use tokio::task::JoinHandle;
-use futures_util::StreamExt;
-use rust_decimal::prelude::FromPrimitive;
-use rust_decimal_macros::dec;
+use tokio_tungstenite::tungstenite::Message;
+use tracing::{error, info};
 use tt_bus::MessageBus;
 use tt_types::accounts::account::{AccountName, AccountSnapShot};
-use tt_types::accounts::events::{AccountDelta, OrderUpdate, PositionDelta, ProviderOrderId, ClientOrderId};
-use tt_types::wire::{OrdersBatch, PositionsBatch, AccountDeltaBatch};
+use tt_types::accounts::events::{
+    AccountDelta, ClientOrderId, OrderUpdate, PositionDelta, ProviderOrderId,
+};
 use tt_types::base_data::{Price, Side, Tick, Volume};
 use tt_types::keys::KeyId;
 use tt_types::providers::ProjectXTenant;
 use tt_types::securities::futures_helpers::extract_root;
 use tt_types::securities::symbols::Instrument;
-use crate::websocket::base_client::{WebSocketClient, WebSocketConfig};
-use crate::websocket::models;
-use crate::websocket::models::{GatewayQuote, GatewayTrade, GatewayUserAccount, GatewayUserOrder, GatewayUserPosition, GatewayUserTrade};
+use tt_types::wire::{AccountDeltaBatch, OrdersBatch, PositionsBatch};
 
 #[allow(unused)]
 /// Realtime client scaffold for ProjectX hubs
@@ -98,7 +103,12 @@ impl PxWebSocketClient {
     /// Create a new websocket client with optional bearer token
     /// token is a clone or the Arc<RwLock<Option<String>>> managed by the http client.
     /// If an update is made to the token, it will automatically be copied by the websocket client by way of arc.
-    pub fn new(base_url: impl Into<String>, bearer_token: Arc<RwLock<Option<String>>>, firm: ProjectXTenant, bus: Arc<MessageBus>) -> Self {
+    pub fn new(
+        base_url: impl Into<String>,
+        bearer_token: Arc<RwLock<Option<String>>>,
+        firm: ProjectXTenant,
+        bus: Arc<MessageBus>,
+    ) -> Self {
         // Dedicated per-hub message queues to avoid head-of-line blocking
         let (user_tx, mut user_rx) = mpsc::channel::<Value>(4096);
         let (market_tx, mut market_rx) = mpsc::channel::<Value>(4096);
@@ -205,31 +215,43 @@ impl PxWebSocketClient {
         // Abort user/market message processing tasks
         {
             let mut g = self.user_msg_task.lock().await;
-            if let Some(handle) = g.take() { handle.abort(); }
+            if let Some(handle) = g.take() {
+                handle.abort();
+            }
         }
         {
             let mut g = self.market_msg_task.lock().await;
-            if let Some(handle) = g.take() { handle.abort(); }
+            if let Some(handle) = g.take() {
+                handle.abort();
+            }
         }
 
         // Abort user/market reader tasks (socket readers)
         {
             let mut g = self.user_reader_task.lock().await;
-            if let Some(handle) = g.take() { handle.abort(); }
+            if let Some(handle) = g.take() {
+                handle.abort();
+            }
         }
         {
             let mut g = self.market_reader_task.lock().await;
-            if let Some(handle) = g.take() { handle.abort(); }
+            if let Some(handle) = g.take() {
+                handle.abort();
+            }
         }
 
         // Stop websocket writer tasks & drop clients
         {
             let mut g = self.user_ws.lock().await;
-            if let Some(client) = g.take() { client.kill().await; }
+            if let Some(client) = g.take() {
+                client.kill().await;
+            }
         }
         {
             let mut g = self.market_ws.lock().await;
-            if let Some(client) = g.take() { client.kill().await; }
+            if let Some(client) = g.take() {
+                client.kill().await;
+            }
         }
 
         // Mark disconnected
@@ -240,7 +262,10 @@ impl PxWebSocketClient {
     /// Connect to the user hub
     pub async fn connect_user(&self) -> anyhow::Result<()> {
         let url = self.user_hub_url().await;
-        let mut headers = vec![("User-Agent".to_string(), "nautilus-projectx/1.0".to_string())];
+        let mut headers = vec![(
+            "User-Agent".to_string(),
+            "nautilus-projectx/1.0".to_string(),
+        )];
         let token_lock = self.bearer_token.read().await.clone();
         if let Some(token) = token_lock {
             headers.push(("Authorization".to_string(), format!("Bearer {}", token)));
@@ -328,10 +353,7 @@ impl PxWebSocketClient {
         // Re-invoke per-account subscriptions for any accounts we have tracked.
         let tracked_accounts: Vec<i64> = {
             let guard = self.account_subs.read().await;
-            guard
-                .iter()
-                .filter_map(|s| Some(s.clone()))
-                .collect()
+            guard.iter().filter_map(|s| Some(s.clone())).collect()
         };
         for account_id in tracked_accounts {
             let id_val = Value::from(account_id);
@@ -353,7 +375,10 @@ impl PxWebSocketClient {
     /// Connect to the market hub
     pub async fn connect_market(&self) -> anyhow::Result<()> {
         let url = self.market_hub_url().await;
-        let mut headers = vec![("User-Agent".to_string(), "nautilus-projectx/1.0".to_string())];
+        let mut headers = vec![(
+            "User-Agent".to_string(),
+            "nautilus-projectx/1.0".to_string(),
+        )];
         let token_lock = self.bearer_token.read().await.clone();
         if let Some(token) = token_lock {
             headers.push(("Authorization".to_string(), format!("Bearer {}", token)));
@@ -520,17 +545,29 @@ impl PxWebSocketClient {
                                     } else {
                                         args.get(0).unwrap_or(&Value::Null)
                                     };
-                                    if let Ok(px_quote) = serde_json::from_value::<GatewayQuote>(data_val.to_owned()) {
-                                        if let Ok(instrument) = Instrument::from_str(px_quote.symbol.as_str()) {
+                                    if let Ok(px_quote) =
+                                        serde_json::from_value::<GatewayQuote>(data_val.to_owned())
+                                    {
+                                        if let Ok(instrument) =
+                                            Instrument::from_str(px_quote.symbol.as_str())
+                                        {
                                             let symbol = extract_root(&instrument);
-                                            let bid = Price::from_f64(px_quote.best_bid).unwrap_or_default();
-                                            let ask = Price::from_f64(px_quote.best_ask).unwrap_or_default();
+                                            let bid = Price::from_f64(px_quote.best_bid)
+                                                .unwrap_or_default();
+                                            let ask = Price::from_f64(px_quote.best_ask)
+                                                .unwrap_or_default();
                                             let bid_size = Volume::from(0);
                                             let ask_size = Volume::from(0);
                                             // prefer timestamp then last_updated
-                                            let time = DateTime::<Utc>::from_str(px_quote.timestamp.as_str())
-                                                .or_else(|_| DateTime::<Utc>::from_str(px_quote.last_updated.as_str()))
-                                                .unwrap_or_else(|_| Utc::now());
+                                            let time = DateTime::<Utc>::from_str(
+                                                px_quote.timestamp.as_str(),
+                                            )
+                                            .or_else(|_| {
+                                                DateTime::<Utc>::from_str(
+                                                    px_quote.last_updated.as_str(),
+                                                )
+                                            })
+                                            .unwrap_or_else(|_| Utc::now());
                                             let bbo = tt_types::base_data::Bbo {
                                                 symbol,
                                                 instrument,
@@ -566,20 +603,30 @@ impl PxWebSocketClient {
                                         args.get(0).unwrap_or(&Value::Null)
                                     };
 
-                                    if let Ok(px_trade) = serde_json::from_value::<GatewayTrade>(data_val.to_owned()) {
-                                        if let Ok(instrument) = Instrument::from_str(px_trade.symbol_id.as_str()) {
+                                    if let Ok(px_trade) =
+                                        serde_json::from_value::<GatewayTrade>(data_val.to_owned())
+                                    {
+                                        if let Ok(instrument) =
+                                            Instrument::from_str(px_trade.symbol_id.as_str())
+                                        {
                                             let symbol = extract_root(&instrument);
                                             let price = match Price::from_f64(px_trade.price) {
                                                 Some(p) => p,
                                                 None => {
-                                                    log::warn!("invalid price for {}", px_trade.price);
+                                                    log::warn!(
+                                                        "invalid price for {}",
+                                                        px_trade.price
+                                                    );
                                                     return;
                                                 }
                                             };
                                             let volume = match Volume::from_i64(px_trade.volume) {
                                                 Some(s) => s,
                                                 None => {
-                                                    log::warn!("invalid size for {}", px_trade.volume);
+                                                    log::warn!(
+                                                        "invalid size for {}",
+                                                        px_trade.volume
+                                                    );
                                                     return;
                                                 }
                                             };
@@ -588,10 +635,16 @@ impl PxWebSocketClient {
                                                 1 => Side::Sell,
                                                 _ => Side::None,
                                             };
-                                            let time = match DateTime::<Utc>::from_str(px_trade.timestamp.as_str()) {
+                                            let time = match DateTime::<Utc>::from_str(
+                                                px_trade.timestamp.as_str(),
+                                            ) {
                                                 Ok(t) => t,
                                                 Err(e) => {
-                                                    log::warn!("invalid timestamp for {}: {}", px_trade.timestamp, e);
+                                                    log::warn!(
+                                                        "invalid timestamp for {}: {}",
+                                                        px_trade.timestamp,
+                                                        e
+                                                    );
                                                     Utc::now()
                                                 }
                                             };
@@ -612,7 +665,7 @@ impl PxWebSocketClient {
                                 }
                             }
                             "GatewayDepth" => {
-                               // Extract args and handle payload which may be an array of up to 10 levels
+                                // Extract args and handle payload which may be an array of up to 10 levels
                                 let args_opt = val.get("arguments").and_then(|a| a.as_array());
                                 if let Some(args) = args_opt {
                                     info!("GatewayDepth: {:?}", args);
@@ -644,10 +697,21 @@ impl PxWebSocketClient {
                                     can_trade: account.can_trade,
                                 };
                                 info!(target: "projectx.ws", "AccountSnapShot: {:?}", snap_shot);
-                                                                // Publish minimal AccountDelta to bus
-                                                                let delta = AccountDelta { equity: balance, day_realized_pnl: dec!(0), open_pnl: dec!(0), ts_ns: Utc::now().timestamp_nanos_opt().unwrap_or(0) };
-                                                                let batch = AccountDeltaBatch { topic: tt_types::keys::Topic::AccountEvt, seq: 0, accounts: vec![delta] };
-                                                                if let Err(e) = self.bus.publish_account_delta_batch(batch).await { error!(target: "projectx.ws", "failed to publish AccountDelta: {:?}", e); }
+                                // Publish minimal AccountDelta to bus
+                                let delta = AccountDelta {
+                                    equity: balance,
+                                    day_realized_pnl: dec!(0),
+                                    open_pnl: dec!(0),
+                                    ts_ns: Utc::now().timestamp_nanos_opt().unwrap_or(0),
+                                };
+                                let batch = AccountDeltaBatch {
+                                    topic: tt_types::keys::Topic::AccountEvt,
+                                    seq: 0,
+                                    accounts: vec![delta],
+                                };
+                                if let Err(e) = self.bus.publish_account_delta_batch(batch).await {
+                                    error!(target: "projectx.ws", "failed to publish AccountDelta: {:?}", e);
+                                }
                             }
                             "GatewayUserOrder" => {
                                 let order =
@@ -659,13 +723,14 @@ impl PxWebSocketClient {
                                         }
                                     };
                                 // Build identifiers
-                                let instrument = match Instrument::from_str(order.symbol_id.as_str()) {
-                                    Ok(i) => i,
-                                    Err(e) => {
-                                        error!("error parsing instrument: {:?}", e);
-                                        return;
-                                    }
-                                };
+                                let instrument =
+                                    match Instrument::from_str(order.symbol_id.as_str()) {
+                                        Ok(i) => i,
+                                        Err(e) => {
+                                            error!("error parsing instrument: {:?}", e);
+                                            return;
+                                        }
+                                    };
                                 // Enum mappings
                                 let side = if order.side == 0 {
                                     Side::Buy
@@ -676,41 +741,48 @@ impl PxWebSocketClient {
                                 let status = models::map_status(order.status);
 
                                 // Quantities and prices
-                                let qty = Volume::from_i64(order.size).unwrap_or_else(|| {
-                                    dec!(0)
-                                });
+                                let qty = Volume::from_i64(order.size).unwrap_or_else(|| dec!(0));
                                 let filled_qty =
                                     Volume::from_f64(order.fill_volume.unwrap_or(0) as f64);
                                 let _limit_px = order.limit_price.map(|p| Price::from_f64(p));
                                 let _stop_px = order.stop_price.map(|p| Price::from_f64(p));
 
-                                let time_accepted = DateTime::<Utc>::from_str(&order.creation_timestamp).unwrap_or_else(|_| Utc::now());
-                                let time_last = DateTime::<Utc>::from_str(&order.update_timestamp).unwrap_or_else(|_| Utc::now());
-
+                                let time_accepted =
+                                    DateTime::<Utc>::from_str(&order.creation_timestamp)
+                                        .unwrap_or_else(|_| Utc::now());
+                                let time_last = DateTime::<Utc>::from_str(&order.update_timestamp)
+                                    .unwrap_or_else(|_| Utc::now());
 
                                 info!(target: "projectx.ws", "GatewayUserOrder standardized: id={} status={} side={:?} type={:?}", order.id, order.status, side, order_type);
-                                                                // Publish minimal OrderUpdate to bus
-                                                                let state_code: u8 = models::map_status(order.status) as u8;
-                                                                let cum_qty: i64 = order.fill_volume.unwrap_or(0);
-                                                                let leaves: i64 = (order.size - cum_qty).max(0);
-                                                                let avg_px = order.filled_price.and_then(|p| Price::from_f64(p)).unwrap_or(dec!(0));
-                                                                let ts_ns = DateTime::<Utc>::from_str(&order.update_timestamp)
-                                                                    .unwrap_or_else(|_| Utc::now())
-                                                                    .timestamp_nanos_opt()
-                                                                    .unwrap_or(0);
-                                                                let ou = OrderUpdate {
-                                                                    provider_order_id: Some(ProviderOrderId(order.id.to_string())),
-                                                                    client_order_id: None,
-                                                                    state_code,
-                                                                    leaves,
-                                                                    cum_qty,
-                                                                    avg_fill_px: avg_px,
-                                                                    ts_ns,
-                                                                };
-                                                                let batch = OrdersBatch { topic: tt_types::keys::Topic::Orders, seq: 0, orders: vec![ou] };
-                                                                if let Err(e) = self.bus.publish_orders_batch(batch).await {
-                                                                    error!(target: "projectx.ws", "failed to publish OrderUpdate: {:?}", e);
-                                                                }
+                                // Publish minimal OrderUpdate to bus
+                                let state_code: u8 = models::map_status(order.status) as u8;
+                                let cum_qty: i64 = order.fill_volume.unwrap_or(0);
+                                let leaves: i64 = (order.size - cum_qty).max(0);
+                                let avg_px = order
+                                    .filled_price
+                                    .and_then(|p| Price::from_f64(p))
+                                    .unwrap_or(dec!(0));
+                                let ts_ns = DateTime::<Utc>::from_str(&order.update_timestamp)
+                                    .unwrap_or_else(|_| Utc::now())
+                                    .timestamp_nanos_opt()
+                                    .unwrap_or(0);
+                                let ou = OrderUpdate {
+                                    provider_order_id: Some(ProviderOrderId(order.id.to_string())),
+                                    client_order_id: None,
+                                    state_code,
+                                    leaves,
+                                    cum_qty,
+                                    avg_fill_px: avg_px,
+                                    ts_ns,
+                                };
+                                let batch = OrdersBatch {
+                                    topic: tt_types::keys::Topic::Orders,
+                                    seq: 0,
+                                    orders: vec![ou],
+                                };
+                                if let Err(e) = self.bus.publish_orders_batch(batch).await {
+                                    error!(target: "projectx.ws", "failed to publish OrderUpdate: {:?}", e);
+                                }
                             }
                             "GatewayUserPosition" => {
                                 let position = match serde_json::from_value::<GatewayUserPosition>(
@@ -723,26 +795,44 @@ impl PxWebSocketClient {
                                     }
                                 };
 
-                                let instrument_id = match Instrument::from_str(position.contract_id.as_str()) {
-                                                                    Ok(i) => i,
-                                                                    Err(e) => {
-                                                                        error!(target: "projectx.ws", "invalid instrument for position: {} ({:?})", position.contract_id, e);
-                                                                        return;
-                                                                    }
-                                                                };
+                                let instrument_id = match Instrument::from_str(
+                                    position.contract_id.as_str(),
+                                ) {
+                                    Ok(i) => i,
+                                    Err(e) => {
+                                        error!(target: "projectx.ws", "invalid instrument for position: {} ({:?})", position.contract_id, e);
+                                        return;
+                                    }
+                                };
                                 let symbol = extract_root(&instrument_id);
 
                                 self.positions
                                     .insert(instrument_id.clone(), position.clone());
 
                                 // Publish minimal PositionDelta to bus (snapshot semantics)
-                                let after = if position.r#type == models::PositionType::Short as i32 { -position.size } else { position.size };
+                                let after = if position.r#type == models::PositionType::Short as i32
+                                {
+                                    -position.size
+                                } else {
+                                    position.size
+                                };
                                 let ts_ns = DateTime::<Utc>::from_str(&position.creation_timestamp)
                                     .unwrap_or_else(|_| Utc::now())
                                     .timestamp_nanos_opt()
                                     .unwrap_or(0);
-                                let pd = PositionDelta { instrument: instrument_id.clone(), net_qty_before: 0, net_qty_after: after, realized_delta: dec!(0), open_pnl: dec!(0), ts_ns };
-                                let batch = PositionsBatch { topic: tt_types::keys::Topic::Positions, seq: 0, positions: vec![pd] };
+                                let pd = PositionDelta {
+                                    instrument: instrument_id.clone(),
+                                    net_qty_before: 0,
+                                    net_qty_after: after,
+                                    realized_delta: dec!(0),
+                                    open_pnl: dec!(0),
+                                    ts_ns,
+                                };
+                                let batch = PositionsBatch {
+                                    topic: tt_types::keys::Topic::Positions,
+                                    seq: 0,
+                                    positions: vec![pd],
+                                };
                                 if let Err(e) = self.bus.publish_positions_batch(batch).await {
                                     error!(target: "projectx.ws", "failed to publish PositionDelta: {:?}", e);
                                 }
@@ -759,13 +849,15 @@ impl PxWebSocketClient {
                                         }
                                     };
 
-                                let instrument_id = match Instrument::from_str(trade.contract_id.as_str()) {
-                                                                    Ok(i) => i,
-                                                                    Err(e) => {
-                                                                        error!(target: "projectx.ws", "invalid instrument for trade: {} ({:?})", trade.contract_id, e);
-                                                                        return;
-                                                                    }
-                                                                };
+                                let instrument_id = match Instrument::from_str(
+                                    trade.contract_id.as_str(),
+                                ) {
+                                    Ok(i) => i,
+                                    Err(e) => {
+                                        error!(target: "projectx.ws", "invalid instrument for trade: {} ({:?})", trade.contract_id, e);
+                                        return;
+                                    }
+                                };
                                 let symbol = extract_root(&instrument_id);
 
                                 let side = if trade.side == 0 {
@@ -777,7 +869,9 @@ impl PxWebSocketClient {
                                 let last_px = Price::from_f64(trade.price);
                                 let last_qty = Volume::from_f64(trade.size as f64);
                                 let commission = Decimal::from_f64(trade.fees);
-                                let time_accepted = DateTime::<Utc>::from_str(&trade.creation_timestamp).unwrap_or_else(|_| Utc::now());
+                                let time_accepted =
+                                    DateTime::<Utc>::from_str(&trade.creation_timestamp)
+                                        .unwrap_or_else(|_| Utc::now());
                                 info!(target: "projectx.ws", "GatewayUserTrade standardized: id={} order_id={} side={:?} px={} qty={} fees={}", trade.id, trade.order_id, side, trade.price, trade.size, trade.fees);
                             }
                             _ => {}
@@ -834,17 +928,23 @@ impl PxWebSocketClient {
         // Track account across all user subscription lists (store as String)
         {
             let mut w = self.user_orders_subs.write().await;
-            if !w.contains(&account_id) { w.push(account_id); }
+            if !w.contains(&account_id) {
+                w.push(account_id);
+            }
         }
         {
             let mut w = self.user_positions_subs.write().await;
             let s = account_id.to_string();
-            if !w.contains(&account_id) { w.push(account_id); }
+            if !w.contains(&account_id) {
+                w.push(account_id);
+            }
         }
         {
             let mut w = self.user_trades_subs.write().await;
             let s = account_id.to_string();
-            if !w.contains(&account_id) { w.push(account_id); }
+            if !w.contains(&account_id) {
+                w.push(account_id);
+            }
         }
         // Subscribe to per-account streams
         let id_val = Value::from(account_id);
@@ -906,7 +1006,11 @@ impl PxWebSocketClient {
         {
             let mut w = self.market_contract_quotes_subs.write().await;
             let s = contract_id.to_string();
-            if !w.contains(&s) { w.push(s); } else { return Ok(()); }
+            if !w.contains(&s) {
+                w.push(s);
+            } else {
+                return Ok(());
+            }
         }
         // SignalR invocation
         self.invoke_market(
@@ -934,7 +1038,11 @@ impl PxWebSocketClient {
         {
             let mut w = self.market_contract_tick_subs.write().await;
             let s = contract_id.to_string();
-            if !w.contains(&s) { w.push(s); } else { return Ok(()); }
+            if !w.contains(&s) {
+                w.push(s);
+            } else {
+                return Ok(());
+            }
         }
         self.invoke_market(
             "SubscribeContractTrades",
@@ -959,51 +1067,59 @@ impl PxWebSocketClient {
     pub async fn subscribe_account_positions(&self, account_id: i64) -> anyhow::Result<()> {
         {
             let mut w = self.user_positions_subs.write().await;
-            if !w.contains(&account_id) { w.push(account_id); } else { return Ok(()); }
+            if !w.contains(&account_id) {
+                w.push(account_id);
+            } else {
+                return Ok(());
+            }
         }
         self.invoke_market(
             "SubscribePositions",
             vec![Value::String(account_id.to_string())],
         )
-            .await
+        .await
     }
 
     pub async fn unsubscribe_account_positions(&self, account_id: i64) -> anyhow::Result<()> {
         {
             let mut w = self.user_positions_subs.write().await;
-            w.retain(|x| *x != account_id) ;
+            w.retain(|x| *x != account_id);
         }
         self.invoke_market(
             "UnsubscribePositions",
             vec![Value::String(account_id.to_string())],
         )
-            .await
+        .await
     }
 
     /// Subscribe to market data by account ID (trades)
     pub async fn subscribe_account_orders(&self, account_id: i64) -> anyhow::Result<()> {
         {
             let mut w = self.user_orders_subs.write().await;
-            if !w.contains(&account_id) { w.push(account_id); } else { return Ok(()); }
+            if !w.contains(&account_id) {
+                w.push(account_id);
+            } else {
+                return Ok(());
+            }
         }
         self.invoke_market(
             "SubscribeOrders",
             vec![Value::String(account_id.to_string())],
         )
-            .await
+        .await
     }
 
     /// Unsubscribe from market data by account ID (trades)
     pub async fn unsubscribe_account_orders(&self, account_id: i64) -> anyhow::Result<()> {
         {
             let mut w = self.user_orders_subs.write().await;
-            w.retain(|x| *x != account_id) ;
+            w.retain(|x| *x != account_id);
         }
         self.invoke_market(
             "UnsubscribeOrders",
             vec![Value::String(account_id.to_string())],
         )
-            .await
+        .await
     }
 
     /// Subscribe to market data by contract ID (market depth)
@@ -1011,7 +1127,9 @@ impl PxWebSocketClient {
         {
             let mut w = self.market_contract_depth_subs.write().await;
             let s = contract_id.to_string();
-            if !w.contains(&s) { w.push(s); }
+            if !w.contains(&s) {
+                w.push(s);
+            }
         }
         self.invoke_market(
             "SubscribeContractMarketDepth",
@@ -1038,7 +1156,9 @@ impl PxWebSocketClient {
         {
             let mut w = self.market_contract_bars_subs.write().await;
             let s = contract_id.to_string();
-            if !w.contains(&s) { w.push(s); }
+            if !w.contains(&s) {
+                w.push(s);
+            }
         }
         // Minimal invocation variant (server may support additional args for unit/unitNumber)
         self.invoke_market(

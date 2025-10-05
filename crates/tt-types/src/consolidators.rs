@@ -2,7 +2,7 @@ use crate::base_data::{Bbo, Candle, Feed, Resolution, Side, Tick, TickBar};
 use crate::securities::market_hours::{MarketHours, next_session_after, session_bounds};
 use crate::securities::symbols::{Exchange, Instrument};
 use chrono::{DateTime, Duration, TimeZone, Utc};
-use rust_decimal::{dec, Decimal};
+use rust_decimal::{Decimal, dec};
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
@@ -87,7 +87,7 @@ impl TicksToTickBarsConsolidator {
         mut rx_tick: broadcast::Receiver<Tick>, // inbound
         out_symbol: String,
         out_exchange: Exchange,
-        instrument: Instrument
+        instrument: Instrument,
     ) -> Self {
         let (out_tx, _) = broadcast::channel::<TickBar>(1024);
 

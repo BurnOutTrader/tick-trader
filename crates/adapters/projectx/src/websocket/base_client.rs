@@ -1,8 +1,8 @@
 use futures_util::stream::BoxStream;
-use tokio_tungstenite::tungstenite::{http, Message};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite;
+use tokio_tungstenite::tungstenite::{Message, http};
 
 #[derive(Debug, Clone)]
 pub struct WebSocketConfig {
@@ -37,10 +37,10 @@ impl WebSocketClient {
     )> {
         // Build request using IntoClientRequest to ensure proper websocket defaults (Host, Upgrade, etc.)
         // Then attach any custom headers like Authorization.
-        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-        use tokio_tungstenite::connect_async;
-        use tokio::sync::{mpsc, Mutex};
         use futures_util::{SinkExt, StreamExt};
+        use tokio::sync::{Mutex, mpsc};
+        use tokio_tungstenite::connect_async;
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
         let mut request = config.url.clone().into_client_request()?;
         if !config.headers.is_empty() {
             let headers = request.headers_mut();
@@ -62,7 +62,10 @@ impl WebSocketClient {
                 }
             }
         });
-        let client = WebSocketClient { write_tx: tx, recv_task:Mutex::new(Some(recv_task)) };
+        let client = WebSocketClient {
+            write_tx: tx,
+            recv_task: Mutex::new(Some(recv_task)),
+        };
         let reader: BoxStream<'static, Result<Message, tungstenite::Error>> = Box::pin(read);
         Ok((reader, client))
     }

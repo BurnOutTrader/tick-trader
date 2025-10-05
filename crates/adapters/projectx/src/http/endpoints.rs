@@ -1,5 +1,5 @@
-use tt_types::providers::ProjectXTenant;
 use crate::common::consts::{DEMO_DOMAIN, DEMO_STREAM};
+use tt_types::providers::ProjectXTenant;
 
 #[derive(Clone, Debug)]
 pub struct PxEndpoints {

@@ -1,21 +1,29 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::{watch, RwLock};
-use tokio::task::JoinHandle;
-use tt_types::api_helpers::retry_manager::{RetryConfig, RetryManager};
-use ustr::Ustr;
-use chrono::Duration as ChronoDuration;
-use reqwest::Method;
-use serde::de::DeserializeOwned;
-use serde::Serialize;
-use anyhow::anyhow;
-use tt_types::api_helpers::rate_limiter::RateLimiter;
 use crate::common::consts::{PX_BARS_QUOTA, PX_GLOBAL_RATE_KEY, PX_REST_QUOTA};
 use crate::http::base_client::SimpleHttp;
 use crate::http::credentials::PxCredential;
 use crate::http::endpoints::PxEndpoints;
 use crate::http::error::PxError;
-use crate::http::models::{AccountSearchReq, AccountSearchResponse, AvailableContractsReq, CancelOrderReq, CancelOrderResponse, CloseContractReq, CloseContractResponse, ContractSearchByIdReq, ContractSearchByIdResponse, ContractSearchReq, ContractSearchResponse, ModifyOrderReq, ModifyOrderResponse, OrderSearchOpenReq, OrderSearchReq, OrderSearchResponse, PartialCloseContractReq, PlaceOrderReq, PlaceOrderResponse, PositionSearchOpenReq, PositionSearchResponse, RetrieveBarsReq, RetrieveBarsResponse, TradeSearchReq, TradeSearchResponse, ValidateResp};
+use crate::http::models::{
+    AccountSearchReq, AccountSearchResponse, AvailableContractsReq, CancelOrderReq,
+    CancelOrderResponse, CloseContractReq, CloseContractResponse, ContractSearchByIdReq,
+    ContractSearchByIdResponse, ContractSearchReq, ContractSearchResponse, ModifyOrderReq,
+    ModifyOrderResponse, OrderSearchOpenReq, OrderSearchReq, OrderSearchResponse,
+    PartialCloseContractReq, PlaceOrderReq, PlaceOrderResponse, PositionSearchOpenReq,
+    PositionSearchResponse, RetrieveBarsReq, RetrieveBarsResponse, TradeSearchReq,
+    TradeSearchResponse, ValidateResp,
+};
+use anyhow::anyhow;
+use chrono::Duration as ChronoDuration;
+use reqwest::Method;
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::{RwLock, watch};
+use tokio::task::JoinHandle;
+use tt_types::api_helpers::rate_limiter::RateLimiter;
+use tt_types::api_helpers::retry_manager::{RetryConfig, RetryManager};
+use ustr::Ustr;
 
 /// inner HTTP client for the ProjectX Gateway API
 /// This client deals only with types used by the api, it does not output tick-trader specific types.
@@ -62,7 +70,10 @@ impl PxHttpInnerClient {
     fn build_rate_limiter() -> RateLimiter<Ustr> {
         // From policy: All other endpoints 200/60s; retrieveBars 50/30s
         let base = Some((PX_REST_QUOTA as u32, ChronoDuration::seconds(60)));
-        let keyed = vec![(Ustr::from("px:bars"), (PX_BARS_QUOTA as u32, ChronoDuration::seconds(30)))];
+        let keyed = vec![(
+            Ustr::from("px:bars"),
+            (PX_BARS_QUOTA as u32, ChronoDuration::seconds(30)),
+        )];
         RateLimiter::new_with_limits(base, keyed)
     }
 
@@ -102,7 +113,6 @@ impl PxHttpInnerClient {
             bg_task: RwLock::new(None),
         })
     }
-
 
     /// Internal helper to send a JSON HTTP request and deserialize the JSON response
     async fn request_json<TResp, TBody>(

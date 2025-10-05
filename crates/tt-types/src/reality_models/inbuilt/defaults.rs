@@ -1,13 +1,13 @@
-use ahash::AHashMap;
 use crate::reality_models::models::ModelSet;
 use crate::reality_models::traits::{
     BuyingPowerModel, FeeModel, FillModel, SettlementModel, SlippageModel, VolatilityModel,
 };
+use crate::securities::security::FuturesContract;
 use crate::securities::symbols::Currency;
+use ahash::AHashMap;
 use chrono::{DateTime, Utc};
 use lazy_static::lazy_static;
-use rust_decimal::{dec, Decimal};
-use crate::securities::security::FuturesContract;
+use rust_decimal::{Decimal, dec};
 
 // One global default you can reference (or build all entries explicitly)
 lazy_static::lazy_static! {
@@ -22,17 +22,17 @@ impl FeeModel for DefaultFeeModel {
         match broker {
             "RITHMIC" => {
                 if let Some(info) = COMMISSION_PER_CONTRACT_RITHMIC.get(root) {
-                    return info.per_side * quantity
+                    return info.per_side * quantity;
                 }
                 dec!(0.00)
             }
             "ProjectX" => {
                 if let Some(info) = COMMISSION_PER_CONTRACT_X.get(root) {
-                    return info.per_side * quantity
+                    return info.per_side * quantity;
                 }
                 dec!(0.00)
             }
-            _ => dec!(0.00)
+            _ => dec!(0.00),
         }
     }
 }
@@ -164,11 +164,10 @@ lazy_static! {
     };
 }
 
-
 lazy_static! {
     static ref COMMISSION_PER_CONTRACT_X: AHashMap<&'static str, CommissionInfo> = {
         let mut map = AHashMap::new();
-        
+
                 // CME Equity Futures
         map.insert("ES",  CommissionInfo { per_side: dec!(1.40), currency: "USD".to_string() });
         map.insert("MES", CommissionInfo { per_side: dec!(0.37), currency: "USD".to_string() });
@@ -179,7 +178,7 @@ lazy_static! {
         map.insert("NKD", CommissionInfo { per_side: dec!(2.17), currency: "USD".to_string() });
         map.insert("MBT", CommissionInfo { per_side: dec!(1.17), currency: "USD".to_string() });
         map.insert("MET", CommissionInfo { per_side: dec!(0.12), currency: "USD".to_string() });
-        
+
         // CME NYMEX Futures
         map.insert("CL",  CommissionInfo { per_side: dec!(1.52), currency: "USD".to_string() });
         map.insert("MCL", CommissionInfo { per_side: dec!(0.52), currency: "USD".to_string() });
@@ -190,11 +189,11 @@ lazy_static! {
         map.insert("HO",  CommissionInfo { per_side: dec!(1.52), currency: "USD".to_string() });
         map.insert("NG",  CommissionInfo { per_side: dec!(1.60), currency: "USD".to_string() });
         map.insert("MNG", CommissionInfo { per_side: dec!(0.62), currency: "USD".to_string() });
-        
+
         // CME CBOT Equity Futures
         map.insert("YM",  CommissionInfo { per_side: dec!(1.40), currency: "USD".to_string() });
         map.insert("MYM", CommissionInfo { per_side: dec!(0.37), currency: "USD".to_string() });
-        
+
         // CME Foreign Exchange Futures
         map.insert("6A", CommissionInfo { per_side: dec!(1.62), currency: "USD".to_string() });
         map.insert("M6A", CommissionInfo { per_side: dec!(0.26), currency: "USD".to_string() });
@@ -208,7 +207,7 @@ lazy_static! {
         map.insert("6M", CommissionInfo { per_side: dec!(1.62), currency: "USD".to_string() });
         map.insert("6N", CommissionInfo { per_side: dec!(1.62), currency: "USD".to_string() });
         map.insert("M6B", CommissionInfo { per_side: dec!(0.26), currency: "USD".to_string() });
-        
+
         // CME CBOT Financial/Interest Rate Futures
         map.insert("ZT", CommissionInfo { per_side: dec!(0.67), currency: "USD".to_string() });
         map.insert("ZF", CommissionInfo { per_side: dec!(0.67), currency: "USD".to_string() });
@@ -216,7 +215,7 @@ lazy_static! {
         map.insert("ZB", CommissionInfo { per_side: dec!(0.89), currency: "USD".to_string() });
         map.insert("UB", CommissionInfo { per_side: dec!(0.97), currency: "USD".to_string() });
         map.insert("TN", CommissionInfo { per_side: dec!(0.82), currency: "USD".to_string() });
-        
+
         // CME COMEX Futures
         map.insert("GC",  CommissionInfo { per_side: dec!(1.62), currency: "USD".to_string() });
         map.insert("MGC", CommissionInfo { per_side: dec!(0.62), currency: "USD".to_string() });
@@ -224,11 +223,11 @@ lazy_static! {
         map.insert("SIL", CommissionInfo { per_side: dec!(1.02), currency: "USD".to_string() });
         map.insert("HG",  CommissionInfo { per_side: dec!(1.62), currency: "USD".to_string() });
         map.insert("MHG", CommissionInfo { per_side: dec!(0.62), currency: "USD".to_string() });
-        
+
         // CME Agricultural Futures
         map.insert("HE", CommissionInfo { per_side: dec!(2.12), currency: "USD".to_string() });
         map.insert("LE", CommissionInfo { per_side: dec!(2.12), currency: "USD".to_string() });
-        
+
         // CME CBOT Commodity Futures
         map.insert("ZC", CommissionInfo { per_side: dec!(2.15), currency: "USD".to_string() });
         map.insert("ZW", CommissionInfo { per_side: dec!(2.15), currency: "USD".to_string() });
@@ -280,7 +279,6 @@ impl SettlementModel for DefaultSettle {
         true
     }
 }
-
 
 lazy_static! {
     pub(crate) static ref INTRADAY_MARGINS: AHashMap<&'static str, Decimal> = {
@@ -340,7 +338,6 @@ lazy_static! {
         map.insert("XK", dec!(480.00));
         map
     };
-
     static ref OVERNIGHT_MARGINS: AHashMap<&'static str, Decimal> = {
         let mut map = AHashMap::new();
         map.insert("MES", dec!(1460.00));

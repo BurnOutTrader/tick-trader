@@ -1,10 +1,10 @@
-use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
-use rust_decimal::Decimal;
 use crate::base_data::{Bbo, Candle, Exchange, Tick};
 use crate::keys::{SymbolKey, Topic};
 use crate::providers::ProviderKind;
 use crate::securities::security::FuturesContract;
 use crate::securities::symbols::Instrument;
+use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
+use rust_decimal::Decimal;
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq, Eq)]
 #[rkyv(compare(PartialEq), derive(Debug))]
@@ -14,7 +14,9 @@ pub struct Subscribe {
     pub from_seq: u64,
 }
 impl Subscribe {
-    pub fn topic(&self) -> Topic { self.topic }
+    pub fn topic(&self) -> Topic {
+        self.topic
+    }
 }
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq, Eq)]
@@ -24,15 +26,21 @@ pub struct FlowCredit {
     pub credits: u32,
 }
 impl FlowCredit {
-    pub fn topic(&self) -> Topic { self.topic }
+    pub fn topic(&self) -> Topic {
+        self.topic
+    }
 }
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq, Eq)]
 #[rkyv(compare(PartialEq), derive(Debug))]
-pub struct Ping { pub ts_ns: i64 }
+pub struct Ping {
+    pub ts_ns: i64,
+}
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq, Eq)]
 #[rkyv(compare(PartialEq), derive(Debug))]
-pub struct Pong { pub ts_ns: i64 }
+pub struct Pong {
+    pub ts_ns: i64,
+}
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq)]
 pub struct TickBatch {
@@ -188,7 +196,7 @@ pub enum Envelope {
 }
 
 pub mod codec {
-    use super::{Envelope, ArchivedEnvelope};
+    use super::{ArchivedEnvelope, Envelope};
     use rkyv::rancor::Error;
 
     pub fn encode(env: &Envelope) -> Vec<u8> {
@@ -199,8 +207,8 @@ pub mod codec {
         // Ensure alignment by copying into an AlignedVec before accessing
         let mut aligned = rkyv::util::AlignedVec::<16>::with_capacity(bytes.len());
         aligned.extend_from_slice(bytes);
-        let arch = rkyv::access::<ArchivedEnvelope, Error>(&aligned[..])
-            .map_err(|e| e.to_string())?;
+        let arch =
+            rkyv::access::<ArchivedEnvelope, Error>(&aligned[..]).map_err(|e| e.to_string())?;
         rkyv::deserialize::<Envelope, Error>(arch).map_err(|e| e.to_string())
     }
 }

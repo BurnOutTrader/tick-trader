@@ -22,10 +22,12 @@ impl From<DateTimeUtcDef> for chrono::DateTime<chrono::Utc> {
     fn from(value: DateTimeUtcDef) -> Self {
         let secs = value.ts_ns.div_euclid(1_000_000_000);
         let nsub = value.ts_ns.rem_euclid(1_000_000_000) as u32;
-        chrono::Utc.timestamp_opt(secs, nsub).single().expect("invalid ts")
+        chrono::Utc
+            .timestamp_opt(secs, nsub)
+            .single()
+            .expect("invalid ts")
     }
 }
-
 
 // ===== rust_decimal::Decimal =====
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -37,8 +39,12 @@ pub struct DecimalDef {
     pub scale: u32,
 }
 
-pub fn dec_mantissa(d: &rust_decimal::Decimal) -> i128 { d.mantissa() }
-pub fn dec_scale(d: &rust_decimal::Decimal) -> u32 { d.scale() as u32 }
+pub fn dec_mantissa(d: &rust_decimal::Decimal) -> i128 {
+    d.mantissa()
+}
+pub fn dec_scale(d: &rust_decimal::Decimal) -> u32 {
+    d.scale() as u32
+}
 
 impl From<DecimalDef> for rust_decimal::Decimal {
     fn from(value: DecimalDef) -> Self {
@@ -54,5 +60,5 @@ impl From<DecimalDef> for rust_decimal::Decimal {
 // specific adapter. The types in this crate use the adapters on direct fields.
 
 // For convenience re-export common names if needed by callers
-pub use DecimalDef as RkyvDecimal;
 pub use DateTimeUtcDef as RkyvDateTimeUtc;
+pub use DecimalDef as RkyvDecimal;

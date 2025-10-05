@@ -1,34 +1,30 @@
-use std::{
-    sync::Arc,
-    time::Duration,
-};
-use std::str::FromStr;
 use ahash::AHashMap;
 use dashmap::DashMap;
 use log::info;
 use rust_decimal::Decimal;
 use rust_decimal::prelude::FromPrimitive;
+use std::str::FromStr;
+use std::{sync::Arc, time::Duration};
 use tokio::sync::RwLock;
 use tt_types::accounts::account::{AccountName, AccountSnapShot};
 use tt_types::keys::ProviderId;
 use tt_types::providers::{ProjectXTenant, ProviderKind};
 use tt_types::securities::futures_helpers::extract_root;
 use tt_types::securities::security::FuturesContract;
-use tt_types::securities::symbols::{get_symbol_info, Instrument, SecurityType};
+use tt_types::securities::symbols::{Instrument, SecurityType, get_symbol_info};
 
+use crate::http::inner_client::PxHttpInnerClient;
 use crate::http::{
     credentials::PxCredential,
     error::PxError,
     models::{
-        CloseContractReq, CloseContractResponse, ContractSearchByIdReq,
-        ContractSearchByIdResponse, ContractSearchReq, ContractSearchResponse, ModifyOrderReq,
-        ModifyOrderResponse, OrderSearchOpenReq, OrderSearchReq, OrderSearchResponse,
-        PartialCloseContractReq, PlaceOrderReq, PlaceOrderResponse, PositionSearchOpenReq,
-        PositionSearchResponse, RetrieveBarsReq, RetrieveBarsResponse, TradeSearchReq,
-        TradeSearchResponse, ValidateResp,
+        CloseContractReq, CloseContractResponse, ContractSearchByIdReq, ContractSearchByIdResponse,
+        ContractSearchReq, ContractSearchResponse, ModifyOrderReq, ModifyOrderResponse,
+        OrderSearchOpenReq, OrderSearchReq, OrderSearchResponse, PartialCloseContractReq,
+        PlaceOrderReq, PlaceOrderResponse, PositionSearchOpenReq, PositionSearchResponse,
+        RetrieveBarsReq, RetrieveBarsResponse, TradeSearchReq, TradeSearchResponse, ValidateResp,
     },
 };
-use crate::http::inner_client::PxHttpInnerClient;
 
 #[derive(Clone)]
 pub struct PxHttpClient {
@@ -58,7 +54,7 @@ impl PxHttpClient {
                 timeout_secs,
                 max_retries,
                 retry_delay_ms,
-                retry_delay_max_ms
+                retry_delay_max_ms,
             )?),
             internal_accounts: Arc::new(DashMap::new()),
             instruments: Arc::new(RwLock::new(AHashMap::new())),
@@ -112,14 +108,27 @@ impl PxHttpClient {
         });
         *self.inner.bg_task.write().await = Some(handle);
     }
-    
+
     pub async fn auto_update(&self) -> anyhow::Result<()> {
-        crate::http::client::PxHttpClient::auto_update_instruments(self.inner.clone(), self.instruments.clone(),ProviderKind::ProjectX(self.firm)).await?;
-        crate::http::client::PxHttpClient::auto_update_account_ids(self.inner.clone(), self.internal_accounts.clone()).await?;
+        crate::http::client::PxHttpClient::auto_update_instruments(
+            self.inner.clone(),
+            self.instruments.clone(),
+            ProviderKind::ProjectX(self.firm),
+        )
+        .await?;
+        crate::http::client::PxHttpClient::auto_update_account_ids(
+            self.inner.clone(),
+            self.internal_accounts.clone(),
+        )
+        .await?;
         Ok(())
     }
 
-    pub async fn auto_update_instruments(inner: Arc<PxHttpInnerClient>, instruments: Arc<RwLock<AHashMap<Instrument, FuturesContract>>>, id: ProviderKind) -> anyhow::Result<()> {
+    pub async fn auto_update_instruments(
+        inner: Arc<PxHttpInnerClient>,
+        instruments: Arc<RwLock<AHashMap<Instrument, FuturesContract>>>,
+        id: ProviderKind,
+    ) -> anyhow::Result<()> {
         info!("ProjectX Auto Updating instruments");
         let resp: ContractSearchResponse = inner
             .list_all_contracts(true)
@@ -133,35 +142,49 @@ impl PxHttpClient {
                 Ok(instrument) => instrument,
                 Err(e) => {
                     log::error!("Failed to parse instrument: {}: {:?}", inst.name, e);
-                    continue
-                },
+                    continue;
+                }
             };
             if lock.contains_key(&instrument) {
                 continue;
             }
-            new+=1;
+            new += 1;
             let symbol = extract_root(&instrument);
             let symbol_info = match get_symbol_info(&symbol) {
                 Some(info) => info,
                 None => {
                     log::error!("Failed to parse symbol: {}", symbol);
-                    continue
-                },
+                    continue;
+                }
             };
-            let mut s = match FuturesContract::from_root_with_default_models(&instrument, symbol_info.exchange, SecurityType::Future, inst.id.clone(), id) {
+            let mut s = match FuturesContract::from_root_with_default_models(
+                &instrument,
+                symbol_info.exchange,
+                SecurityType::Future,
+                inst.id.clone(),
+                id,
+            ) {
                 None => continue,
-                Some(s) => s
+                Some(s) => s,
             };
-            s.value_per_tick = Decimal::from_f64(inst.tick_value).unwrap_or_else(|| symbol_info.value_per_tick);
-            s.tick_size = Decimal::from_f64(inst.tick_size).unwrap_or_else(|| symbol_info.tick_size);
+            s.value_per_tick =
+                Decimal::from_f64(inst.tick_value).unwrap_or_else(|| symbol_info.value_per_tick);
+            s.tick_size =
+                Decimal::from_f64(inst.tick_size).unwrap_or_else(|| symbol_info.tick_size);
 
             lock.insert(instrument, s);
         }
-        info!("ProjectX Auto Updated instruments Successfully, {} new instruments", new);
+        info!(
+            "ProjectX Auto Updated instruments Successfully, {} new instruments",
+            new
+        );
         Ok(())
     }
 
-    pub async fn manual_update_instruments(&self, live_only: bool) -> anyhow::Result<Arc<RwLock<AHashMap<Instrument, FuturesContract>>>> {
+    pub async fn manual_update_instruments(
+        &self,
+        live_only: bool,
+    ) -> anyhow::Result<Arc<RwLock<AHashMap<Instrument, FuturesContract>>>> {
         info!("ProjectX Manually Updating instruments");
         let resp: ContractSearchResponse = self
             .inner
@@ -176,8 +199,8 @@ impl PxHttpClient {
                 Ok(instrument) => instrument,
                 Err(e) => {
                     log::error!("Failed to parse instrument: {}: {:?}", inst.name, e);
-                    continue
-                },
+                    continue;
+                }
             };
             if lock.contains_key(&instrument) {
                 continue;
@@ -188,23 +211,37 @@ impl PxHttpClient {
                 Some(info) => info,
                 None => {
                     log::error!("Failed to parse symbol: {}", symbol);
-                    continue
-                },
+                    continue;
+                }
             };
-            let mut s = match FuturesContract::from_root_with_default_models(&instrument, symbol_info.exchange, SecurityType::Future, inst.id.clone(), ProviderKind::ProjectX(self.firm.clone())) {
+            let mut s = match FuturesContract::from_root_with_default_models(
+                &instrument,
+                symbol_info.exchange,
+                SecurityType::Future,
+                inst.id.clone(),
+                ProviderKind::ProjectX(self.firm.clone()),
+            ) {
                 None => continue,
-                Some(s) => s
+                Some(s) => s,
             };
-            s.value_per_tick = Decimal::from_f64(inst.tick_value).unwrap_or_else(|| symbol_info.value_per_tick);
-            s.tick_size = Decimal::from_f64(inst.tick_size).unwrap_or_else(|| symbol_info.tick_size);
+            s.value_per_tick =
+                Decimal::from_f64(inst.tick_value).unwrap_or_else(|| symbol_info.value_per_tick);
+            s.tick_size =
+                Decimal::from_f64(inst.tick_size).unwrap_or_else(|| symbol_info.tick_size);
 
             lock.insert(instrument, s);
         }
-        info!("ProjectX Manual Updated instruments Successfully, {} new instruments", new);
+        info!(
+            "ProjectX Manual Updated instruments Successfully, {} new instruments",
+            new
+        );
         Ok(self.instruments.clone())
     }
 
-    pub async fn auto_update_account_ids(inner: Arc<PxHttpInnerClient>, accounts: Arc<DashMap<AccountName, AccountSnapShot>>) -> anyhow::Result<()> {
+    pub async fn auto_update_account_ids(
+        inner: Arc<PxHttpInnerClient>,
+        accounts: Arc<DashMap<AccountName, AccountSnapShot>>,
+    ) -> anyhow::Result<()> {
         info!("ProjectX Auto Updating account ids");
         let resp = inner.search_accounts(true).await?;
 
@@ -217,7 +254,7 @@ impl PxHttpClient {
                 }
             };
             let snap_shot = AccountSnapShot {
-                name: name.clone() ,
+                name: name.clone(),
                 id: acc.id,
                 balance: Decimal::from_f64(acc.balance).unwrap_or_default(),
                 can_trade: acc.can_trade,
@@ -228,7 +265,9 @@ impl PxHttpClient {
     }
 
     /// Initialise or refresh the account id using the api
-    pub async fn account_snapshots(&self) -> anyhow::Result<Arc<DashMap<AccountName, AccountSnapShot>>> {
+    pub async fn account_snapshots(
+        &self,
+    ) -> anyhow::Result<Arc<DashMap<AccountName, AccountSnapShot>>> {
         let resp = self.inner.search_accounts(true).await?;
 
         for acc in &resp.accounts {
@@ -240,7 +279,7 @@ impl PxHttpClient {
                 }
             };
             let snap_shot = AccountSnapShot {
-                name: name.clone() ,
+                name: name.clone(),
                 id: acc.id,
                 balance: Decimal::from_f64(acc.balance).unwrap_or_default(),
                 can_trade: acc.can_trade,
@@ -257,11 +296,14 @@ impl PxHttpClient {
                 // if we don't have the account id cached, we need to refresh the list
                 let map = self.account_snapshots().await?;
                 match map.get(&account_name) {
-                    None => Err(anyhow::anyhow!("Failed to find account id for {}, please check the account name and try again", account_name)),
-                    Some(acc) => Ok(acc.id.clone())
+                    None => Err(anyhow::anyhow!(
+                        "Failed to find account id for {}, please check the account name and try again",
+                        account_name
+                    )),
+                    Some(acc) => Ok(acc.id.clone()),
                 }
-            },
-            Some(acc) => Ok(acc.id.clone())
+            }
+            Some(acc) => Ok(acc.id.clone()),
         }
     }
 

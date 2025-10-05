@@ -1,19 +1,22 @@
-use std::collections::HashMap;
-use std::str::FromStr;
-use std::sync::Arc;
-use ahash::AHashMap;
-use async_trait::async_trait;
-use tokio::sync::RwLock;
-use provider::traits::{CommandAck, ConnectionState, DisconnectReason, ExecutionProvider, MarketDataProvider, ProviderParams, ProviderSessionSpec};
-use tt_types::keys::{AccountKey, SymbolKey, Topic};
-use tt_types::securities::futures_helpers::{extract_month_year, extract_root};
-use tt_types::securities::symbols::Instrument;
 use crate::http::client::PxHttpClient;
 use crate::http::credentials::PxCredential;
 use crate::http::error::PxError;
 use crate::websocket::client::PxWebSocketClient;
+use ahash::AHashMap;
+use async_trait::async_trait;
+use provider::traits::{
+    CommandAck, ConnectionState, DisconnectReason, ExecutionProvider, MarketDataProvider,
+    ProviderParams, ProviderSessionSpec,
+};
+use std::collections::HashMap;
+use std::str::FromStr;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use tt_bus::MessageBus;
+use tt_types::keys::{AccountKey, SymbolKey, Topic};
 use tt_types::providers::{ProjectXTenant, ProviderKind};
+use tt_types::securities::futures_helpers::{extract_month_year, extract_root};
+use tt_types::securities::symbols::Instrument;
 
 pub struct PXClient {
     pub provider_kind: ProviderKind,
@@ -24,12 +27,24 @@ pub struct PXClient {
 }
 
 impl PXClient {
-    pub async fn instruments_map_snapshot(&self) -> AHashMap<tt_types::securities::symbols::Instrument, tt_types::securities::security::FuturesContract> {
+    pub async fn instruments_map_snapshot(
+        &self,
+    ) -> AHashMap<
+        tt_types::securities::symbols::Instrument,
+        tt_types::securities::security::FuturesContract,
+    > {
         self.http.instruments_snapshot().await
     }
     #[allow(dead_code)]
-    pub async fn new_from_session(kind: ProviderKind, session: ProviderSessionSpec, bus: Arc<MessageBus>) -> anyhow::Result<Self> {
-        let user_name = session.user_names.get(&kind).expect(">&user_name credential to be set in the session credentials");
+    pub async fn new_from_session(
+        kind: ProviderKind,
+        session: ProviderSessionSpec,
+        bus: Arc<MessageBus>,
+    ) -> anyhow::Result<Self> {
+        let user_name = session
+            .user_names
+            .get(&kind)
+            .expect(">&user_name credential to be set in the session credentials");
         let api_key = session.api_keys.get(&kind).expect(
             "PXClient requires a 'api_key' credential to be set in the session credentials",
         );
@@ -53,16 +68,19 @@ impl PXClient {
 
     async fn state(&self) -> ConnectionState {
         let http_state = self.http_connection_state.read().await;
-        if *http_state == ConnectionState::Disconnected || self.websocket.is_user_connected() == false || self.websocket.is_market_connected() == false {
-            return ConnectionState::Disconnected
+        if *http_state == ConnectionState::Disconnected
+            || self.websocket.is_user_connected() == false
+            || self.websocket.is_market_connected() == false
+        {
+            return ConnectionState::Disconnected;
         }
         ConnectionState::Connected
     }
 
-    async fn connect_all(&self) -> anyhow::Result<()>  {
+    async fn connect_all(&self) -> anyhow::Result<()> {
         let mut conn_state = self.http_connection_state.write().await;
         if *conn_state == ConnectionState::Disconnected {
-            * conn_state = ConnectionState::Connecting;
+            *conn_state = ConnectionState::Connecting;
 
             match self.http.start().await {
                 Ok(_) => {
@@ -81,17 +99,16 @@ impl PXClient {
         if self.websocket.is_market_connected() == false {
             *conn_state = ConnectionState::Connecting;
             match self.websocket.connect_market().await {
-                Ok(conn) => {},
+                Ok(conn) => {}
                 Err(e) => {
                     log::error!("Error starting WebSocket client: {:?}", e);
                     return Err(e);
                 }
             };
         }
-        if self.websocket.is_user_connected() == false
-        {
+        if self.websocket.is_user_connected() == false {
             match self.websocket.connect_user().await {
-                Ok(conn) => {},
+                Ok(conn) => {}
                 Err(e) => {
                     log::error!("Error starting WebSocket client: {:?}", e);
                 }
@@ -123,7 +140,11 @@ impl MarketDataProvider for PXClient {
         }
     }
 
-    async fn connect_to_market(&self, kind: ProviderKind, _session: ProviderSessionSpec) -> anyhow::Result<()> {
+    async fn connect_to_market(
+        &self,
+        kind: ProviderKind,
+        _session: ProviderSessionSpec,
+    ) -> anyhow::Result<()> {
         self.connect_all().await
     }
 
@@ -139,9 +160,21 @@ impl MarketDataProvider for PXClient {
     async fn subscribe_md(&self, topic: Topic, key: &SymbolKey) -> anyhow::Result<()> {
         let instrument = parse_symbol_key(key.clone())?;
         match topic {
-            Topic::Ticks => self.websocket.subscribe_contract_ticks(instrument.as_str()).await,
-            Topic::Quotes => self.websocket.subscribe_contract_quotes(instrument.as_str()).await,
-            Topic::Depth => self.websocket.subscribe_contract_market_depth(instrument.as_str()).await,
+            Topic::Ticks => {
+                self.websocket
+                    .subscribe_contract_ticks(instrument.as_str())
+                    .await
+            }
+            Topic::Quotes => {
+                self.websocket
+                    .subscribe_contract_quotes(instrument.as_str())
+                    .await
+            }
+            Topic::Depth => {
+                self.websocket
+                    .subscribe_contract_market_depth(instrument.as_str())
+                    .await
+            }
             _ => anyhow::bail!("Unsupported topic: {:?}", topic),
         }
     }
@@ -149,9 +182,21 @@ impl MarketDataProvider for PXClient {
     async fn unsubscribe_md(&self, topic: Topic, key: &SymbolKey) -> anyhow::Result<()> {
         let instrument = parse_symbol_key(key.clone())?;
         match topic {
-            Topic::Ticks => self.websocket.unsubscribe_contract_ticks(instrument.as_str()).await,
-            Topic::Quotes => self.websocket.unsubscribe_contract_quotes(instrument.as_str()).await,
-            Topic::Depth => self.websocket.unsubscribe_contract_market_depth(instrument.as_str()).await,
+            Topic::Ticks => {
+                self.websocket
+                    .unsubscribe_contract_ticks(instrument.as_str())
+                    .await
+            }
+            Topic::Quotes => {
+                self.websocket
+                    .unsubscribe_contract_quotes(instrument.as_str())
+                    .await
+            }
+            Topic::Depth => {
+                self.websocket
+                    .unsubscribe_contract_market_depth(instrument.as_str())
+                    .await
+            }
             _ => anyhow::bail!("Unsupported topic: {:?}", topic),
         }
     }
@@ -162,7 +207,10 @@ impl MarketDataProvider for PXClient {
         fn symbol_from_contract_id(firm: ProjectXTenant, instrument: &str) -> Option<SymbolKey> {
             let provider = ProviderKind::ProjectX(firm);
             let instrument = Instrument::from_str(instrument).ok()?;
-            Some(SymbolKey { instrument, provider })
+            Some(SymbolKey {
+                instrument,
+                provider,
+            })
         }
         let firm = match self.provider_kind {
             ProviderKind::ProjectX(firm) => firm,
@@ -171,15 +219,21 @@ impl MarketDataProvider for PXClient {
 
         let ticks = {
             let g = self.websocket.active_contract_ids_ticks().await;
-            g.iter().filter_map(|s| symbol_from_contract_id(firm, s)).collect::<Vec<_>>()
+            g.iter()
+                .filter_map(|s| symbol_from_contract_id(firm, s))
+                .collect::<Vec<_>>()
         };
         let quotes = {
             let g = self.websocket.active_contract_ids_quotes().await;
-            g.iter().filter_map(|s| symbol_from_contract_id(firm, s)).collect::<Vec<_>>()
+            g.iter()
+                .filter_map(|s| symbol_from_contract_id(firm, s))
+                .collect::<Vec<_>>()
         };
         let depth = {
             let g = self.websocket.active_contract_ids_depth().await;
-            g.iter().filter_map(|s| symbol_from_contract_id(firm, s)).collect::<Vec<_>>()
+            g.iter()
+                .filter_map(|s| symbol_from_contract_id(firm, s))
+                .collect::<Vec<_>>()
         };
 
         let mut map = AHashMap::new();
@@ -200,7 +254,11 @@ impl ExecutionProvider for PXClient {
         self.provider_kind
     }
 
-    async fn connect_to_broker(&self, kind: ProviderKind, session: ProviderSessionSpec) -> anyhow::Result<()> {
+    async fn connect_to_broker(
+        &self,
+        kind: ProviderKind,
+        session: ProviderSessionSpec,
+    ) -> anyhow::Result<()> {
         self.connect_all().await
     }
 
@@ -215,33 +273,46 @@ impl ExecutionProvider for PXClient {
     }
 
     async fn subscribe_account_events(&self, account_key: &AccountKey) -> anyhow::Result<()> {
-        let id = self.http.account_id(account_key.account_name.clone()).await?;
+        let id = self
+            .http
+            .account_id(account_key.account_name.clone())
+            .await?;
         match self.websocket.subscribe_user_account(id).await {
             Ok(_) => {
                 let mut lock = self.account_subscriptions.write().await;
                 lock.push(account_key.clone());
                 Ok(())
             }
-            Err(_) => {
-                Err(anyhow::anyhow!("Failed to subscribe to account events: {}", account_key.account_name))
-            }
+            Err(_) => Err(anyhow::anyhow!(
+                "Failed to subscribe to account events: {}",
+                account_key.account_name
+            )),
         }
     }
 
     async fn unsubscribe_account_events(&self, account_key: &AccountKey) -> anyhow::Result<()> {
-        let id = self.http.account_id(account_key.account_name.clone()).await?;
+        let id = self
+            .http
+            .account_id(account_key.account_name.clone())
+            .await?;
         let mut lock = self.account_subscriptions.write().await;
         let index = lock.iter().position(|k| k == account_key);
         self.websocket.unsubscribe_user_account(id).await
     }
 
     async fn subscribe_positions(&self, account_key: &AccountKey) -> anyhow::Result<()> {
-        let id = self.http.account_id(account_key.account_name.clone()).await?;
+        let id = self
+            .http
+            .account_id(account_key.account_name.clone())
+            .await?;
         self.websocket.subscribe_account_positions(id).await
     }
 
     async fn unsubscribe_positions(&self, account_key: &AccountKey) -> anyhow::Result<()> {
-        let id = self.http.account_id(account_key.account_name.clone()).await?;
+        let id = self
+            .http
+            .account_id(account_key.account_name.clone())
+            .await?;
         self.websocket.unsubscribe_account_positions(id).await
     }
 
@@ -251,12 +322,18 @@ impl ExecutionProvider for PXClient {
     }
 
     async fn subscribe_order_updates(&self, account_key: &AccountKey) -> anyhow::Result<()> {
-        let id = self.http.account_id(account_key.account_name.clone()).await?;
+        let id = self
+            .http
+            .account_id(account_key.account_name.clone())
+            .await?;
         self.websocket.subscribe_account_orders(id).await
     }
 
     async fn unsubscribe_order_updates(&self, account_key: &AccountKey) -> anyhow::Result<()> {
-        let id = self.http.account_id(account_key.account_name.clone()).await?;
+        let id = self
+            .http
+            .account_id(account_key.account_name.clone())
+            .await?;
         self.websocket.unsubscribe_account_orders(id).await
     }
 

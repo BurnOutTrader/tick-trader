@@ -1,10 +1,10 @@
+pub use crate::securities::symbols::Exchange;
+use crate::securities::symbols::Instrument;
 pub use chrono::{DateTime, Utc};
+use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 pub use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use strum_macros::Display;
-use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
-pub use crate::securities::symbols::Exchange;
-use crate::securities::symbols::Instrument;
 
 #[derive(Clone, PartialEq, Eq, Debug, Hash, Display)]
 pub enum Feed {
@@ -24,7 +24,7 @@ pub enum Feed {
     TickBars {
         symbol: String,
         exchange: Exchange,
-        ticks: u32
+        ticks: u32,
     },
     OrderBookL2 {
         symbol: String,
@@ -132,8 +132,18 @@ pub enum BarClose {
 ///
 /// Represents the smallest atomic piece of trade data.
 /// Often used as input for tick charts or indicators.
-#[derive(Archive, RkyvDeserialize, RkyvSerialize)]
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Archive,
+    RkyvDeserialize,
+    RkyvSerialize,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+)]
 pub struct Tick {
     /// Symbol identifier (e.g. `"MNQ"`, `"AAPL"`).
     pub symbol: String,
@@ -157,8 +167,18 @@ pub struct Tick {
 /// A candlestick / bar of aggregated trades.
 ///
 /// Produced by consolidating ticks or vendor-provided candles.
-#[derive(Archive, RkyvDeserialize, RkyvSerialize)]
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Archive,
+    RkyvDeserialize,
+    RkyvSerialize,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+)]
 pub struct Candle {
     /// Symbol identifier (e.g. `"MNQ"`, `"AAPL"`).
     pub symbol: String,
@@ -212,8 +232,18 @@ impl Candle {
     }
 }
 
-#[derive(Archive, RkyvDeserialize, RkyvSerialize)]
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Archive,
+    RkyvDeserialize,
+    RkyvSerialize,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+)]
 pub struct TickBar {
     /// Symbol identifier (e.g. `"MNQ"`, `"AAPL"`).
     pub symbol: String,
@@ -250,8 +280,18 @@ pub struct TickBar {
 /// Best bid and offer (BBO).
 ///
 /// A lightweight snapshot of the top of the order book.
-#[derive(Archive, RkyvDeserialize, RkyvSerialize)]
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Archive,
+    RkyvDeserialize,
+    RkyvSerialize,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+)]
 pub struct Bbo {
     /// Symbol identifier (e.g. `"MNQ"`, `"AAPL"`).
     pub symbol: String,
@@ -280,8 +320,18 @@ pub struct Bbo {
     pub is_snapshot: Option<bool>,
 }
 
-#[derive(Archive, RkyvDeserialize, RkyvSerialize)]
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Archive,
+    RkyvDeserialize,
+    RkyvSerialize,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+)]
 pub struct BookLevel {
     #[rkyv(with = crate::rkyv_types::DecimalDef)]
     pub price: Price,
@@ -294,8 +344,18 @@ pub struct BookLevel {
 ///
 /// Contains bid and ask ladders up to the requested depth.
 /// Depth levels are sorted: index 0 = best price level.
-#[derive(Archive, RkyvDeserialize, RkyvSerialize)]
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Archive,
+    RkyvDeserialize,
+    RkyvSerialize,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+)]
 pub struct OrderBook {
     /// Symbol identifier (e.g. `"MNQ"`, `"AAPL"`).
     pub symbol: String,

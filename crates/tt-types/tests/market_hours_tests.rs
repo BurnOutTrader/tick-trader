@@ -2,7 +2,10 @@ use chrono::{Duration, NaiveDate, TimeZone, Utc};
 use chrono_tz::Tz;
 use chrono_tz::US::Central;
 use tt_types::base_data::{Exchange, Resolution};
-use tt_types::securities::market_hours::{candle_end, hours_for_exchange, next_session_after, next_session_after_with, next_session_open_after, session_bounds, time_end_of_day, SessionKind};
+use tt_types::securities::market_hours::{
+    SessionKind, candle_end, hours_for_exchange, next_session_after, next_session_after_with,
+    next_session_open_after, session_bounds, time_end_of_day,
+};
 
 fn ct(y: i32, m: u32, d: u32, hh: u32, mm: u32, ss: u32) -> chrono::DateTime<Utc> {
     Central

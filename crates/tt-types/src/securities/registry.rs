@@ -63,7 +63,11 @@ impl SecurityRegistry {
     /// Look up a [`FuturesContract`] by `(SymbolId, Exchange)`.
     ///
     /// Returns `None` if the symbol is unknown.
-    pub fn get(&self, instrument: &Instrument, exchange: &Exchange) -> Option<Arc<FuturesContract>> {
+    pub fn get(
+        &self,
+        instrument: &Instrument,
+        exchange: &Exchange,
+    ) -> Option<Arc<FuturesContract>> {
         self.inner
             .get(exchange)
             .and_then(|map| map.get(instrument).cloned())
@@ -99,7 +103,11 @@ impl SecurityRegistry {
     /// Emits `RegistryEvent::Removed` if the symbol was present.
     ///
     /// Returns the removed entry (if any).
-    pub fn remove(&self, instrument: &Instrument, exchange: &Exchange) -> Option<Arc<FuturesContract>> {
+    pub fn remove(
+        &self,
+        instrument: &Instrument,
+        exchange: &Exchange,
+    ) -> Option<Arc<FuturesContract>> {
         let out = self
             .inner
             .get_mut(exchange)

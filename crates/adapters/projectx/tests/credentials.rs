@@ -1,7 +1,7 @@
 use projectx::http::credentials::PxCredential;
 use tt_types::providers::ProjectXTenant;
 
-const FIRM: ProjectXTenant =  ProjectXTenant::Topstep;
+const FIRM: ProjectXTenant = ProjectXTenant::Topstep;
 const USER_NAME: &str = "example_user";
 const API_KEY: &str = "example_api_key_123";
 

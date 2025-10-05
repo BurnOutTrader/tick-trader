@@ -1,11 +1,18 @@
-use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
-use rust_decimal::Decimal;
+use super::events::{ClientOrderId, ProviderOrderId, Side};
 use crate::rkyv_types::DecimalDef;
 use crate::securities::symbols::Instrument;
-use super::events::{Side, ProviderOrderId, ClientOrderId};
+use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
+use rust_decimal::Decimal;
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OrderState { New, Acknowledged, PartiallyFilled, Filled, Canceled, Rejected }
+pub enum OrderState {
+    New,
+    Acknowledged,
+    PartiallyFilled,
+    Filled,
+    Canceled,
+    Rejected,
+}
 
 impl OrderState {
     // Higher value means higher precedence in tie-breaks (same seq)
@@ -39,14 +46,30 @@ pub struct Order {
 
 impl Order {
     pub fn new(instrument: Instrument, side: Side, qty: i64) -> Self {
-        Self { provider_order_id: None, client_order_id: None, instrument, side, version: 0, last_provider_seq: None, state: OrderState::New, qty, leaves: qty, cum_qty: 0, avg_fill_px: Decimal::ZERO }
+        Self {
+            provider_order_id: None,
+            client_order_id: None,
+            instrument,
+            side,
+            version: 0,
+            last_provider_seq: None,
+            state: OrderState::New,
+            qty,
+            leaves: qty,
+            cum_qty: 0,
+            avg_fill_px: Decimal::ZERO,
+        }
     }
 
     pub fn can_apply(&self, incoming_seq: Option<u64>, incoming_state: OrderState) -> bool {
         match (self.last_provider_seq, incoming_seq) {
             (Some(prev), Some(inc)) => {
-                if inc > prev { return true; }
-                if inc < prev { return false; }
+                if inc > prev {
+                    return true;
+                }
+                if inc < prev {
+                    return false;
+                }
                 // equal seq: precedence
                 incoming_state.precedence() >= self.state.precedence()
             }
@@ -55,7 +78,6 @@ impl Order {
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {

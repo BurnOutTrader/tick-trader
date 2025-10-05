@@ -1,10 +1,10 @@
-use std::collections::HashMap;
-use std::sync::RwLock;
+use crate::accounts::account::AccountName;
+use crate::providers::ProviderKind;
+use crate::securities::symbols::Instrument;
 use once_cell::sync::Lazy;
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
-use crate::accounts::account::AccountName;
-use crate::providers::{ProviderKind};
-use crate::securities::symbols::Instrument;
+use std::collections::HashMap;
+use std::sync::RwLock;
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq, Copy, Eq, Hash)]
 #[rkyv(compare(PartialEq), derive(Debug))]
@@ -12,7 +12,7 @@ pub struct TopicId(pub u8);
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq, Copy, Eq, Hash)]
 #[rkyv(compare(PartialEq), derive(Debug))]
-pub enum Topic{
+pub enum Topic {
     Ticks = 1,
     Quotes = 2,
     Depth = 3,
@@ -28,7 +28,10 @@ pub enum Topic{
 
 impl Topic {
     pub fn id(self) -> TopicId {
-        use crate::keys::Topic::{AccountEvt, Bars1d, Bars1h, Bars1m, Bars1s, Depth, Fills, Orders, Positions, Quotes, Ticks};
+        use crate::keys::Topic::{
+            AccountEvt, Bars1d, Bars1h, Bars1m, Bars1s, Depth, Fills, Orders, Positions, Quotes,
+            Ticks,
+        };
         let id = match self {
             Ticks => 1,
             Quotes => 2,
@@ -93,18 +96,16 @@ pub fn resolve_key(id: KeyId) -> Option<String> {
     g.resolve(id).map(|s| s.to_string())
 }
 
-#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone)]
-#[derive(PartialEq, Eq, Hash)]
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SymbolKey {
-    pub instrument: Instrument,     // UPPER
-    pub provider: ProviderKind,     // provider kind (may include tenant/affiliation)
+    pub instrument: Instrument, // UPPER
+    pub provider: ProviderKind, // provider kind (may include tenant/affiliation)
 }
 
-#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq)]
-#[derive(Eq, Hash)]
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AccountKey {
-    pub provider: ProviderKind,       // provider kind
-    pub account_name: AccountName,     // as-is
+    pub provider: ProviderKind,    // provider kind
+    pub account_name: AccountName, // as-is
 }
 
 pub fn stream_id(topic: TopicId, key: KeyId) -> u64 {

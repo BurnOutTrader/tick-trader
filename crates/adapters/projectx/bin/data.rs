@@ -1,12 +1,12 @@
 //! Sandbox test bed: authenticate, connect realtime, subscribe MNQ trades, quotes or depth, print incoming.
-use std::sync::Arc;
 use dotenvy::dotenv;
-use rustls::crypto::{CryptoProvider, ring};
-use tracing::{error, info, level_filters::LevelFilter, warn};
 use projectx::http::client::PxHttpClient;
 use projectx::http::credentials::PxCredential;
 use projectx::http::models::ContractSearchResponse;
 use projectx::websocket::client::PxWebSocketClient;
+use rustls::crypto::{CryptoProvider, ring};
+use std::sync::Arc;
+use tracing::{error, info, level_filters::LevelFilter, warn};
 use tt_bus::MessageBus;
 
 #[tokio::main]
@@ -25,35 +25,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Authentication: Success");
 
     // Resolve MNQ contract ID: allow override via env, else search
-    let contract_id =
-        match http.inner.search_contracts(false, "MNQ").await {
-            Ok(ContractSearchResponse { contracts, .. }) if !contracts.is_empty() => {
-                let first = &contracts[0];
-                info!(
-                        "Using contract: {} ({}), symbol_id={}, active={} ",
-                        first.id, first.name, first.symbol_id, first.active_contract
-                    );
-                first.id.clone()
-            }
-            Ok(_) => {
-                error!("No MNQ contracts found in search. Set PX_MNQ_CONTRACT_ID env var.");
-                return Ok(());
-            }
-            Err(e) => {
-                error!("Contract search failed: {e:?}");
-                return Ok(());
-            }
-        };
+    let contract_id = match http.inner.search_contracts(false, "MNQ").await {
+        Ok(ContractSearchResponse { contracts, .. }) if !contracts.is_empty() => {
+            let first = &contracts[0];
+            info!(
+                "Using contract: {} ({}), symbol_id={}, active={} ",
+                first.id, first.name, first.symbol_id, first.active_contract
+            );
+            first.id.clone()
+        }
+        Ok(_) => {
+            error!("No MNQ contracts found in search. Set PX_MNQ_CONTRACT_ID env var.");
+            return Ok(());
+        }
+        Err(e) => {
+            error!("Contract search failed: {e:?}");
+            return Ok(());
+        }
+    };
 
-
-// Build realtime client using the authenticated token
-    let token = http
-        .inner
-        .token_string()
-        .await;
+    // Build realtime client using the authenticated token
+    let token = http.inner.token_string().await;
     let base = http.inner.rtc_base();
     let bus = Arc::new(MessageBus::new());
-    let rt = PxWebSocketClient::new(base, token,http.firm.clone(), bus.clone());
+    let rt = PxWebSocketClient::new(base, token, http.firm.clone(), bus.clone());
 
     // Connect market hub and subscribe to trades for the contract
     rt.connect_market().await?;
@@ -61,7 +56,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match rt.subscribe_contract_market_depth(&contract_id).await {
         Ok(_) => info!("Subscribed trades for contract_id={}", contract_id),
-        Err(_) => warn!("Failed to subscribe to trades for contract_id={}", contract_id),
+        Err(_) => warn!(
+            "Failed to subscribe to trades for contract_id={}",
+            contract_id
+        ),
     }
 
     info!("Waiting for depth... press Ctrl-C to exit");

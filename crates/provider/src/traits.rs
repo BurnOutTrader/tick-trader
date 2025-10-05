@@ -1,10 +1,10 @@
+use ahash::AHashMap;
 use async_trait::async_trait;
 use std::collections::HashMap;
-use std::time::Instant;
 use std::sync::Arc;
-use ahash::AHashMap;
+use std::time::Instant;
 use tt_types::keys::{AccountKey, SymbolKey, Topic};
-use tt_types::providers::{ProviderKind, ProjectXTenant, RithmicSystem};
+use tt_types::providers::{ProjectXTenant, ProviderKind, RithmicSystem};
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum ConnectionState {
@@ -50,20 +50,28 @@ impl ProviderSessionSpec {
                 let kind = ProviderKind::ProjectX(tenant);
 
                 // Normalize credential key: uppercase and remove non-alphanum underscores normalization
-                let norm = cred_key_raw
-                    .to_ascii_uppercase()
-                    .replace('-', "_");
+                let norm = cred_key_raw.to_ascii_uppercase().replace('-', "_");
                 let norm = norm.as_str();
 
                 match norm {
                     // common variants
-                    "USERNAME" => { user_names.insert(kind, value); }
-                    "APIKEY" | "API_KEY" => { api_keys.insert(kind, value); }
-                    "PASSWORD" => { passwords.insert(kind, value); }
+                    "USERNAME" => {
+                        user_names.insert(kind, value);
+                    }
+                    "APIKEY" | "API_KEY" => {
+                        api_keys.insert(kind, value);
+                    }
+                    "PASSWORD" => {
+                        passwords.insert(kind, value);
+                    }
                     // PX specific optional
-                    "FIRM" => { other.insert((kind, "FIRM".to_string()), value); }
+                    "FIRM" => {
+                        other.insert((kind, "FIRM".to_string()), value);
+                    }
                     // anything else goes to other
-                    other_key => { other.insert((kind, other_key.to_string()), value); }
+                    other_key => {
+                        other.insert((kind, other_key.to_string()), value);
+                    }
                 }
             } else if let Some(rest) = key_trim.strip_prefix("RITHMIC_") {
                 // Expect: RITHMIC_{SYSTEM}_{CRED}
@@ -80,20 +88,26 @@ impl ProviderSessionSpec {
                 // Try to decode using provided helper; skip if unknown system.
                 if let Some(system) = RithmicSystem::from_env_string(system_str) {
                     let kind = ProviderKind::Rithmic(system);
-                    let norm = cred_key_raw
-                        .to_ascii_uppercase()
-                        .replace('-', "_");
+                    let norm = cred_key_raw.to_ascii_uppercase().replace('-', "_");
                     let norm = norm.as_str();
 
                     match norm {
-                        "USERNAME" => { user_names.insert(kind, value); }
-                        "APIKEY" | "API_KEY" => { api_keys.insert(kind, value); }
-                        "PASSWORD" => { passwords.insert(kind, value); }
+                        "USERNAME" => {
+                            user_names.insert(kind, value);
+                        }
+                        "APIKEY" | "API_KEY" => {
+                            api_keys.insert(kind, value);
+                        }
+                        "PASSWORD" => {
+                            passwords.insert(kind, value);
+                        }
                         // Rithmic specific extras go into 'other'
                         "FCM_ID" | "IB_ID" | "USER_TYPE" => {
                             other.insert((kind, norm.to_string()), value);
                         }
-                        other_key => { other.insert((kind, other_key.to_string()), value); }
+                        other_key => {
+                            other.insert((kind, other_key.to_string()), value);
+                        }
                     }
                 } else {
                     // Unknown system; ignore this env var.
@@ -149,16 +163,16 @@ pub trait MarketDataProvider: Send + Sync {
     fn supports(&self, topic: Topic) -> bool;
 
     // Lifecycle
-    async fn connect_to_market(&self, kind: ProviderKind, session: ProviderSessionSpec) -> anyhow::Result<()>;
+    async fn connect_to_market(
+        &self,
+        kind: ProviderKind,
+        session: ProviderSessionSpec,
+    ) -> anyhow::Result<()>;
     async fn disconnect(&self, reason: DisconnectReason);
     async fn connection_state(&self) -> ConnectionState;
 
     // Symbol management
-    async fn subscribe_md(
-        &self,
-        topic: Topic,
-        key: &SymbolKey,
-    ) -> anyhow::Result<()>;
+    async fn subscribe_md(&self, topic: Topic, key: &SymbolKey) -> anyhow::Result<()>;
     async fn unsubscribe_md(&self, topic: Topic, key: &SymbolKey) -> anyhow::Result<()>;
     async fn active_md_subscriptions(&self) -> AHashMap<Topic, Vec<SymbolKey>>;
     async fn auto_update(&self) -> anyhow::Result<()>;
@@ -172,7 +186,11 @@ pub trait MarketDataProvider: Send + Sync {
 pub trait ExecutionProvider: Send + Sync {
     // Identity & lifecycle
     fn id(&self) -> ProviderKind;
-    async fn connect_to_broker(&self, kind: ProviderKind, session: ProviderSessionSpec) -> anyhow::Result<()>;
+    async fn connect_to_broker(
+        &self,
+        kind: ProviderKind,
+        session: ProviderSessionSpec,
+    ) -> anyhow::Result<()>;
     async fn disconnect(&self, reason: DisconnectReason);
     async fn connection_state(&self) -> ConnectionState;
 
@@ -199,6 +217,3 @@ pub struct CommandAck {
     pub ok: bool,
     pub message: Option<String>,
 }
-
-
-

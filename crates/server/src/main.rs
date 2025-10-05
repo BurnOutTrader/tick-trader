@@ -1,25 +1,25 @@
-use std::sync::Arc;
 use async_trait::async_trait;
 use dashmap::DashMap;
+use futures_util::{SinkExt, StreamExt};
+use projectx::client::PXClient;
 use provider::traits::{ExecutionProvider, MarketDataProvider, ProviderSessionSpec};
+use std::collections::HashMap;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Bytes;
-use futures_util::{SinkExt, StreamExt};
-use tokio_util::codec::{FramedRead, FramedWrite};
 use tokio_util::codec::length_delimited::LengthDelimitedCodec;
-use projectx::client::PXClient;
-use tt_bus::{MessageBus};
+use tokio_util::codec::{FramedRead, FramedWrite};
+use tt_bus::MessageBus;
 use tt_types::providers::ProviderKind;
 use tt_types::wire::Envelope;
-use std::collections::HashMap;
 
-use std::path::Path;
+use log::log;
 use std::io;
 #[cfg(target_os = "linux")]
 use std::os::fd::FromRawFd;
 #[cfg(target_os = "linux")]
 use std::os::unix::net::UnixListener as StdUnixListener;
-use log::log;
+use std::path::Path;
 use tokio::net::UnixListener;
 
 #[cfg(target_os = "linux")]
@@ -46,7 +46,8 @@ pub fn bind_uds(path: &str) -> io::Result<UnixListener> {
             addr.sun_path[i + 1] = *b as i8;
         }
         // Compute length: family + NUL + name
-        let addr_len = (std::mem::size_of::<libc::sa_family_t>() + 1 + name_bytes.len()) as libc::socklen_t;
+        let addr_len =
+            (std::mem::size_of::<libc::sa_family_t>() + 1 + name_bytes.len()) as libc::socklen_t;
 
         // Create non-blocking, close-on-exec socket
         let fd = unsafe {
@@ -60,13 +61,7 @@ pub fn bind_uds(path: &str) -> io::Result<UnixListener> {
             return Err(io::Error::last_os_error());
         }
         // Bind
-        let rc = unsafe {
-            libc::bind(
-                fd,
-                &addr as *const _ as *const libc::sockaddr,
-                addr_len,
-            )
-        };
+        let rc = unsafe { libc::bind(fd, &addr as *const _ as *const libc::sockaddr, addr_len) };
         if rc != 0 {
             let e = io::Error::last_os_error();
             unsafe { libc::close(fd) };
@@ -105,7 +100,6 @@ pub fn bind_uds(path: &str) -> io::Result<UnixListener> {
     }
 }
 
-
 // ProviderFactory holds concrete shared clients per provider
 struct ProviderFactory {
     md_providers: DashMap<ProviderKind, Arc<dyn MarketDataProvider>>, // PXClient implements both MD and EX traits
@@ -115,10 +109,24 @@ struct ProviderFactory {
 }
 
 impl ProviderFactory {
-    fn new() -> Self { Self { md_providers: DashMap::new(), md_refcount: DashMap::new(), ex_providers: DashMap::new(), ex_refcount: DashMap::new() } }
+    fn new() -> Self {
+        Self {
+            md_providers: DashMap::new(),
+            md_refcount: DashMap::new(),
+            ex_providers: DashMap::new(),
+            ex_refcount: DashMap::new(),
+        }
+    }
 
-    async fn ensure_md_provider(&self, kind: ProviderKind, session: ProviderSessionSpec, bus: Arc<MessageBus>) -> anyhow::Result<Arc<dyn MarketDataProvider>> {
-        if let Some(p) = self.md_providers.get(&kind) { return Ok(p.clone()); }
+    async fn ensure_md_provider(
+        &self,
+        kind: ProviderKind,
+        session: ProviderSessionSpec,
+        bus: Arc<MessageBus>,
+    ) -> anyhow::Result<Arc<dyn MarketDataProvider>> {
+        if let Some(p) = self.md_providers.get(&kind) {
+            return Ok(p.clone());
+        }
         match kind {
             ProviderKind::ProjectX(_) => {
                 let p = PXClient::new_from_session(kind, session.clone(), bus).await?;
@@ -128,11 +136,18 @@ impl ProviderFactory {
                 self.md_providers.insert(kind, arc.clone());
                 Ok(arc)
             }
-            ProviderKind::Rithmic(_) => { anyhow::bail!("Rithmic not implemented") }
+            ProviderKind::Rithmic(_) => {
+                anyhow::bail!("Rithmic not implemented")
+            }
         }
     }
 
-    async fn ensure_ex_provider(&self, kind: ProviderKind, session: ProviderSessionSpec, bus: Arc<MessageBus>) -> anyhow::Result<Arc<dyn ExecutionProvider>> {
+    async fn ensure_ex_provider(
+        &self,
+        kind: ProviderKind,
+        session: ProviderSessionSpec,
+        bus: Arc<MessageBus>,
+    ) -> anyhow::Result<Arc<dyn ExecutionProvider>> {
         if let Some(p) = self.ex_providers.get(&kind) {
             return Ok(p.clone());
         }
@@ -145,14 +160,40 @@ impl ProviderFactory {
                 self.md_providers.insert(kind, arc.clone());
                 Ok(arc)
             }
-            ProviderKind::Rithmic(_) => { anyhow::bail!("Rithmic not implemented") }
+            ProviderKind::Rithmic(_) => {
+                anyhow::bail!("Rithmic not implemented")
+            }
         }
     }
 
-    fn incr_md(&self, kind: &ProviderKind) { let mut e = self.md_refcount.entry(kind.clone()).or_insert(0); *e += 1; }
-    fn decr_md(&self, kind: &ProviderKind) -> usize { if let Some(mut e) = self.md_refcount.get_mut(kind) { if *e>0 { *e -=1; } *e } else { 0 } }
-    fn incr_ex(&self, kind: &ProviderKind) { let mut e = self.ex_refcount.entry(kind.clone()).or_insert(0); *e += 1; }
-    fn decr_ex(&self, kind: &ProviderKind) -> usize { if let Some(mut e) = self.ex_refcount.get_mut(kind) { if *e>0 { *e -=1; } *e } else { 0 } }
+    fn incr_md(&self, kind: &ProviderKind) {
+        let mut e = self.md_refcount.entry(kind.clone()).or_insert(0);
+        *e += 1;
+    }
+    fn decr_md(&self, kind: &ProviderKind) -> usize {
+        if let Some(mut e) = self.md_refcount.get_mut(kind) {
+            if *e > 0 {
+                *e -= 1;
+            }
+            *e
+        } else {
+            0
+        }
+    }
+    fn incr_ex(&self, kind: &ProviderKind) {
+        let mut e = self.ex_refcount.entry(kind.clone()).or_insert(0);
+        *e += 1;
+    }
+    fn decr_ex(&self, kind: &ProviderKind) -> usize {
+        if let Some(mut e) = self.ex_refcount.get_mut(kind) {
+            if *e > 0 {
+                *e -= 1;
+            }
+            *e
+        } else {
+            0
+        }
+    }
 }
 
 #[tokio::main]
@@ -189,7 +230,10 @@ async fn main() -> anyhow::Result<()> {
             let writer = tokio::spawn(async move {
                 while let Some(env) = rx.recv().await {
                     let vec = tt_types::wire::codec::encode(&env);
-                    if let Err(e) = framed_writer.send(Bytes::from(vec)).await { let _ = e; break; }
+                    if let Err(e) = framed_writer.send(Bytes::from(vec)).await {
+                        let _ = e;
+                        break;
+                    }
                 }
             });
 
@@ -202,17 +246,37 @@ async fn main() -> anyhow::Result<()> {
                                 // lazily ensure provider exists and is attached
                                 if !bus_clone.is_provider_registered(&cmd.provider) {
                                     let mut sess = default_session_clone.clone();
-                                    if let Ok(md) = factory.ensure_md_provider(cmd.provider, sess.clone(), bus_clone.clone()).await {
+                                    if let Ok(md) = factory
+                                        .ensure_md_provider(
+                                            cmd.provider,
+                                            sess.clone(),
+                                            bus_clone.clone(),
+                                        )
+                                        .await
+                                    {
                                         // Ensure execution side too, sharing the same underlying client
-                                        if let Err(e) = factory.ensure_ex_provider(cmd.provider, sess.clone(), bus_clone.clone()).await {
-                                            log!(log::Level::Error, "ensure_ex_provider failed: {}", e);    
+                                        if let Err(e) = factory
+                                            .ensure_ex_provider(
+                                                cmd.provider,
+                                                sess.clone(),
+                                                bus_clone.clone(),
+                                            )
+                                            .await
+                                        {
+                                            log!(
+                                                log::Level::Error,
+                                                "ensure_ex_provider failed: {}",
+                                                e
+                                            );
                                         }
                                     }
                                 }
                                 if let Some(p) = factory.md_providers.get(&cmd.provider) {
                                     match p.value().subscribe_md(cmd.topic, &cmd.key).await {
-                                        Ok(_) => {},
-                                        Err(e) => log!(log::Level::Error, "subscribe_md failed: {}", e),
+                                        Ok(_) => {}
+                                        Err(e) => {
+                                            log!(log::Level::Error, "subscribe_md failed: {}", e)
+                                        }
                                     }
                                 }
                                 factory.incr_md(&cmd.provider);
@@ -222,7 +286,11 @@ async fn main() -> anyhow::Result<()> {
                                 if n == 0 {
                                     // Only tear down provider if there are no execution subscriptions either
                                     if let Some(p) = factory.ex_providers.get(&cmd.provider) {
-                                        let ex_active = ExecutionProvider::active_account_subscriptions(p.as_ref()).await;
+                                        let ex_active =
+                                            ExecutionProvider::active_account_subscriptions(
+                                                p.as_ref(),
+                                            )
+                                            .await;
                                         if ex_active.is_empty() {
                                             // best-effort disconnect and unregister provider
                                             bus_clone.unregister_provider(&cmd.provider);
@@ -247,7 +315,14 @@ async fn main() -> anyhow::Result<()> {
                             Envelope::InstrumentsRequest(req) => {
                                 if !bus_clone.is_provider_registered(&req.provider) {
                                     let mut sess = default_session_clone.clone();
-                                    if let Err(e) = factory.ensure_md_provider(req.provider, sess.clone(), bus_clone.clone()).await {
+                                    if let Err(e) = factory
+                                        .ensure_md_provider(
+                                            req.provider,
+                                            sess.clone(),
+                                            bus_clone.clone(),
+                                        )
+                                        .await
+                                    {
                                         log!(log::Level::Error, "ensure_md_provider failed: {}", e);
                                     }
                                 }

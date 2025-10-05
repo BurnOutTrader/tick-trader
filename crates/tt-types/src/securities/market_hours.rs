@@ -61,6 +61,7 @@
 //!   overlap within that window.
 //!
 //! Examples can be found in `standard_lib/tests/market_hours_tests.rs`.
+use crate::base_data::Resolution;
 use crate::securities::symbols::Exchange;
 use chrono::{
     DateTime, Datelike, Duration, LocalResult, NaiveDate, NaiveDateTime, TimeZone, Timelike, Utc,
@@ -69,7 +70,6 @@ use chrono::{
 use chrono_tz::{America, Asia, Europe, Tz, US};
 use serde::{Deserialize, Serialize};
 use tracing::warn;
-use crate::base_data::Resolution;
 
 /// One schedule slice for a market session.
 ///

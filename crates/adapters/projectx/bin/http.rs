@@ -1,8 +1,8 @@
 use dotenvy::dotenv;
-use rustls::crypto::{ring, CryptoProvider};
-use tracing::level_filters::LevelFilter;
 use projectx::http::client::PxHttpClient;
 use projectx::http::credentials::PxCredential;
+use rustls::crypto::{CryptoProvider, ring};
+use tracing::level_filters::LevelFilter;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

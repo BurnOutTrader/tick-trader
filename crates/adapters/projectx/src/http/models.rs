@@ -1,8 +1,8 @@
-use std::str::FromStr;
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use rust_decimal::prelude::FromPrimitive;
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 use tokio::{sync::watch, task::JoinHandle};
 use tt_types::base_data::{Candle, Exchange, Resolution};
 use tt_types::securities::futures_helpers::extract_root;
@@ -102,7 +102,6 @@ pub struct PxApiBar {
     pub v: i64,
 }
 
-
 #[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct RetrieveBarsResponse {
@@ -129,7 +128,10 @@ impl RetrieveBarsResponse {
         resolution: Resolution,
         exchange: Exchange,
     ) -> anyhow::Result<Vec<Candle>> {
-        self.bars.iter().map(|bar| Self::bar_to_candle(bar, instrument.clone(), resolution, exchange)).collect()
+        self.bars
+            .iter()
+            .map(|bar| Self::bar_to_candle(bar, instrument.clone(), resolution, exchange))
+            .collect()
     }
 
     pub fn bar_to_candle(
@@ -148,7 +150,7 @@ impl RetrieveBarsResponse {
                 let _market_hours = hours_for_exchange(exchange);
                 todo!()
             }
-            _ => time_start + resolution.as_duration()
+            _ => time_start + resolution.as_duration(),
         };
         let root = extract_root(&instrument);
         let candle = Candle {

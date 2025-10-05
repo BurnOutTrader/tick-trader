@@ -1,7 +1,7 @@
+use crate::securities::security::FuturesContract;
 use crate::securities::symbols::Currency;
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
-use crate::securities::security::FuturesContract;
 // Somewhere common (e.g., engine_multi or a small models.rs)
 
 pub trait FeeModel: Send + Sync {
