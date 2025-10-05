@@ -1,21 +1,9 @@
-use crate::base_data::{Bbo, Candle, Feed, Resolution, Side, Tick, TickBar};
-use crate::securities::market_hours::{MarketHours, next_session_after, session_bounds};
-use crate::securities::symbols::{Exchange, Instrument};
+use crate::base_data::{Bbo, Candle, Resolution, Side, Tick, TickBar};
+use crate::securities::market_hours::{next_session_after, session_bounds, MarketHours};
+use crate::securities::symbols::Instrument;
 use chrono::{DateTime, Duration, TimeZone, Utc};
-use rust_decimal::{Decimal, dec};
+use rust_decimal::{dec, Decimal};
 use std::sync::Arc;
-use tokio::sync::broadcast;
-
-pub trait Consolidator<T>: Send + Sync {
-    fn subscribe(&self, _feed: Feed) -> broadcast::Receiver<T>;
-    fn kill(&self);
-}
-
-pub enum InboundRx {
-    Ticks(broadcast::Receiver<Tick>),
-    Bbo(broadcast::Receiver<Bbo>),
-    Candles(broadcast::Receiver<Candle>),
-}
 
 // ===================== Helpers =====================
 
@@ -68,679 +56,517 @@ fn floor_to(res: &Resolution, t: DateTime<Utc>) -> DateTime<Utc> {
     }
 }
 
-// ===================== Consolidators =====================
-//
-// Each consolidator owns an outbound broadcast::Sender<Candle> and a task
-// that consumes an inbound Receiver<...> and produces candles.
-// subscribe() returns a Receiver<Candle>. kill() aborts the task.
-//
-// ---------------------------------------------------------
+// ===================== Consolidators (pull-based) =====================
+
 pub struct TicksToTickBarsConsolidator {
-    out_tx: Arc<broadcast::Sender<TickBar>>,
-    task: tokio::task::JoinHandle<()>,
+    ticks_per_bar: u32,
+    out_symbol: String,
+    instrument: Instrument,
+    // state
+    count: u32,
+    start_ts: Option<DateTime<Utc>>,
+    o: Option<Decimal>,
+    h: Option<Decimal>,
+    l: Option<Decimal>,
+    c: Option<Decimal>,
+    vol: Decimal,
+    bid_vol: Decimal,
+    ask_vol: Decimal,
 }
 
-#[allow(unused)]
 impl TicksToTickBarsConsolidator {
-    pub fn new(
-        ticks_per_bar: u32,
-        mut rx_tick: broadcast::Receiver<Tick>, // inbound
-        out_symbol: String,
-        out_exchange: Exchange,
-        instrument: Instrument,
-    ) -> Self {
-        let (out_tx, _) = broadcast::channel::<TickBar>(1024);
-
-        let out_tx = Arc::new(out_tx);
-        let out_tx_clone = Arc::clone(&out_tx);
-
-        let task = tokio::spawn(async move {
-            let mut count: u32 = 0;
-            let mut start_ts: Option<DateTime<Utc>> = None;
-
-            let mut o: Option<Decimal> = None;
-            let mut h: Option<Decimal> = None;
-            let mut l: Option<Decimal> = None;
-            let mut c: Option<Decimal> = None;
-
-            let mut vol = Decimal::ZERO;
-            let mut bid_vol = Decimal::ZERO;
-            let mut ask_vol = Decimal::ZERO;
-            let mut trades = Decimal::ZERO;
-
-            while let Ok(tk) = rx_tick.recv().await {
-                if start_ts.is_none() {
-                    start_ts = Some(tk.time);
-                }
-                if o.is_none() {
-                    o = Some(tk.price);
-                }
-
-                h = Some(h.map_or(tk.price, |x| x.max(tk.price)));
-                l = Some(l.map_or(tk.price, |x| x.min(tk.price)));
-                c = Some(tk.price);
-
-                vol += tk.volume;
-                trades += dec!(1);
-                match tk.side {
-                    Side::Buy => ask_vol += tk.volume,
-                    Side::Sell => bid_vol += tk.volume,
-                    Side::None => {}
-                }
-                count += 1;
-                if count >= ticks_per_bar {
-                    if let (Some(start), Some(oo), Some(hh), Some(ll), Some(cc)) =
-                        (start_ts, o, h, l, c)
-                    {
-                        // Make the end time inclusive by subtracting 1ns if you follow that convention elsewhere
-                        let end_inclusive = tk.time - Duration::nanoseconds(1);
-                        let _ = out_tx.send(TickBar {
-                            symbol: out_symbol.clone(),
-                            instrument: instrument.clone(),
-                            time_start: start,
-                            time_end: end_inclusive,
-                            open: oo,
-                            high: hh,
-                            low: ll,
-                            close: cc,
-                            volume: vol,
-                            ask_volume: ask_vol,
-                            bid_volume: bid_vol,
-                        });
-                    }
-
-                    // reset for next bar
-                    count = 0;
-                    start_ts = None;
-                    o = None;
-                    h = None;
-                    l = None;
-                    c = None;
-                    vol = Decimal::ZERO;
-                    bid_vol = Decimal::ZERO;
-                    ask_vol = Decimal::ZERO;
-                    trades = Decimal::ZERO;
-                }
-            }
-        });
-
+    pub fn new(ticks_per_bar: u32, out_symbol: String, instrument: Instrument) -> Self {
         Self {
-            out_tx: out_tx_clone,
-            task,
+            ticks_per_bar,
+            out_symbol,
+            instrument,
+            count: 0,
+            start_ts: None,
+            o: None,
+            h: None,
+            l: None,
+            c: None,
+            vol: Decimal::ZERO,
+            bid_vol: Decimal::ZERO,
+            ask_vol: Decimal::ZERO,
         }
     }
-}
 
-impl Consolidator<TickBar> for TicksToTickBarsConsolidator {
-    fn subscribe(&self, _feed: Feed) -> broadcast::Receiver<TickBar> {
-        self.out_tx.subscribe()
-    }
-    fn kill(&self) {
-        self.task.abort();
+    pub fn update_tick(&mut self, tk: &Tick) -> Option<TickBar> {
+        if self.start_ts.is_none() {
+            self.start_ts = Some(tk.time);
+        }
+        if self.o.is_none() {
+            self.o = Some(tk.price);
+        }
+        self.h = Some(self.h.map_or(tk.price, |x| x.max(tk.price)));
+        self.l = Some(self.l.map_or(tk.price, |x| x.min(tk.price)));
+        self.c = Some(tk.price);
+
+        self.vol += tk.volume;
+        match tk.side {
+            Side::Buy => self.ask_vol += tk.volume,
+            Side::Sell => self.bid_vol += tk.volume,
+            Side::None => {}
+        }
+        self.count += 1;
+
+        if self.count >= self.ticks_per_bar {
+            if let (Some(start), Some(oo), Some(hh), Some(ll), Some(cc)) =
+                (self.start_ts, self.o, self.h, self.l, self.c)
+            {
+                let end_incl = tk.time - Duration::nanoseconds(1);
+                let out = TickBar {
+                    symbol: self.out_symbol.clone(),
+                    instrument: self.instrument.clone(),
+                    time_start: start,
+                    time_end: end_incl,
+                    open: oo,
+                    high: hh,
+                    low: ll,
+                    close: cc,
+                    volume: self.vol,
+                    ask_volume: self.ask_vol,
+                    bid_volume: self.bid_vol,
+                };
+                // reset state
+                self.count = 0;
+                self.start_ts = None;
+                self.o = None;
+                self.h = None;
+                self.l = None;
+                self.c = None;
+                self.vol = Decimal::ZERO;
+                self.bid_vol = Decimal::ZERO;
+                self.ask_vol = Decimal::ZERO;
+                return Some(out);
+            }
+        }
+        None
     }
 }
 
 pub struct TicksToCandlesConsolidator {
-    out_tx: Arc<broadcast::Sender<Candle>>,
-    task: tokio::task::JoinHandle<()>,
+    dst: Resolution,
+    out_symbol: String,
+    hours: Option<Arc<MarketHours>>,
+    instrument: Instrument,
+    // state
+    o: Option<Decimal>,
+    h: Option<Decimal>,
+    l: Option<Decimal>,
+    c: Option<Decimal>,
+    vol: Decimal,
+    bid_vol: Decimal,
+    ask_vol: Decimal,
+    win: Option<Win>,
+}
+
+enum Win {
+    Fixed { start: DateTime<Utc>, end: DateTime<Utc>, len: Duration },
+    Session { open: DateTime<Utc>, close: DateTime<Utc> },
 }
 
 impl TicksToCandlesConsolidator {
     pub fn new(
         dst: Resolution,
-        mut rx_tick: broadcast::Receiver<Tick>,
         out_symbol: String,
         hours: Option<Arc<MarketHours>>,
         instrument: Instrument,
-        mut rx_time: Option<broadcast::Receiver<DateTime<Utc>>>,
     ) -> Self {
-        let (out_tx, _) = broadcast::channel::<Candle>(1024);
-
-        let out_tx = Arc::new(out_tx);
-        let out_tx_clone = Arc::clone(&out_tx);
-
-        let task = tokio::spawn(async move {
-            let mut o = None;
-            let mut h = None;
-            let mut l = None;
-            let mut c = None;
-            let mut vol = Decimal::ZERO;
-            let mut bid_vol = Decimal::ZERO;
-            let mut ask_vol = Decimal::ZERO;
-            let mut trades = Decimal::ZERO;
-
-            enum Win {
-                Fixed {
-                    start: DateTime<Utc>,
-                    end: DateTime<Utc>,
-                    len: Duration,
-                },
-                Session {
-                    open: DateTime<Utc>,
-                    close: DateTime<Utc>,
-                },
-            }
-            let mut win: Option<Win> = None;
-
-            let init_win =
-                |t: DateTime<Utc>, res: &Resolution, hours: &Option<Arc<MarketHours>>| -> Win {
-                    match res {
-                        Resolution::Daily | Resolution::Weekly => {
-                            let mh = hours.as_ref().expect("Daily/Weekly requires MarketHours");
-                            let (open, close) = session_bounds(mh, t);
-                            Win::Session { open, close }
-                        }
-                        _ => {
-                            let len = fixed_len(res);
-                            let (start, end) = (floor_to(res, t), floor_to(res, t) + len);
-                            Win::Fixed { start, end, len }
-                        }
-                    }
-                };
-
-            let inside = |t: DateTime<Utc>, w: &Win| -> bool {
-                match w {
-                    Win::Fixed { end, .. } => t < *end,
-                    Win::Session { open, close } => t >= *open && t < *close,
-                }
-            };
-
-            let advance =
-                |t_last: DateTime<Utc>, w: &Win, hours: &Option<Arc<MarketHours>>| -> Win {
-                    match w {
-                        Win::Fixed { end, len, .. } => {
-                            let mut s = *end;
-                            while t_last >= s {
-                                s += *len;
-                            }
-                            Win::Fixed {
-                                start: s - *len,
-                                end: s,
-                                len: *len,
-                            }
-                        }
-                        Win::Session { close, .. } => {
-                            let mh = hours.as_ref().expect("session advance needs MarketHours");
-                            let (nopen, nclose) = next_session_after(mh, *close);
-                            Win::Session {
-                                open: nopen,
-                                close: nclose,
-                            }
-                        }
-                    }
-                };
-
-            loop {
-                tokio::select! {
-                    // Market data tick advances state and may flush if crossing into next window
-                    Ok(tk) = rx_tick.recv() => {
-                        let t = tk.time;
-                        if win.is_none() {
-                            win = Some(init_win(t, &dst, &hours));
-                        }
-                        while !inside(t, win.as_ref().unwrap()) {
-                            if let (Some(oo), Some(hh), Some(ll), Some(cc)) = (o, h, l, c) {
-                                let (start, end) = match win.as_ref().unwrap() {
-                                    Win::Fixed { start, end, .. } => (*start, *end),
-                                    Win::Session { open, close } => (*open, *close),
-                                };
-                                let _ = out_tx.send(Candle {
-                                    symbol: out_symbol.clone(),
-                                    instrument: instrument.clone(),
-                                    time_start: start,
-                                    time_end: end_inclusive(end),
-                                    open: oo,
-                                    high: hh,
-                                    low: ll,
-                                    close: cc,
-                                    volume: vol,
-                                    ask_volume: ask_vol,
-                                    bid_volume: bid_vol,
-                                    resolution: dst.clone(),
-                                });
-                            }
-                            // reset & advance
-                            o = None; h = None; l = None; c = None;
-                            vol = Decimal::ZERO; bid_vol = Decimal::ZERO; ask_vol = Decimal::ZERO; trades = Decimal::ZERO;
-                            let cur = win.take().unwrap();
-                            win = Some(advance(t, &cur, &hours));
-                        }
-                        if o.is_none() { o = Some(tk.price); }
-                        h = Some(h.map_or(tk.price, |x| x.max(tk.price)));
-                        l = Some(l.map_or(tk.price, |x| x.min(tk.price)));
-                        c = Some(tk.price);
-                        vol += tk.volume; trades += dec!(1);
-                        match tk.side { Side::Buy => ask_vol += tk.volume, Side::Sell => bid_vol += tk.volume, Side::None => {} }
-                    }
-                    // Time ticks: flush current window if we've reached/passed end, without requiring a new tick
-                    Ok(t_now) = async {
-                        if let Some(rx) = rx_time.as_mut() { rx.recv().await } else { Err(tokio::sync::broadcast::error::RecvError::Closed) }
-                    }, if rx_time.is_some() => {
-                        if let Some(w) = win.as_ref() {
-                            let end = match w { Win::Fixed { end, .. } => *end, Win::Session { close, .. } => *close };
-                            if t_now >= end {
-                                if let (Some(oo), Some(hh), Some(ll), Some(cc)) = (o, h, l, c) {
-                                    let (start, _end) = match w { Win::Fixed { start, end, .. } => (*start, *end), Win::Session { open, close } => (*open, *close) };
-                                    let _ = out_tx.send(Candle {
-                                        symbol: out_symbol.clone(),
-                                        time_start: start,
-                                        time_end: end_inclusive(end),
-                                        open: oo,
-                                        high: hh,
-                                        low: ll,
-                                        close: cc,
-                                        volume: vol,
-                                        ask_volume: ask_vol,
-                                        bid_volume: bid_vol,
-                                        instrument: instrument.clone(),
-                                        resolution: dst.clone(),
-                                    });
-                                }
-                                // reset & advance based on time
-                                o = None; h = None; l = None; c = None;
-                                vol = Decimal::ZERO; bid_vol = Decimal::ZERO; ask_vol = Decimal::ZERO; trades = Decimal::ZERO;
-                                let cur = win.take().unwrap();
-                                // advance until window end is after t_now
-                                let mut next_w = cur;
-                                loop {
-                                    let next = advance(t_now, &next_w, &hours);
-                                    let end_next = match &next { Win::Fixed { end, .. } => *end, Win::Session { close, .. } => *close };
-                                    if t_now < end_next { next_w = next; break; } else { next_w = next; }
-                                }
-                                win = Some(next_w);
-                            }
-                        }
-                    }
-                    else => { break; }
-                }
-            }
-        });
-
         Self {
-            out_tx: out_tx_clone,
-            task,
+            dst,
+            out_symbol,
+            hours,
+            instrument,
+            o: None,
+            h: None,
+            l: None,
+            c: None,
+            vol: Decimal::ZERO,
+            bid_vol: Decimal::ZERO,
+            ask_vol: Decimal::ZERO,
+            win: None,
         }
     }
-}
 
-impl Consolidator<Candle> for TicksToCandlesConsolidator {
-    fn subscribe(&self, _feed: Feed) -> broadcast::Receiver<Candle> {
-        self.out_tx.subscribe()
+    fn init_win(&self, t: DateTime<Utc>) -> Win {
+        match self.dst {
+            Resolution::Daily | Resolution::Weekly => {
+                let mh = self
+                    .hours
+                    .as_ref()
+                    .expect("Daily/Weekly requires MarketHours");
+                let (open, close) = session_bounds(mh, t);
+                Win::Session { open, close }
+            }
+            _ => {
+                let len = fixed_len(&self.dst);
+                let (start, end) = (floor_to(&self.dst, t), floor_to(&self.dst, t) + len);
+                Win::Fixed { start, end, len }
+            }
+        }
     }
-    fn kill(&self) {
-        self.task.abort();
+
+    fn inside(t: DateTime<Utc>, w: &Win) -> bool {
+        match w {
+            Win::Fixed { end, .. } => t < *end,
+            Win::Session { open, close } => t >= *open && t < *close,
+        }
+    }
+
+    fn advance(&self, t_last: DateTime<Utc>, w: &Win) -> Win {
+        match w {
+            Win::Fixed { end, len, .. } => {
+                let mut s = *end;
+                while t_last >= s {
+                    s += *len;
+                }
+                Win::Fixed {
+                    start: s - *len,
+                    end: s,
+                    len: *len,
+                }
+            }
+            Win::Session { close, .. } => {
+                let mh = self
+                    .hours
+                    .as_ref()
+                    .expect("session advance needs MarketHours");
+                let (nopen, nclose) = next_session_after(mh, *close);
+                Win::Session {
+                    open: nopen,
+                    close: nclose,
+                }
+            }
+        }
+    }
+
+    fn flush(&mut self, start: DateTime<Utc>, end: DateTime<Utc>) -> Option<Candle> {
+        if let (Some(oo), Some(hh), Some(ll), Some(cc)) = (self.o, self.h, self.l, self.c) {
+            let out = Candle {
+                symbol: self.out_symbol.clone(),
+                instrument: self.instrument.clone(),
+                time_start: start,
+                time_end: end_inclusive(end),
+                open: oo,
+                high: hh,
+                low: ll,
+                close: cc,
+                volume: self.vol,
+                ask_volume: self.ask_vol,
+                bid_volume: self.bid_vol,
+                resolution: self.dst.clone(),
+            };
+            // reset
+            self.o = None;
+            self.h = None;
+            self.l = None;
+            self.c = None;
+            self.vol = Decimal::ZERO;
+            self.bid_vol = Decimal::ZERO;
+            self.ask_vol = Decimal::ZERO;
+            return Some(out);
+        }
+        None
+    }
+
+    pub fn update_tick(&mut self, tk: &Tick) -> Option<Candle> {
+        let t = tk.time;
+        if self.win.is_none() {
+            self.win = Some(self.init_win(t));
+        }
+        // drain windows until current tick is inside
+        while !Self::inside(t, self.win.as_ref().unwrap()) {
+            let (start, end) = match self.win.as_ref().unwrap() {
+                Win::Fixed { start, end, .. } => (*start, *end),
+                Win::Session { open, close } => (*open, *close),
+            };
+            let flushed = self.flush(start, end);
+            let cur = self.win.take().unwrap();
+            self.win = Some(self.advance(t, &cur));
+            if flushed.is_some() {
+                return flushed;
+            }
+        }
+        // accumulate current tick
+        if self.o.is_none() {
+            self.o = Some(tk.price);
+        }
+        self.h = Some(self.h.map_or(tk.price, |x| x.max(tk.price)));
+        self.l = Some(self.l.map_or(tk.price, |x| x.min(tk.price)));
+        self.c = Some(tk.price);
+        self.vol += tk.volume;
+        match tk.side {
+            Side::Buy => self.ask_vol += tk.volume,
+            Side::Sell => self.bid_vol += tk.volume,
+            Side::None => {}
+        }
+        None
+    }
+
+    pub fn update_time(&mut self, t_now: DateTime<Utc>) -> Option<Candle> {
+        if let Some(w) = self.win.as_ref() {
+            let end = match w {
+                Win::Fixed { end, .. } => *end,
+                Win::Session { close, .. } => *close,
+            };
+            if t_now >= end {
+                let (start, _end) = match w {
+                    Win::Fixed { start, end, .. } => (*start, *end),
+                    Win::Session { open, close } => (*open, *close),
+                };
+                let flushed = self.flush(start, end);
+                // advance until t_now fits next window
+                let mut next_w = self.win.take().unwrap();
+                loop {
+                    let next = self.advance(t_now, &next_w);
+                    let end_next = match &next {
+                        Win::Fixed { end, .. } => *end,
+                        Win::Session { close, .. } => *close,
+                    };
+                    if t_now < end_next {
+                        next_w = next;
+                        break;
+                    } else {
+                        next_w = next;
+                    }
+                }
+                self.win = Some(next_w);
+                return flushed;
+            }
+        }
+        None
     }
 }
 
 pub struct BboToCandlesConsolidator {
-    out_tx: Arc<broadcast::Sender<Candle>>,
-    task: tokio::task::JoinHandle<()>,
+    dst: Resolution,
+    out_symbol: String,
+    hours: Option<Arc<MarketHours>>,
+    instrument: Instrument,
+    // state
+    o: Option<Decimal>,
+    h: Option<Decimal>,
+    l: Option<Decimal>,
+    c: Option<Decimal>,
+    v: Decimal,
+    win: Option<Win>,
 }
 
 impl BboToCandlesConsolidator {
     pub fn new(
         dst: Resolution,
-        mut rx_bbo: broadcast::Receiver<Bbo>,
         out_symbol: String,
         hours: Option<Arc<MarketHours>>,
         instrument: Instrument,
-        mut rx_time: Option<broadcast::Receiver<DateTime<Utc>>>,
     ) -> Self {
-        let (out_tx, _) = broadcast::channel::<Candle>(1024);
-        let out_tx = Arc::new(out_tx);
-        let out_tx_clone = Arc::clone(&out_tx);
-
-        let task = tokio::spawn(async move {
-            let mut o = None;
-            let mut h = None;
-            let mut l = None;
-            let mut c = None;
-            let mut v = Decimal::ZERO;
-
-            enum Win {
-                Fixed {
-                    start: DateTime<Utc>,
-                    end: DateTime<Utc>,
-                    len: Duration,
-                },
-                Session {
-                    open: DateTime<Utc>,
-                    close: DateTime<Utc>,
-                },
-            }
-            let mut win: Option<Win> = None;
-
-            let init_win =
-                |t: DateTime<Utc>, res: &Resolution, hours: &Option<Arc<MarketHours>>| -> Win {
-                    match res {
-                        Resolution::Daily | Resolution::Weekly => {
-                            let mh = hours.as_ref().expect("Daily/Weekly requires MarketHours");
-                            let (open, close) = session_bounds(mh, t);
-                            Win::Session { open, close }
-                        }
-                        _ => {
-                            let len = fixed_len(res);
-                            let start = floor_to(res, t);
-                            Win::Fixed {
-                                start,
-                                end: start + len,
-                                len,
-                            }
-                        }
-                    }
-                };
-
-            let inside = |t: DateTime<Utc>, w: &Win| -> bool {
-                match w {
-                    Win::Fixed { end, .. } => t < *end,
-                    Win::Session { open, close } => t >= *open && t < *close,
-                }
-            };
-
-            let advance =
-                |t_last: DateTime<Utc>, w: &Win, hours: &Option<Arc<MarketHours>>| -> Win {
-                    match w {
-                        Win::Fixed { end, len, .. } => {
-                            let mut s = *end;
-                            while t_last >= s {
-                                s += *len;
-                            }
-                            Win::Fixed {
-                                start: s - *len,
-                                end: s,
-                                len: *len,
-                            }
-                        }
-                        Win::Session { close, .. } => {
-                            let mh = hours.as_ref().expect("session advance needs MarketHours");
-                            let (nopen, nclose) = next_session_after(mh, *close);
-                            Win::Session {
-                                open: nopen,
-                                close: nclose,
-                            }
-                        }
-                    }
-                };
-
-            loop {
-                tokio::select! {
-                    Ok(bbo) = rx_bbo.recv() => {
-                        let t = bbo.time;
-                        if win.is_none() { win = Some(init_win(t, &dst, &hours)); }
-                        while !inside(t, win.as_ref().unwrap()) {
-                            if let (Some(oo), Some(hh), Some(ll), Some(cc)) = (o, h, l, c) {
-                                let (start, end) = match win.as_ref().unwrap() {
-                                    Win::Fixed { start, end, .. } => (*start, *end),
-                                    Win::Session { open, close } => (*open, *close),
-                                };
-                                let _ = out_tx.send(Candle {
-                                    symbol: out_symbol.clone(),
-                                    time_start: start,
-                                    time_end: end_inclusive(end),
-                                    open: oo,
-                                    high: hh,
-                                    low: ll,
-                                    close: cc,
-                                    volume: v,
-                                    ask_volume: dec!(0),
-                                    bid_volume: dec!(0),
-                                    instrument: instrument.clone(),
-                                    resolution: dst.clone(),
-                                });
-                            }
-                            o = None; h = None; l = None; c = None; v = Decimal::ZERO;
-                            let cur = win.take().unwrap();
-                            win = Some(advance(t, &cur, &hours));
-                        }
-                        let mid = (bbo.bid + bbo.ask) / Decimal::from(2);
-                        if o.is_none() { o = Some(mid); }
-                        h = Some(h.map_or(mid, |x| x.max(mid)));
-                        l = Some(l.map_or(mid, |x| x.min(mid)));
-                        c = Some(mid);
-                    }
-                    Ok(t_now) = async { if let Some(rx) = rx_time.as_mut() { rx.recv().await } else { Err(tokio::sync::broadcast::error::RecvError::Closed) } }, if rx_time.is_some() => {
-                        if let Some(w) = win.as_ref() {
-                            let end = match w { Win::Fixed { end, .. } => *end, Win::Session { close, .. } => *close };
-                            if t_now >= end {
-                                if let (Some(oo), Some(hh), Some(ll), Some(cc)) = (o, h, l, c) {
-                                    let (start, _end) = match w { Win::Fixed { start, end, .. } => (*start, *end), Win::Session { open, close } => (*open, *close) };
-                                    let _ = out_tx.send(Candle {
-                                        symbol: out_symbol.clone(),
-                                        time_start: start,
-                                        time_end: end_inclusive(end),
-                                        open: oo,
-                                        high: hh,
-                                        low: ll,
-                                        close: cc,
-                                        volume: v,
-                                        ask_volume: dec!(0),
-                                        bid_volume: dec!(0),
-                                        instrument: instrument.clone(),
-                                        resolution: dst.clone(),
-                                    });
-                                }
-                                o = None; h = None; l = None; c = None; v = Decimal::ZERO;
-                                let cur = win.take().unwrap();
-                                // advance loop until t_now inside next
-                                let mut next_w = cur;
-                                loop {
-                                    let next = advance(t_now, &next_w, &hours);
-                                    let end_next = match &next { Win::Fixed { end, .. } => *end, Win::Session { close, .. } => *close };
-                                    if t_now < end_next { next_w = next; break; } else { next_w = next; }
-                                }
-                                win = Some(next_w);
-                            }
-                        }
-                    }
-                    else => { break; }
-                }
-            }
-        });
-
         Self {
-            out_tx: out_tx_clone,
-            task,
+            dst,
+            out_symbol,
+            hours,
+            instrument,
+            o: None,
+            h: None,
+            l: None,
+            c: None,
+            v: Decimal::ZERO,
+            win: None,
         }
     }
-}
 
-impl Consolidator<Candle> for BboToCandlesConsolidator {
-    fn subscribe(&self, _feed: Feed) -> broadcast::Receiver<Candle> {
-        self.out_tx.subscribe()
+    fn init_win(&self, t: DateTime<Utc>) -> Win { TicksToCandlesConsolidator { dst: self.dst.clone(), out_symbol: String::new(), hours: self.hours.clone(), instrument: self.instrument.clone(), o: None, h: None, l: None, c: None, vol: Decimal::ZERO, bid_vol: Decimal::ZERO, ask_vol: Decimal::ZERO, win: None }.init_win(t) }
+    fn inside(t: DateTime<Utc>, w: &Win) -> bool { TicksToCandlesConsolidator::inside(t, w) }
+    fn advance(&self, t_last: DateTime<Utc>, w: &Win) -> Win { TicksToCandlesConsolidator { dst: self.dst.clone(), out_symbol: String::new(), hours: self.hours.clone(), instrument: self.instrument.clone(), o: None, h: None, l: None, c: None, vol: Decimal::ZERO, bid_vol: Decimal::ZERO, ask_vol: Decimal::ZERO, win: None }.advance(t_last, w) }
+
+    fn flush(&mut self, start: DateTime<Utc>, end: DateTime<Utc>) -> Option<Candle> {
+        if let (Some(oo), Some(hh), Some(ll), Some(cc)) = (self.o, self.h, self.l, self.c) {
+            let out = Candle {
+                symbol: self.out_symbol.clone(),
+                instrument: self.instrument.clone(),
+                time_start: start,
+                time_end: end_inclusive(end),
+                open: oo,
+                high: hh,
+                low: ll,
+                close: cc,
+                volume: self.v,
+                ask_volume: dec!(0),
+                bid_volume: dec!(0),
+                resolution: self.dst.clone(),
+            };
+            self.o = None; self.h = None; self.l = None; self.c = None; self.v = Decimal::ZERO;
+            return Some(out);
+        }
+        None
     }
-    fn kill(&self) {
-        self.task.abort();
+
+    pub fn update_bbo(&mut self, bbo: &Bbo) -> Option<Candle> {
+        let t = bbo.time;
+        if self.win.is_none() { self.win = Some(self.init_win(t)); }
+        while !Self::inside(t, self.win.as_ref().unwrap()) {
+            let (start, end) = match self.win.as_ref().unwrap() { Win::Fixed { start, end, .. } => (*start, *end), Win::Session { open, close } => (*open, *close) };
+            let flushed = self.flush(start, end);
+            let cur = self.win.take().unwrap();
+            self.win = Some(self.advance(t, &cur));
+            if flushed.is_some() { return flushed; }
+        }
+        let mid = (bbo.bid + bbo.ask) / Decimal::from(2);
+        if self.o.is_none() { self.o = Some(mid); }
+        self.h = Some(self.h.map_or(mid, |x| x.max(mid)));
+        self.l = Some(self.l.map_or(mid, |x| x.min(mid)));
+        self.c = Some(mid);
+        None
+    }
+
+    pub fn update_time(&mut self, t_now: DateTime<Utc>) -> Option<Candle> {
+        if let Some(w) = self.win.as_ref() {
+            let end = match w { Win::Fixed { end, .. } => *end, Win::Session { close, .. } => *close };
+            if t_now >= end {
+                let (start, _end) = match w { Win::Fixed { start, end, .. } => (*start, *end), Win::Session { open, close } => (*open, *close) };
+                let flushed = self.flush(start, end);
+                let mut next_w = self.win.take().unwrap();
+                loop {
+                    let next = self.advance(t_now, &next_w);
+                    let end_next = match &next { Win::Fixed { end, .. } => *end, Win::Session { close, .. } => *close };
+                    if t_now < end_next { next_w = next; break; } else { next_w = next; }
+                }
+                self.win = Some(next_w);
+                return flushed;
+            }
+        }
+        None
     }
 }
 
 pub struct CandlesToCandlesConsolidator {
-    out_tx: Arc<broadcast::Sender<Candle>>,
-    task: tokio::task::JoinHandle<()>,
+    dst: Resolution,
+    out_symbol: String,
+    hours: Option<Arc<MarketHours>>,
+    instrument: Instrument,
+    // state
+    b_start: Option<DateTime<Utc>>,
+    b_end: Option<DateTime<Utc>>,
+    o: Option<Decimal>,
+    h: Option<Decimal>,
+    l: Option<Decimal>,
+    c: Option<Decimal>,
+    vol: Decimal,
+    bid_vol: Decimal,
+    ask_vol: Decimal,
+    win: Option<Win>,
 }
 
 impl CandlesToCandlesConsolidator {
     pub fn new(
         dst: Resolution,
-        mut rx_candle: broadcast::Receiver<Candle>,
         out_symbol: String,
         hours: Option<Arc<MarketHours>>,
         instrument: Instrument,
     ) -> Self {
-        let (out_tx, _) = broadcast::channel::<Candle>(1024);
-        let out_tx = Arc::new(out_tx);
-        let out_tx_clone = Arc::clone(&out_tx);
-
-        let task = tokio::spawn(async move {
-            let mut b_start: Option<DateTime<Utc>> = None;
-            let mut b_end: Option<DateTime<Utc>> = None;
-            let mut o = None;
-            let mut h = None;
-            let mut l = None;
-            let mut c = None;
-            let mut vol = Decimal::ZERO;
-            let mut bid_vol = Decimal::ZERO;
-            let mut ask_vol = Decimal::ZERO;
-
-            enum Win {
-                Fixed {
-                    start: DateTime<Utc>,
-                    end: DateTime<Utc>,
-                    len: Duration,
-                },
-                Session {
-                    open: DateTime<Utc>,
-                    close: DateTime<Utc>,
-                },
-            }
-            let mut win: Option<Win> = None;
-
-            let init_win =
-                |t: DateTime<Utc>, res: &Resolution, hours: &Option<Arc<MarketHours>>| -> Win {
-                    match res {
-                        Resolution::Daily | Resolution::Weekly => {
-                            let mh = hours.as_ref().expect("Daily/Weekly requires MarketHours");
-                            let (open, close) = session_bounds(mh, t);
-                            Win::Session { open, close }
-                        }
-                        _ => {
-                            let len = fixed_len(res);
-                            let start = floor_to(res, t);
-                            Win::Fixed {
-                                start,
-                                end: start + len,
-                                len,
-                            }
-                        }
-                    }
-                };
-
-            let contains = |ts: DateTime<Utc>, w: &Win| -> bool {
-                match w {
-                    Win::Fixed { start, end, .. } => ts >= *start && ts < *end,
-                    Win::Session { open, close } => ts >= *open && ts < *close,
-                }
-            };
-
-            let advance =
-                |t_last: DateTime<Utc>, w: &Win, hours: &Option<Arc<MarketHours>>| -> Win {
-                    match w {
-                        Win::Fixed { end, len, .. } => {
-                            let mut s = *end;
-                            while t_last >= s {
-                                s += *len;
-                            }
-                            Win::Fixed {
-                                start: s - *len,
-                                end: s,
-                                len: *len,
-                            }
-                        }
-                        Win::Session { close, .. } => {
-                            let mh = hours.as_ref().expect("session advance needs MarketHours");
-                            let (nopen, nclose) = next_session_after(mh, *close);
-                            Win::Session {
-                                open: nopen,
-                                close: nclose,
-                            }
-                        }
-                    }
-                };
-
-            while let Ok(bar) = rx_candle.recv().await {
-                if bar.resolution == dst {
-                    continue;
-                }
-
-                let ts = bar.time_start;
-                if win.is_none() {
-                    win = Some(init_win(ts, &dst, &hours));
-                }
-
-                while !contains(ts, win.as_ref().unwrap()) {
-                    if let (Some(bs), Some(be), Some(oo), Some(hh), Some(ll), Some(cc)) =
-                        (b_start, b_end, o, h, l, c)
-                    {
-                        let _ = out_tx.send(Candle {
-                            symbol: out_symbol.clone(),
-                            time_start: bs,
-                            time_end: end_inclusive(be),
-                            open: oo,
-                            high: hh,
-                            low: ll,
-                            close: cc,
-                            volume: vol,
-                            ask_volume: ask_vol,
-                            bid_volume: bid_vol,
-                            instrument: instrument.clone(),
-                            resolution: dst.clone(),
-                        });
-                    }
-                    b_start = None;
-                    b_end = None;
-                    o = None;
-                    h = None;
-                    l = None;
-                    c = None;
-                    vol = Decimal::ZERO;
-                    ask_vol = Decimal::ZERO;
-                    bid_vol = Decimal::ZERO;
-                    let cur = win.take().unwrap();
-                    win = Some(advance(ts, &cur, &hours));
-                }
-
-                let (w_start, w_end) = match win.as_ref().unwrap() {
-                    Win::Fixed { start, end, .. } => (*start, *end),
-                    Win::Session { open, close } => (*open, *close),
-                };
-                if b_start.is_none() {
-                    b_start = Some(w_start);
-                }
-                b_end = Some(w_end.max(bar.time_end));
-
-                if o.is_none() {
-                    o = Some(bar.open);
-                }
-                h = Some(h.map_or(bar.high, |x| x.max(bar.high)));
-                l = Some(l.map_or(bar.low, |x| x.min(bar.low)));
-                c = Some(bar.close);
-
-                vol += bar.volume;
-                ask_vol += bar.ask_volume;
-                bid_vol += bar.bid_volume;
-            }
-
-            if let (Some(bs), Some(be), Some(oo), Some(hh), Some(ll), Some(cc)) =
-                (b_start, b_end, o, h, l, c)
-            {
-                let _ = out_tx.send(Candle {
-                    symbol: out_symbol,
-                    instrument: instrument.clone(),
-                    time_start: bs,
-                    time_end: end_inclusive(be),
-                    open: oo,
-                    high: hh,
-                    low: ll,
-                    close: cc,
-                    volume: vol,
-                    ask_volume: ask_vol,
-                    bid_volume: bid_vol,
-                    resolution: dst,
-                });
-            }
-        });
-
         Self {
-            out_tx: out_tx_clone,
-            task,
+            dst,
+            out_symbol,
+            hours,
+            instrument,
+            b_start: None,
+            b_end: None,
+            o: None,
+            h: None,
+            l: None,
+            c: None,
+            vol: Decimal::ZERO,
+            bid_vol: Decimal::ZERO,
+            ask_vol: Decimal::ZERO,
+            win: None,
         }
     }
-}
 
-impl Consolidator<Candle> for CandlesToCandlesConsolidator {
-    fn subscribe(&self, _feed: Feed) -> broadcast::Receiver<Candle> {
-        self.out_tx.subscribe()
+    fn init_win(&self, t: DateTime<Utc>) -> Win {
+        match self.dst {
+            Resolution::Daily | Resolution::Weekly => {
+                let mh = self
+                    .hours
+                    .as_ref()
+                    .expect("Daily/Weekly requires MarketHours");
+                let (open, close) = session_bounds(mh, t);
+                Win::Session { open, close }
+            }
+            _ => {
+                let len = fixed_len(&self.dst);
+                let start = floor_to(&self.dst, t);
+                Win::Fixed { start, end: start + len, len }
+            }
+        }
     }
-    fn kill(&self) {
-        self.task.abort();
+
+    fn contains(ts: DateTime<Utc>, w: &Win) -> bool {
+        match w {
+            Win::Fixed { start, end, .. } => ts >= *start && ts < *end,
+            Win::Session { open, close } => ts >= *open && ts < *close,
+        }
+    }
+
+    fn advance(&self, t_last: DateTime<Utc>, w: &Win) -> Win {
+        match w {
+            Win::Fixed { end, len, .. } => {
+                let mut s = *end;
+                while t_last >= s { s += *len; }
+                Win::Fixed { start: s - *len, end: s, len: *len }
+            }
+            Win::Session { close, .. } => {
+                let mh = self.hours.as_ref().expect("session advance needs MarketHours");
+                let (nopen, nclose) = next_session_after(mh, *close);
+                Win::Session { open: nopen, close: nclose }
+            }
+        }
+    }
+
+    fn flush(&mut self, _start: DateTime<Utc>, _end: DateTime<Utc>) -> Option<Candle> {
+        if let (Some(bs), Some(be), Some(oo), Some(hh), Some(ll), Some(cc)) =
+            (self.b_start, self.b_end, self.o, self.h, self.l, self.c)
+        {
+            let out = Candle {
+                symbol: self.out_symbol.clone(),
+                instrument: self.instrument.clone(),
+                time_start: bs,
+                time_end: end_inclusive(be),
+                open: oo,
+                high: hh,
+                low: ll,
+                close: cc,
+                volume: self.vol,
+                ask_volume: self.ask_vol,
+                bid_volume: self.bid_vol,
+                resolution: self.dst.clone(),
+            };
+            self.b_start = None; self.b_end = None;
+            self.o = None; self.h = None; self.l = None; self.c = None;
+            self.vol = Decimal::ZERO; self.ask_vol = Decimal::ZERO; self.bid_vol = Decimal::ZERO;
+            return Some(out);
+        }
+        None
+    }
+
+    pub fn update_candle(&mut self, bar: &Candle) -> Option<Candle> {
+        if bar.resolution == self.dst { return None; }
+        let ts = bar.time_start;
+        if self.win.is_none() { self.win = Some(self.init_win(ts)); }
+        while !Self::contains(ts, self.win.as_ref().unwrap()) {
+            let (start, end) = match self.win.as_ref().unwrap() { Win::Fixed { start, end, .. } => (*start, *end), Win::Session { open, close } => (*open, *close) };
+            let flushed = self.flush(start, end);
+            let cur = self.win.take().unwrap();
+            self.win = Some(self.advance(ts, &cur));
+            if flushed.is_some() { return flushed; }
+        }
+        let (w_start, w_end) = match self.win.as_ref().unwrap() { Win::Fixed { start, end, .. } => (*start, *end), Win::Session { open, close } => (*open, *close) };
+        if self.b_start.is_none() { self.b_start = Some(w_start); }
+        self.b_end = Some(w_end.max(bar.time_end));
+        if self.o.is_none() { self.o = Some(bar.open); }
+        self.h = Some(self.h.map_or(bar.high, |x| x.max(bar.high)));
+        self.l = Some(self.l.map_or(bar.low, |x| x.min(bar.low)));
+        self.c = Some(bar.close);
+        self.vol += bar.volume; self.ask_vol += bar.ask_volume; self.bid_vol += bar.bid_volume;
+        None
     }
 }

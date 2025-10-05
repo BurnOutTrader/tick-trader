@@ -344,6 +344,23 @@ impl EngineRuntime {
             _ => Ok(vec![]),
         }
     }
+
+    pub async fn get_account_info(
+        &self,
+        provider: ProviderKind,
+    ) -> anyhow::Result<tt_types::wire::AccountInfoResponse> {
+        use tokio::time::timeout;
+        use tt_types::wire::{AccountInfoRequest, Response as WireResp};
+        let rx = self
+            .request_with_corr(|corr_id| Request::AccountInfoRequest(AccountInfoRequest { provider, corr_id }))
+            .await;
+        match timeout(Duration::from_secs(2), rx).await {
+            Ok(Ok(WireResp::AccountInfoResponse(air))) => Ok(air),
+            Ok(Ok(_other)) => Err(anyhow::anyhow!("unexpected response for AccountInfoRequest")),
+            _ => Err(anyhow::anyhow!("timeout waiting for AccountInfoResponse")),
+        }
+    }
+
     pub async fn subscribe_symbol(&self, topic: Topic, key: SymbolKey) -> anyhow::Result<()> {
         // On first subscribe for this provider, start vendor securities refresh (hourly)
         self.ensure_vendor_securities_watch(key.provider).await;
@@ -367,7 +384,7 @@ impl EngineRuntime {
             .bus
             .handle_request(
                 &self.sub_id.as_ref().expect("engine started"),
-                tt_types::wire::Request::UnsubscribeKey(tt_types::wire::UnsubscribeKey { topic, key }),
+                Request::UnsubscribeKey(tt_types::wire::UnsubscribeKey { topic, key }),
             )
             .await?;
         Ok(())
@@ -381,7 +398,7 @@ impl EngineRuntime {
             .bus
             .handle_request(
                 &self.sub_id.as_ref().expect("engine started"),
-                tt_types::wire::Request::SubscribeKey(tt_types::wire::SubscribeKey {
+                Request::SubscribeKey(tt_types::wire::SubscribeKey {
                     topic,
                     key,
                     latest_only: false,
@@ -691,6 +708,11 @@ impl EngineRuntime {
                     }
                     Response::UnsubscribeResponse { topic, instrument } => {
                         strategy.on_unsubscribe(instrument, topic).await;
+                    }
+                    Response::AccountInfoResponse(air) => {
+                        if let Some((_k, tx)) = pending.remove(&air.corr_id) {
+                            let _ = tx.send(Response::AccountInfoResponse(air.clone()));
+                        }
                     }
                 }
             }

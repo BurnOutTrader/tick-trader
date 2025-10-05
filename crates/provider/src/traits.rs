@@ -204,6 +204,10 @@ pub trait ExecutionProvider: Send + Sync {
     async fn subscribe_positions(&self, account_key: &AccountKey) -> anyhow::Result<()>;
     async fn unsubscribe_positions(&self, account_key: &AccountKey) -> anyhow::Result<()>;
     async fn active_account_subscriptions(&self) -> Vec<AccountKey>;
+    /// Optional: list accounts available on this execution provider. Default empty.
+    async fn list_accounts(&self) -> anyhow::Result<Vec<tt_types::accounts::account::AccountSnapShot>> {
+        Ok(Vec::new())
+    }
 
     // Orders/Fills stream
     async fn subscribe_order_updates(&self, account_key: &AccountKey) -> anyhow::Result<()>;

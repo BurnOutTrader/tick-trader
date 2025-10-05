@@ -118,6 +118,37 @@ impl UpstreamManager for ProviderManager {
         let _ = ex.replace_order(spec).await;
         Ok(())
     }
+
+    async fn get_account_info(&self, provider: ProviderKind) -> Result<tt_types::wire::AccountInfoResponse> {
+        // Ensure provider exists; connect execution side if needed
+        self.ensure_pair(provider).await?;
+        let ex = self
+            .ex
+            .get(&provider)
+            .map(|e| e.value().clone())
+            .ok_or_else(|| anyhow::anyhow!("execution provider missing"))?;
+        // Query provider for account snapshots and map to wire summaries
+        let snaps = ex.list_accounts().await.unwrap_or_default();
+        let mut accounts = Vec::with_capacity(snaps.len());
+        for s in snaps {
+            accounts.push(tt_types::wire::AccountSummaryWire {
+                account_id: s.id,
+                account_name: s.name.to_string(),
+                provider,
+            });
+        }
+        Ok(tt_types::wire::AccountInfoResponse { provider, corr_id: 0, accounts })
+    }
+
+    async fn get_instruments(&self, provider: ProviderKind, pattern: Option<String>) -> Result<Vec<tt_types::securities::symbols::Instrument>> {
+        // Minimal implementation: ensure provider exists and return empty list if not supported yet.
+        let _ = self.ensure_pair(provider).await?;
+        let pat = pattern.unwrap_or_default().to_uppercase();
+        // If we have a ProjectX HTTP client available in the MD provider internally, we could query it.
+        // For now, return empty; the Router will still respond to caller with corr_id.
+        let _ = pat; // silence unused
+        Ok(Vec::new())
+    }
 }
 
 #[allow(dead_code)]
