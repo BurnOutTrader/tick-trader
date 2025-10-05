@@ -169,16 +169,22 @@ pub struct AuthCredentials {
 }
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq)]
-pub enum Envelope {
-    // Control
+pub enum Request {
+    // Control from clients to server
     Subscribe(Subscribe),
     FlowCredit(FlowCredit),
     Ping(Ping),
-    Pong(Pong),
-    // Commands to providers
+    // Provider commands initiated by clients
     MdSubscribe(MdSubscribeCmd),
     MdUnsubscribe(MdUnsubscribeCmd),
     InstrumentsRequest(InstrumentsRequest),
+}
+
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq)]
+pub enum Response {
+    // Control replies
+    Pong(Pong),
+    // Instruments
     InstrumentsResponse(InstrumentsResponse),
     InstrumentsMapResponse(InstrumentsMapResponse),
     // Data (batches first)
@@ -189,26 +195,32 @@ pub enum Envelope {
     OrdersBatch(OrdersBatch),
     PositionsBatch(PositionsBatch),
     AccountDeltaBatch(AccountDeltaBatch),
-    // Single items (will be wrapped by bus into batches for fan-out)
+    // Single items (for completeness; bus generally batches)
     Tick(Tick),
     Quote(Bbo),
     Bar(Candle),
 }
 
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq)]
+pub enum WireMessage {
+    Request(Request),
+    Response(Response),
+}
+
 pub mod codec {
-    use super::{ArchivedEnvelope, Envelope};
+    use super::{ArchivedWireMessage, WireMessage};
     use rkyv::rancor::Error;
 
-    pub fn encode(env: &Envelope) -> Vec<u8> {
+    pub fn encode(env: &WireMessage) -> Vec<u8> {
         rkyv::to_bytes::<Error>(env).expect("serialize").to_vec()
     }
 
-    pub fn decode(bytes: &[u8]) -> Result<Envelope, String> {
+    pub fn decode(bytes: &[u8]) -> Result<WireMessage, String> {
         // Ensure alignment by copying into an AlignedVec before accessing
         let mut aligned = rkyv::util::AlignedVec::<16>::with_capacity(bytes.len());
         aligned.extend_from_slice(bytes);
         let arch =
-            rkyv::access::<ArchivedEnvelope, Error>(&aligned[..]).map_err(|e| e.to_string())?;
-        rkyv::deserialize::<Envelope, Error>(arch).map_err(|e| e.to_string())
+            rkyv::access::<ArchivedWireMessage, Error>(&aligned[..]).map_err(|e| e.to_string())?;
+        rkyv::deserialize::<WireMessage, Error>(arch).map_err(|e| e.to_string())
     }
 }

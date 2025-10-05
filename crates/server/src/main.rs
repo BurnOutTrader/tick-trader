@@ -11,7 +11,7 @@ use tokio_util::codec::length_delimited::LengthDelimitedCodec;
 use tokio_util::codec::{FramedRead, FramedWrite};
 use tt_bus::MessageBus;
 use tt_types::providers::ProviderKind;
-use tt_types::wire::Envelope;
+use tt_types::wire::{Request, Response, WireMessage};
 
 use log::log;
 use std::io;
@@ -21,6 +21,8 @@ use std::os::fd::FromRawFd;
 use std::os::unix::net::UnixListener as StdUnixListener;
 use std::path::Path;
 use tokio::net::UnixListener;
+
+
 
 #[cfg(target_os = "linux")]
 pub fn bind_uds(path: &str) -> io::Result<UnixListener> {
@@ -220,7 +222,7 @@ async fn main() -> anyhow::Result<()> {
         let factory = factory.clone();
         let default_session_clone = default_session.clone();
         tokio::spawn(async move {
-            let (tx, mut rx) = mpsc::channel::<tt_types::wire::Envelope>(1024);
+            let (tx, mut rx) = mpsc::channel::<tt_types::wire::Response>(1024);
             let id = bus_clone.add_client(tx.clone()).await;
             let (read_half, write_half) = sock.into_split();
             let mut framed_reader = FramedRead::new(read_half, LengthDelimitedCodec::new());
@@ -228,8 +230,9 @@ async fn main() -> anyhow::Result<()> {
 
             // writer task: drain per-subscriber queue to socket
             let writer = tokio::spawn(async move {
-                while let Some(env) = rx.recv().await {
-                    let vec = tt_types::wire::codec::encode(&env);
+                while let Some(resp) = rx.recv().await {
+                    let msg = tt_types::wire::WireMessage::Response(resp);
+                    let vec = tt_types::wire::codec::encode(&msg);
                     if let Err(e) = framed_writer.send(Bytes::from(vec)).await {
                         let _ = e;
                         break;
@@ -240,9 +243,9 @@ async fn main() -> anyhow::Result<()> {
             // reader loop
             while let Some(Ok(bytes)) = framed_reader.next().await {
                 match tt_types::wire::codec::decode(&bytes) {
-                    Ok(env) => {
-                        match &env {
-                            Envelope::MdSubscribe(cmd) => {
+                    Ok(msg) => {
+                        match &msg {
+                            WireMessage::Request(Request::MdSubscribe(cmd)) => {
                                 // lazily ensure provider exists and is attached
                                 if !bus_clone.is_provider_registered(&cmd.provider) {
                                     let mut sess = default_session_clone.clone();
@@ -281,7 +284,7 @@ async fn main() -> anyhow::Result<()> {
                                 }
                                 factory.incr_md(&cmd.provider);
                             }
-                            Envelope::MdUnsubscribe(cmd) => {
+                            WireMessage::Request(Request::MdUnsubscribe(cmd)) => {
                                 let n = factory.decr_md(&cmd.provider);
                                 if n == 0 {
                                     // Only tear down provider if there are no execution subscriptions either
@@ -312,7 +315,7 @@ async fn main() -> anyhow::Result<()> {
                                     }
                                 }
                             }
-                            Envelope::InstrumentsRequest(req) => {
+                            WireMessage::Request(Request::InstrumentsRequest(req)) => {
                                 if !bus_clone.is_provider_registered(&req.provider) {
                                     let mut sess = default_session_clone.clone();
                                     if let Err(e) = factory
@@ -329,7 +332,9 @@ async fn main() -> anyhow::Result<()> {
                             }
                             _ => {}
                         }
-                        let _ = bus_clone.handle(&id, env).await;
+                        if let tt_types::wire::WireMessage::Request(rq) = msg.clone() {
+                            let _ = bus_clone.handle_request(&id, rq.clone()).await;
+                        }
                     }
                     Err(_) => break,
                 }
