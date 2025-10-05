@@ -179,6 +179,10 @@ pub trait MarketDataProvider: Send + Sync {
     async fn subscribe_md(&self, topic: Topic, key: &SymbolKey) -> anyhow::Result<()>;
     async fn unsubscribe_md(&self, topic: Topic, key: &SymbolKey) -> anyhow::Result<()>;
     async fn active_md_subscriptions(&self) -> AHashMap<Topic, Vec<SymbolKey>>;
+    /// Optional: list instruments available on this market data provider. Default empty.
+    async fn list_instruments(&self, _pattern: Option<String>) -> anyhow::Result<Vec<tt_types::securities::symbols::Instrument>> {
+        Ok(Vec::new())
+    }
     async fn auto_update(&self) -> anyhow::Result<()>;
 
     // Push callbacks (Engine will call into Bus using these rows of data)

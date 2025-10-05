@@ -141,12 +141,12 @@ impl UpstreamManager for ProviderManager {
     }
 
     async fn get_instruments(&self, provider: ProviderKind, pattern: Option<String>) -> Result<Vec<tt_types::securities::symbols::Instrument>> {
-        // Minimal implementation: ensure provider exists and return empty list if not supported yet.
-        let _ = self.ensure_pair(provider).await?;
-        let pat = pattern.unwrap_or_default().to_uppercase();
-        // If we have a ProjectX HTTP client available in the MD provider internally, we could query it.
-        // For now, return empty; the Router will still respond to caller with corr_id.
-        let _ = pat; // silence unused
+        // Ensure provider exists and ask the MD side for instruments (if supported by the trait impl)
+        self.ensure_pair(provider).await?;
+        if let Some(md) = self.md.get(&provider) {
+            let list = md.list_instruments(pattern).await.unwrap_or_default();
+            return Ok(list);
+        }
         Ok(Vec::new())
     }
 }

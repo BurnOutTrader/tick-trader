@@ -253,6 +253,17 @@ impl MarketDataProvider for PXClient {
         map
     }
 
+    async fn list_instruments(&self, pattern: Option<String>) -> anyhow::Result<Vec<tt_types::securities::symbols::Instrument>> {
+        // Use HTTP snapshot maintained by PxHttpClient; filter by optional pattern (case-insensitive contains)
+        let map = self.instruments_map_snapshot().await;
+        let mut v: Vec<_> = map.keys().cloned().collect();
+        if let Some(mut pat) = pattern {
+            pat.make_ascii_uppercase();
+            v.retain(|inst| inst.to_string().to_uppercase().contains(&pat));
+        }
+        Ok(v)
+    }
+
     async fn auto_update(&self) -> anyhow::Result<()> {
         self.http.auto_update().await
     }
