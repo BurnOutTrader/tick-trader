@@ -149,6 +149,19 @@ impl UpstreamManager for ProviderManager {
         }
         Ok(Vec::new())
     }
+
+    async fn get_instruments_map(&self, provider: ProviderKind) -> Result<Vec<(tt_types::securities::symbols::Instrument, tt_types::wire::FuturesContractWire)>> {
+        self.ensure_pair(provider).await?;
+        if let Some(md) = self.md.get(&provider) {
+            let map = md.instruments_map().await.unwrap_or_default();
+            let mut out = Vec::with_capacity(map.len());
+            for (inst, fc) in map.into_iter() {
+                out.push((inst.clone(), tt_types::wire::FuturesContractWire::from_contract(&fc)));
+            }
+            return Ok(out);
+        }
+        Ok(Vec::new())
+    }
 }
 
 #[allow(dead_code)]

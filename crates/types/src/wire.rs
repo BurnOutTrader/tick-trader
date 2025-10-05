@@ -216,6 +216,15 @@ pub struct InstrumentsMapResponse {
     pub corr_id: u64,
 }
 
+/// Request for a full map of futures contracts from a provider
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq)]
+pub struct InstrumentsMapRequest {
+    /// Provider to query
+    pub provider: ProviderKind,
+    /// Correlation ID for matching response
+    pub corr_id: u64,
+}
+
 /// Authentication credentials for a provider
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq, Eq)]
 #[rkyv(compare(PartialEq), derive(Debug))]
@@ -419,6 +428,7 @@ pub enum Request {
     // Client-initiated disconnect (request to be kicked)
     Kick(Kick),
     InstrumentsRequest(InstrumentsRequest),
+    InstrumentsMapRequest(InstrumentsMapRequest),
     // Execution
     PlaceOrder(PlaceOrder),
     CancelOrder(CancelOrder),

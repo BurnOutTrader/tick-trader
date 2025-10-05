@@ -12,6 +12,7 @@
       <sourceFolder url="file://$MODULE_DIR$/crates/adapters/projectx/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/adapters/projectx/tests" isTestSource="true" />
       <sourceFolder url="file://$MODULE_DIR$/crates/server/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/database/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/providers/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/router/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/shm/src" isTestSource="false" />

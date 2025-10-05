@@ -345,6 +345,24 @@ impl EngineRuntime {
         }
     }
 
+    pub async fn get_instruments_map(
+        &self,
+        provider: ProviderKind,
+    ) -> anyhow::Result<Vec<(Instrument, tt_types::wire::FuturesContractWire)>> {
+        use tokio::time::timeout;
+        use tt_types::wire::{InstrumentsMapRequest, Response as WireResp};
+        let rx = self
+            .request_with_corr(|corr_id| {
+                Request::InstrumentsMapRequest(InstrumentsMapRequest { provider, corr_id })
+            })
+            .await;
+        match timeout(Duration::from_secs(2), rx).await {
+            Ok(Ok(WireResp::InstrumentsMapResponse(imr))) => Ok(imr.instruments),
+            Ok(Ok(_other)) => Ok(vec![]),
+            _ => Ok(vec![]),
+        }
+    }
+
     pub async fn get_account_info(
         &self,
         provider: ProviderKind,

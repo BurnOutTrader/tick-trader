@@ -264,6 +264,10 @@ impl MarketDataProvider for PXClient {
         Ok(v)
     }
 
+    async fn instruments_map(&self) -> anyhow::Result<ahash::AHashMap<tt_types::securities::symbols::Instrument, tt_types::securities::security::FuturesContract>> {
+        Ok(self.instruments_map_snapshot().await)
+    }
+
     async fn auto_update(&self) -> anyhow::Result<()> {
         self.http.auto_update().await
     }

@@ -183,6 +183,10 @@ pub trait MarketDataProvider: Send + Sync {
     async fn list_instruments(&self, _pattern: Option<String>) -> anyhow::Result<Vec<tt_types::securities::symbols::Instrument>> {
         Ok(Vec::new())
     }
+    /// Optional: full instruments map (Instrument -> FuturesContract). Default empty.
+    async fn instruments_map(&self) -> anyhow::Result<ahash::AHashMap<tt_types::securities::symbols::Instrument, tt_types::securities::security::FuturesContract>> {
+        Ok(ahash::AHashMap::new())
+    }
     async fn auto_update(&self) -> anyhow::Result<()>;
 
     // Push callbacks (Engine will call into Bus using these rows of data)

@@ -2225,6 +2225,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "tt-database"
+version = "0.1.0"
+dependencies = [
+ "ahash 0.8.12",
+ "anyhow",
+ "chrono",
+ "chrono-tz",
+ "dashmap",
+ "futures",
+ "lazy_static",
+ "once_cell",
+ "rkyv 0.8.12",
+ "rust_decimal",
+ "serde",
+ "strum_macros",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "tt-engine"
 version = "0.1.0"
 dependencies = [
