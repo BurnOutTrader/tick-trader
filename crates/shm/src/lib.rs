@@ -158,3 +158,36 @@ pub fn remove_snapshot(topic: Topic, key: &SymbolKey) {
         let _ = std::fs::remove_file(path);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn writer_initializes_header_and_writes() {
+        // Use a unique temp name to avoid collisions
+        let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let name = format!("ttshm.test.{}", ts);
+        let size = 4096usize;
+        let mut w = ShmWriter::new(&name, size).expect("create shm");
+        // Header should be present
+        assert!(w.mmap.len() >= 20);
+        let magic = u32::from_le_bytes(w.mmap[0..4].try_into().unwrap());
+        let ver = u32::from_le_bytes(w.mmap[4..8].try_into().unwrap());
+        let cap = u32::from_le_bytes(w.mmap[8..12].try_into().unwrap());
+        let seq = u32::from_le_bytes(w.mmap[12..16].try_into().unwrap());
+        let len = u32::from_le_bytes(w.mmap[16..20].try_into().unwrap());
+        assert_eq!(magic, u32::from_le_bytes(*b"TSHM"));
+        assert_eq!(ver, 1);
+        assert_eq!(cap as usize, size);
+        assert_eq!(seq % 2, 0); // even when idle
+        assert_eq!(len, 0);
+        // Write payload and verify header changes
+        let payload = vec![1u8; 32];
+        w.write_bytes(&payload);
+        let seq_after = u32::from_le_bytes(w.mmap[12..16].try_into().unwrap());
+        let len_after = u32::from_le_bytes(w.mmap[16..20].try_into().unwrap());
+        assert_eq!(seq_after % 2, 0); // even after write
+        assert_eq!(len_after as usize, payload.len());
+    }
+}
