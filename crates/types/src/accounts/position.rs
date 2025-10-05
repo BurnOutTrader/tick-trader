@@ -4,7 +4,7 @@ use crate::securities::symbols::Instrument;
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use rust_decimal::Decimal;
 use rust_decimal::prelude::FromPrimitive;
-use std::collections::HashMap;
+use ahash::AHashMap;
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone)]
 pub struct Lot {
@@ -46,14 +46,14 @@ impl PositionSegment {
 
 #[derive(Default)]
 pub struct PositionLedger {
-    pub segments: HashMap<Instrument, PositionSegment>,
+    pub segments: AHashMap<Instrument, PositionSegment>,
     next_id: u64,
 }
 
 impl PositionLedger {
     pub fn new() -> Self {
         Self {
-            segments: HashMap::new(),
+            segments: AHashMap::new(),
             next_id: 1,
         }
     }
