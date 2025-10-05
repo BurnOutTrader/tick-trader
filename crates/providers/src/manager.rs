@@ -89,7 +89,7 @@ impl ProviderManager {
         }
         match kind {
             ProviderKind::ProjectX(_) => {
-                let (md, ex) = adapters_projectx::factory::create_provider_pair(
+                let (md, ex) = projectx::factory::create_provider_pair(
                     kind,
                     self.session.clone(),
                     self.bus.clone(),

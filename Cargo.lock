@@ -1283,37 +1283,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "projectx"
-version = "0.1.0"
-dependencies = [
- "ahash 0.8.12",
- "anyhow",
- "async-trait",
- "chrono",
- "dashmap",
- "dotenvy",
- "futures-util",
- "log",
- "reqwest",
- "rkyv 0.8.12",
- "rust_decimal",
- "rust_decimal_macros",
- "rustls",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "tokio-tungstenite",
- "tracing",
- "tracing-subscriber",
- "tt-bus",
- "tt-provider",
- "tt-shm",
- "tt-types",
- "ustr",
-]
-
-[[package]]
 name = "ptr_meta"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2274,6 +2243,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "tt-projectx"
+version = "0.1.0"
+dependencies = [
+ "ahash 0.8.12",
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "dashmap",
+ "dotenvy",
+ "futures-util",
+ "log",
+ "reqwest",
+ "rkyv 0.8.12",
+ "rust_decimal",
+ "rust_decimal_macros",
+ "rustls",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+ "tracing-subscriber",
+ "tt-bus",
+ "tt-provider",
+ "tt-shm",
+ "tt-types",
+ "ustr",
+]
+
+[[package]]
 name = "tt-provider"
 version = "0.1.0"
 dependencies = [
@@ -2291,9 +2291,9 @@ dependencies = [
  "anyhow",
  "async-trait",
  "dashmap",
- "projectx",
  "tracing",
  "tt-bus",
+ "tt-projectx",
  "tt-provider",
  "tt-shm",
  "tt-types",
