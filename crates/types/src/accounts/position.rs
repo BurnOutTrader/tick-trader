@@ -1,10 +1,10 @@
 use super::events::Side;
 use crate::rkyv_types::DecimalDef;
 use crate::securities::symbols::Instrument;
+use ahash::AHashMap;
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use rust_decimal::Decimal;
 use rust_decimal::prelude::FromPrimitive;
-use ahash::AHashMap;
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone)]
 pub struct Lot {

@@ -3,10 +3,10 @@ use super::order::{Order, OrderState};
 use super::position::PositionLedger;
 use crate::rkyv_types::DecimalDef;
 use crate::securities::symbols::Instrument;
+use ahash::{AHashMap, AHashSet};
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use rust_decimal::Decimal;
 use rust_decimal::prelude::FromPrimitive;
-use ahash::{AHashMap, AHashSet};
 use tokio::sync::mpsc;
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, Default, PartialEq)]
