@@ -55,6 +55,27 @@ impl Feed {
             Feed::OrderBookL3 { exchange, .. } => *exchange,
         }
     }
+    pub fn provider(&self) -> ProviderKind {
+        match self {
+            Feed::Bbo { provider, .. } => *provider,
+            Feed::Ticks { provider, .. } => *provider,
+            Feed::Candles { provider, .. } => *provider,
+            Feed::TickBars { provider, .. } => *provider,
+            Feed::OrderBookL2 { provider, .. } => *provider,
+            Feed::OrderBookL3 { provider, .. } => *provider,
+
+        }
+    }
+    pub fn instrument(&self) -> Instrument {
+        match self {
+            Feed::Bbo { instrument, .. } => instrument.clone(),
+            Feed::Ticks { instrument, .. } => instrument.clone(),
+            Feed::Candles { instrument, .. } => instrument.clone(),
+            Feed::TickBars { instrument, .. } => instrument.clone(),
+            Feed::OrderBookL2 { instrument, .. } => instrument.clone(),
+            Feed::OrderBookL3 { instrument, .. } => instrument.clone(),
+        }
+    }
 }
 
 pub type Price = Decimal;

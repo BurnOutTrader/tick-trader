@@ -2,7 +2,6 @@ use chrono::{DateTime, Utc};
 use uuid::Uuid;
 use crate::base_data::{Bbo, Candle, OrderBook, Tick};
 use crate::keys::SymbolKey;
-use crate::providers::ProviderKind;
 
 /// What a backtest wants to pull.
 #[derive(Clone, Debug)]
