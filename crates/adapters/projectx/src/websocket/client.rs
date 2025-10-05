@@ -20,7 +20,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tracing::{error, info};
 use tt_bus::Router;
 use tt_types::keys::Topic;
-use tt_types::accounts::account::{AccountName, AccountSnapShot};
+#[allow(unused)]
 use tt_types::accounts::events::{
     AccountDelta, ClientOrderId, OrderUpdate, PositionDelta, ProviderOrderId,
 };
@@ -819,19 +819,12 @@ impl PxWebSocketClient {
                                         }
                                     };
                                 //info!(target: "projectx.ws", "GatewayUserAccount: {:?}", account);
-                                let name = AccountName::new(account.name);
                                 let balance = match Decimal::from_f64(account.balance) {
                                     Some(b) => b,
                                     None => {
                                         error!("invalid balance for {}", account.balance);
                                         return;
                                     }
-                                };
-                                let snap_shot = AccountSnapShot {
-                                    name,
-                                    id: account.id,
-                                    balance,
-                                    can_trade: account.can_trade,
                                 };
                                 //info!(target: "projectx.ws", "AccountSnapShot: {:?}", snap_shot);
                                 // Publish minimal AccountDelta to bus
@@ -840,6 +833,7 @@ impl PxWebSocketClient {
                                     day_realized_pnl: dec!(0),
                                     open_pnl: dec!(0),
                                     ts_ns: Utc::now().timestamp_nanos_opt().unwrap_or(0),
+                                    can_trade: account.can_trade
                                 };
                                 let batch = AccountDeltaBatch {
                                     topic: tt_types::keys::Topic::AccountEvt,
@@ -868,27 +862,9 @@ impl PxWebSocketClient {
                                             return;
                                         }
                                     };
-                                // Enum mappings
-                                let side = if order.side == 0 {
-                                    Side::Buy
-                                } else {
-                                    Side::Sell
-                                };
-                                let order_type = models::map_order_type(order.r#type);
-                                let status = models::map_status(order.status);
 
-                                // Quantities and prices
-                                let qty = Volume::from_i64(order.size).unwrap_or_else(|| dec!(0));
-                                let filled_qty =
-                                    Volume::from_f64(order.fill_volume.unwrap_or(0) as f64);
                                 let _limit_px = order.limit_price.map(|p| Price::from_f64(p));
                                 let _stop_px = order.stop_price.map(|p| Price::from_f64(p));
-
-                                let time_accepted =
-                                    DateTime::<Utc>::from_str(&order.creation_timestamp)
-                                        .unwrap_or_else(|_| Utc::now());
-                                let time_last = DateTime::<Utc>::from_str(&order.update_timestamp)
-                                    .unwrap_or_else(|_| Utc::now());
 
                                 //info!(target: "projectx.ws", "GatewayUserOrder standardized: id={} status={} side={:?} type={:?}", order.id, order.status, side, order_type);
                                 // Publish minimal OrderUpdate to bus
@@ -904,6 +880,7 @@ impl PxWebSocketClient {
                                     .timestamp_nanos_opt()
                                     .unwrap_or(0);
                                 let ou = OrderUpdate {
+                                    instrument,
                                     provider_order_id: Some(ProviderOrderId(order.id.to_string())),
                                     client_order_id: None,
                                     state_code,
@@ -941,7 +918,6 @@ impl PxWebSocketClient {
                                         return;
                                     }
                                 };
-                                let symbol = extract_root(&instrument_id);
 
                                 self.positions
                                     .insert(instrument_id.clone(), position.clone());
@@ -958,7 +934,7 @@ impl PxWebSocketClient {
                                     .timestamp_nanos_opt()
                                     .unwrap_or(0);
                                 let pd = PositionDelta {
-                                    instrument: instrument_id.clone(),
+                                    instrument: instrument_id,
                                     net_qty_before: 0,
                                     net_qty_after: after,
                                     realized_delta: dec!(0),
@@ -1075,7 +1051,6 @@ impl PxWebSocketClient {
         }
         {
             let mut w = self.user_positions_subs.write().await;
-            let s = account_id.to_string();
             if !w.contains(&account_id) {
                 w.push(account_id);
             }

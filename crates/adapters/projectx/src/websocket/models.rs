@@ -145,16 +145,6 @@ pub struct GatewayTrade {
     pub volume: i64,
 }
 
-pub fn map_order_type(order_type: i32) -> OrderType {
-    match order_type {
-        1 | 6 | 7 => OrderType::Limit,
-        2 => OrderType::Market,
-        4 => OrderType::StopMarket,
-        5 => OrderType::TrailingStopMarket,
-        _ => OrderType::Unknown,
-    }
-}
-
 pub fn map_status(status: i32) -> OrderEventType {
     match status {
         0 => OrderEventType::Initialized,

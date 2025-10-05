@@ -110,7 +110,7 @@ impl PXClient {
         if self.websocket.is_market_connected() == false {
             *conn_state = ConnectionState::Connecting;
             match self.websocket.connect_market().await {
-                Ok(conn) => {}
+                Ok(_conn) => {}
                 Err(e) => {
                     log::error!("Error starting WebSocket client: {:?}", e);
                     return Err(e);
@@ -119,7 +119,7 @@ impl PXClient {
         }
         if self.websocket.is_user_connected() == false {
             match self.websocket.connect_user().await {
-                Ok(conn) => {}
+                Ok(_conn) => {}
                 Err(e) => {
                     log::error!("Error starting WebSocket client: {:?}", e);
                 }
@@ -153,13 +153,13 @@ impl MarketDataProvider for PXClient {
 
     async fn connect_to_market(
         &self,
-        kind: ProviderKind,
+        _kind: ProviderKind,
         _session: ProviderSessionSpec,
     ) -> anyhow::Result<()> {
         self.connect_all().await
     }
 
-    async fn disconnect(&self, reason: DisconnectReason) {
+    async fn disconnect(&self, _reason: DisconnectReason) {
         self.websocket.kill().await;
         self.http.kill()
     }
@@ -267,8 +267,8 @@ impl ExecutionProvider for PXClient {
 
     async fn connect_to_broker(
         &self,
-        kind: ProviderKind,
-        session: ProviderSessionSpec,
+        _kind: ProviderKind,
+        _session: ProviderSessionSpec,
     ) -> anyhow::Result<()> {
         self.connect_all().await
     }
@@ -306,8 +306,8 @@ impl ExecutionProvider for PXClient {
             .http
             .account_id(account_key.account_name.clone())
             .await?;
-        let mut lock = self.account_subscriptions.write().await;
-        let index = lock.iter().position(|k| k == account_key);
+        let lock = self.account_subscriptions.write().await;
+        let _ = lock.iter().position(|k| k == account_key);
         self.websocket.unsubscribe_user_account(id).await
     }
 
@@ -348,15 +348,15 @@ impl ExecutionProvider for PXClient {
         self.websocket.unsubscribe_account_orders(id).await
     }
 
-    async fn place(&self, order_cmd: HashMap<String, String>) -> CommandAck {
+    async fn place(&self, _order_cmd: HashMap<String, String>) -> CommandAck {
         todo!()
     }
 
-    async fn cancel(&self, order_id: String) -> CommandAck {
+    async fn cancel(&self, _order_id: String) -> CommandAck {
         todo!()
     }
 
-    async fn replace(&self, order_replace_cmd: HashMap<String, String>) -> CommandAck {
+    async fn replace(&self, _order_replace_cmd: HashMap<String, String>) -> CommandAck {
         todo!()
     }
 

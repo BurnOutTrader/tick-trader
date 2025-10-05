@@ -8,7 +8,6 @@ use std::path::Path;
 use dotenvy::dotenv;
 use tokio::net::UnixListener;
 use tracing::level_filters::LevelFilter;
-use tracing_subscriber::EnvFilter;
 use tt_bus::Router;
 
 #[cfg(target_os = "linux")]

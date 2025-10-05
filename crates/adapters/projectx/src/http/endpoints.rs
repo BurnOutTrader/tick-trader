@@ -4,6 +4,7 @@ use tt_types::providers::ProjectXTenant;
 #[derive(Clone, Debug)]
 pub struct PxEndpoints {
     pub api_base: String,
+    #[allow(dead_code)]
     pub user_hub: String,
     pub market_hub: String,
 }

@@ -13,9 +13,11 @@ use tt_types::securities::security::FuturesContract;
 use tt_types::securities::symbols::{Instrument, SecurityType, get_symbol_info};
 
 use crate::http::inner_client::PxHttpInnerClient;
+#[allow(unused_imports)]
 use crate::http::{
     credentials::PxCredential,
     error::PxError,
+
     models::{
         CloseContractReq, CloseContractResponse, ContractSearchByIdReq, ContractSearchByIdResponse,
         ContractSearchReq, ContractSearchResponse, ModifyOrderReq, ModifyOrderResponse,
@@ -78,8 +80,6 @@ impl PxHttpClient {
     async fn spawn_auto_validate(&self, period: Duration) {
         let mut rx = self.inner.stop_tx.subscribe();
         let client = self.inner.clone();
-        let instruments = self.instruments.clone();
-        let accounts = self.internal_accounts.clone();
         let handle = tokio::spawn(async move {
             let mut ticker = tokio::time::interval(period);
             // track last sent token to avoid redundant notifications

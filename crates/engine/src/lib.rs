@@ -320,7 +320,6 @@ impl EngineRuntime {
     }
     pub async fn subscribe_symbol(
         &self,
-        provider: ProviderKind,
         topic: Topic,
         key: SymbolKey,
     ) -> anyhow::Result<()> {
@@ -333,7 +332,6 @@ impl EngineRuntime {
     }
     pub async fn unsubscribe_symbol(
         &self,
-        provider: ProviderKind,
         topic: Topic,
         key: SymbolKey,
     ) -> anyhow::Result<()> {

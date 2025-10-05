@@ -166,6 +166,7 @@ pub enum AccountEvent {
     Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq, Serialize, Deserialize,
 )]
 pub struct OrderUpdate {
+    pub instrument: Instrument,
     pub provider_order_id: Option<ProviderOrderId>,
     pub client_order_id: Option<ClientOrderId>,
     pub state_code: u8,
@@ -201,4 +202,5 @@ pub struct AccountDelta {
     #[rkyv(with = DecimalDef)]
     pub open_pnl: Decimal,
     pub ts_ns: i64,
+    pub can_trade: bool,
 }

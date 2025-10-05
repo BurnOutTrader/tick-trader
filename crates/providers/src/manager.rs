@@ -3,7 +3,6 @@ use dashmap::DashMap;
 use std::sync::Arc;
 use provider::traits::{MarketDataProvider, ExecutionProvider, ProviderSessionSpec};
 use tt_types::providers::ProviderKind;
-use tracing::info;
 use tt_bus::Router;
 use crate::worker::ProviderWorker;
 use tt_bus::UpstreamManager;
@@ -54,8 +53,8 @@ impl ProviderManager {
     pub async fn ensure_pair(
         &self,
         kind: ProviderKind,
-    ) -> anyhow::Result<(())> {
-        if let (Some(m), Some(e)) = (self.md.get(&kind), self.ex.get(&kind)) {
+    ) -> anyhow::Result<()> {
+        if let (Some(_m), Some(_e)) = (self.md.get(&kind), self.ex.get(&kind)) {
             return Ok(());
         }
         match kind {
