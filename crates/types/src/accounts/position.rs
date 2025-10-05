@@ -66,11 +66,11 @@ impl PositionLedger {
         price: Decimal,
         fee: Decimal,
     ) -> (i64, Decimal) {
-        let signed = (qty as i64) * side.sign() as i64;
+        let signed = (qty) * side.sign() as i64;
         let entry = self.segments.remove(instrument);
         match entry {
             None => {
-                // Start new segment
+                // Start a new segment
                 let mut seg = PositionSegment::new(self.alloc_id(), side, qty, price);
                 seg.fees += fee;
                 self.segments.insert(instrument.clone(), seg);
@@ -117,7 +117,7 @@ impl PositionLedger {
                     let realized_total = realized;
                     let mut net_after = seg.net_qty * seg_sign; // signed by old side
                     if seg.net_qty == 0 {
-                        // segment closes; if overshoot, start new with remainder on new side
+                        // segment closes; if an overshoot, start new with a remainder on new side
                         if remainder > 0 {
                             let seg2 =
                                 PositionSegment::new(self.alloc_id(), side, remainder, price);
@@ -127,7 +127,7 @@ impl PositionLedger {
                             // no remainder; nothing kept
                         }
                     } else {
-                        // still same segment active
+                        // still the same segment active
                         self.segments.insert(instrument.clone(), seg);
                     }
                     (net_after, realized_total)
@@ -229,7 +229,7 @@ mod tests {
         assert_eq!(net_after, 0);
         // Short at 150, buy back at 140 => +10 * 5 = +50
         assert_eq!(realized, Decimal::from_i32(50).unwrap());
-        assert!(l.segments.get(&inst).map(|s| s.net_qty).unwrap_or(0) == 0);
+        assert_eq!(l.segments.get(&inst).map(|s| s.net_qty).unwrap_or(0), 0);
     }
 
     #[test]

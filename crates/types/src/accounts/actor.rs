@@ -60,7 +60,7 @@ impl AccountActor {
     }
 
     fn append_wal(&mut self, ev: &AccountEvent) {
-        // Serialize event using rkyv into an aligned byte buffer and store in-memory.
+        // Serialize an event using rkyv into an aligned byte buffer and store in-memory.
         // In a full implementation this would be persisted to disk as a WAL.
         match rkyv::to_bytes::<rkyv::rancor::BoxedError>(ev) {
             Ok(buf) => {
@@ -322,7 +322,7 @@ mod tests {
             wal: Vec::new(),
         };
         let prov = ProviderOrderId("P2".to_string());
-        // Create order via ack
+        // Create an order via ack
         actor.apply(AccountEvent::Order(OrderEvent {
             kind: OrderEventKind::NewAck {
                 instrument: inst("MNQZ5"),
@@ -366,14 +366,14 @@ mod tests {
         assert_eq!(o.cum_qty, 1);
         assert_eq!(o.leaves, 2);
         assert_eq!(o.state, OrderState::PartiallyFilled);
-        // Mark price to compute open pnl on remaining position (long 1 @ 100, mark 105 => +5)
+        // Mark price to compute open pnl on a remaining position (long 1 @ 100, mark 105 => +5)
         actor.apply(AccountEvent::Mark(MarkEvent {
             instrument: inst("MNQZ5"),
             mark_px: Decimal::from_i32(105).unwrap(),
             ts_ns: 3,
         }));
         assert_eq!(actor.state.open_pnl, Decimal::from_i32(5).unwrap());
-        // Fill remaining 2 @ 110; realized pnl accumulates when crossing opposite side later
+        // Fill the remaining 2 @ 110; realized pnl accumulates when crossing the opposite side later
         let ex2 = ExecId::new();
         actor.apply(AccountEvent::Exec(ExecutionEvent {
             exec_id: ex2.clone(),
@@ -405,7 +405,7 @@ mod tests {
             instrument: inst("MNQZ5"),
         }));
         // Open PnL should be 0 (flat); day realized > 39.9
-        assert!(actor.state.open_pnl == Decimal::ZERO);
+        assert_eq!(actor.state.open_pnl, Decimal::ZERO);
         assert!(actor.state.day_realized_pnl > Decimal::from_f32(39.9).unwrap());
     }
 
@@ -610,7 +610,7 @@ mod tests {
 
     #[test]
     fn duplicate_same_seq_lower_precedence_ignored() {
-        // A New event with same seq should not override a higher-precedence Canceled
+        // A New event with the same seq should not override a higher-precedence Canceled
         let mut actor = AccountActor {
             orders_by_provider: AHashMap::new(),
             orders_by_client: AHashMap::new(),
@@ -781,6 +781,6 @@ mod tests {
         }));
 
         assert_eq!(actor.wal.len(), base_wal + 4);
-        assert_eq!(before_state, after_state); // Admin did not change state
+        assert_eq!(before_state, after_state); // Admin did not change the state
     }
 }
