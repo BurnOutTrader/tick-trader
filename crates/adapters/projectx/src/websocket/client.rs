@@ -732,14 +732,30 @@ impl PxWebSocketClient {
                                                     let ts = DateTime::<Utc>::from_str(it.timestamp.as_str()).unwrap_or_else(|_| Utc::now());
                                                     if latest_ts.map(|t| ts > t).unwrap_or(true) { latest_ts = Some(ts); }
 
-                                                    match it.r#type {
-                                                        1 | 3 | 10 => { // Ask/BestAsk/NewBestAsk
-                                                            asks.insert(0,BookLevel { price, volume, level: 0 });
+
+                                                    if let Some(index) = it.index {
+                                                        match it.r#type {
+                                                            1 => { // Ask/BestAsk/NewBestAsk
+                                                                asks.insert(index as usize,BookLevel { price, volume, level: index as u32 });
+                                                            }
+                                                            2 => { // Bid/BestBid/NewBestBid
+                                                                bids.insert(index as usize,BookLevel { price, volume, level: index as u32 });
+                                                            }
+                                                            _ => { /* ignore other DOM types in orderbook snapshot */ }
                                                         }
-                                                        2 | 4 | 9 => { // Bid/BestBid/NewBestBid
-                                                            bids.insert(0,BookLevel { price, volume, level: 0 });
+                                                    } else {
+                                                        match it.r#type {
+                                                            3 | 10 => { // Ask/BestAsk/NewBestAsk
+                                                                asks.insert(0,BookLevel { price, volume, level: 0 });
+                                                            }
+                                                            4 | 9 => { // Bid/BestBid/NewBestBid
+                                                                bids.insert(0,BookLevel { price, volume, level: 0 });
+                                                            }
+                                                            //todo, handle other types, ticks and quotes to be generated
+                                                            _ => {
+
+                                                            }
                                                         }
-                                                        _ => { /* ignore other DOM types in orderbook snapshot */ }
                                                     }
                                                 }
 
