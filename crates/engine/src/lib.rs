@@ -407,7 +407,8 @@ impl EngineRuntime {
                         strategy.on_account_delta_batch(ab.clone()).await;
                     }
                     Response::Pong(_) | Response::InstrumentsResponse(_) | Response::InstrumentsMapResponse(_)
-                    | Response::VendorData(_) | Response::Tick(_) | Response::Quote(_) | Response::Bar(_) => {}
+                    | Response::VendorData(_) | Response::Tick(_) | Response::Quote(_) | Response::Bar(_)
+                    | Response::AnnounceShm(_) => {}
                     Response::SubscribeResponse(r) => {
                         strategy.on_subscribe(r).await;
                     }

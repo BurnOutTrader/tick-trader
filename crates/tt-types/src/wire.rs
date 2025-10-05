@@ -19,6 +19,19 @@ impl Subscribe {
     }
 }
 
+// Key-based subscribe (new control plane message)
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq, Eq)]
+pub struct SubscribeKey {
+    pub topic: Topic,
+    pub key: SymbolKey,
+    pub latest_only: bool,
+    pub from_seq: u64,
+}
+impl SubscribeKey {
+    pub fn topic(&self) -> Topic { self.topic }
+    pub fn key(&self) -> &SymbolKey { &self.key }
+}
+
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq, Eq)]
 #[rkyv(compare(PartialEq), derive(Debug))]
 pub struct FlowCredit {
@@ -169,12 +182,45 @@ pub struct AuthCredentials {
 }
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq)]
+pub struct UnsubscribeAll {
+    pub reason: Option<String>,
+}
+
+// Key-based unsubscribe and flow credit
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq, Eq)]
+pub struct UnsubscribeKey {
+    pub topic: Topic,
+    pub key: SymbolKey,
+}
+
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq, Eq)]
+pub struct FlowCreditKey {
+    pub topic: Topic,
+    pub key: SymbolKey,
+    pub credits: u32,
+}
+
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq)]
+pub struct AnnounceShm {
+    pub topic: Topic,
+    pub key: SymbolKey,
+    pub name: String,
+    pub layout_ver: u32,
+    pub size: u64,
+}
+
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq)]
 pub enum Request {
-    // Control from clients to server
+    // Control from clients to server (coarse)
     Subscribe(Subscribe),
     FlowCredit(FlowCredit),
+    // New key-based control
+    SubscribeKey(SubscribeKey),
+    UnsubscribeKey(UnsubscribeKey),
+    FlowCreditKey(FlowCreditKey),
     Ping(Ping),
-    // Provider commands initiated by clients
+    UnsubscribeAll(UnsubscribeAll),
+    // Provider commands initiated by clients (legacy; to be removed)
     MdSubscribe(MdSubscribeCmd),
     MdUnsubscribe(MdUnsubscribeCmd),
     InstrumentsRequest(InstrumentsRequest),
@@ -184,6 +230,8 @@ pub enum Request {
 pub enum Response {
     // Control replies
     Pong(Pong),
+    // Router → Client announcements
+    AnnounceShm(AnnounceShm),
     // Instruments
     InstrumentsResponse(InstrumentsResponse),
     InstrumentsMapResponse(InstrumentsMapResponse),
