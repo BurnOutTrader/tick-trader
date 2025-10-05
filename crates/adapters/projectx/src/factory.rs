@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use provider::traits::{MarketDataProvider, ExecutionProvider, ProviderSessionSpec};
 use tt_types::providers::ProviderKind;
-use tt_bus::ServerMessageBus;
+use tt_bus::Router;
 
 use crate::client::PXClient;
 
@@ -9,7 +9,7 @@ use crate::client::PXClient;
 pub async fn create_provider_pair(
     kind: ProviderKind,
     session: ProviderSessionSpec,
-    bus: Arc<ServerMessageBus>,
+    bus: Arc<Router>,
 ) -> anyhow::Result<(Arc<dyn MarketDataProvider>, Arc<dyn ExecutionProvider>)> {
     let p = PXClient::new_from_session(kind, session, bus).await?;
     let arc = Arc::new(p);

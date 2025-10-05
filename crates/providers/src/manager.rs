@@ -4,7 +4,7 @@ use std::sync::Arc;
 use provider::traits::{MarketDataProvider, ExecutionProvider, ProviderSessionSpec};
 use tt_types::providers::ProviderKind;
 use tracing::info;
-use tt_bus::ServerMessageBus;
+use tt_bus::Router;
 use crate::worker::ProviderWorker;
 use tt_bus::UpstreamManager;
 
@@ -17,7 +17,7 @@ pub struct ProviderManager {
     workers: DashMap<(ProviderKind, usize), Arc<crate::worker::InprocessWorker>>,
     shards: usize,
     // Upstream wiring requirements
-    bus: Arc<ServerMessageBus>,
+    bus: Arc<Router>,
     session: ProviderSessionSpec,
 }
 
@@ -39,18 +39,16 @@ impl UpstreamManager for ProviderManager {
 }
 
 impl ProviderManager {
-    pub fn new() -> Self {
-        let bus = Arc::new(ServerMessageBus::new());
+    pub fn new(router: Arc<Router>) -> Self {
         let session = ProviderSessionSpec::from_env();
-        Self { md: DashMap::new(), ex: DashMap::new(), workers: DashMap::new(), shards: 4, bus, session }
+        Self { md: DashMap::new(), ex: DashMap::new(), workers: DashMap::new(), shards: 4, bus: router, session }
     }
-    pub fn with_shards(shards: usize) -> Self {
-        let bus = Arc::new(ServerMessageBus::new());
+    pub fn with_shards(router: Arc<Router>, shards: usize) -> Self {
         let session = ProviderSessionSpec::from_env();
-        Self { md: DashMap::new(), ex: DashMap::new(), workers: DashMap::new(), shards: shards.max(1), bus, session }
+        Self { md: DashMap::new(), ex: DashMap::new(), workers: DashMap::new(), shards: shards.max(1), bus: router, session }
     }
-    pub fn with_bus_and_session(shards: usize, bus: Arc<ServerMessageBus>, session: ProviderSessionSpec) -> Self {
-        Self { md: DashMap::new(), ex: DashMap::new(), workers: DashMap::new(), shards: shards.max(1), bus, session }
+    pub fn with_router_and_session(router: Arc<Router>, shards: usize, session: ProviderSessionSpec) -> Self {
+        Self { md: DashMap::new(), ex: DashMap::new(), workers: DashMap::new(), shards: shards.max(1), bus: router, session }
     }
 
     pub async fn ensure_pair(

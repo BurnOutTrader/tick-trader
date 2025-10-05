@@ -9,7 +9,7 @@ use rustls::crypto::{CryptoProvider, ring};
 use std::sync::Arc;
 use tracing::{error, info, level_filters::LevelFilter, warn};
 use provider::traits::ProviderSessionSpec;
-use tt_bus::ServerMessageBus;
+use tt_bus::{Router};
 use tt_types::providers::{ProjectXTenant, ProviderKind};
 
 #[tokio::main]
@@ -52,7 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Build realtime client using the authenticated token
     let token = http.inner.token_string().await;
     let base = http.inner.rtc_base();
-    let bus = Arc::new(ServerMessageBus::new());
+    let bus = Arc::new(Router::new(8));
     let rt = PxWebSocketClient::new(base, token, http.firm.clone(), bus.clone());
 
     // Connect market hub and subscribe to trades for the contract
