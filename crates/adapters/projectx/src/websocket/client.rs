@@ -337,7 +337,15 @@ impl PxWebSocketClient {
                             }
                         }
                     }
-                    Ok(Message::Ping(_)) => {}
+                    Ok(Message::Ping(payload)) => {
+                        // Respond with Pong to keep the connection healthy
+                        let guard = this.user_ws.lock().await;
+                        if let Some(client) = guard.as_ref() {
+                            if let Err(e) = client.send_pong(payload).await {
+                                tracing::warn!(target: "projectx.ws", "failed to send Pong on user ws: {e}");
+                            }
+                        }
+                    }
                     Ok(Message::Pong(_)) => {}
                     Ok(Message::Close(_)) => {
                         break;
@@ -451,7 +459,15 @@ impl PxWebSocketClient {
                             }
                         }
                     }
-                    Ok(Message::Ping(_)) => {}
+                    Ok(Message::Ping(payload)) => {
+                        // Respond with Pong to keep the connection healthy
+                        let guard = this.market_ws.lock().await;
+                        if let Some(client) = guard.as_ref() {
+                            if let Err(e) = client.send_pong(payload).await {
+                                tracing::warn!(target: "projectx.ws", "failed to send Pong on market ws: {e}");
+                            }
+                        }
+                    }
                     Ok(Message::Pong(_)) => {}
                     Ok(Message::Close(_)) => {
                         break;

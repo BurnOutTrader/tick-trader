@@ -1,4 +1,10 @@
-# Tick Trader (current architecture overview)
+# 🚀 Tick Trader — current architecture overview
+
+[![Status](https://img.shields.io/badge/Status-Experimental-orange)](#)
+[![Rust](https://img.shields.io/badge/Rust-2021%20edition-b7410e?logo=rust)](https://www.rust-lang.org/)
+[![Async](https://img.shields.io/badge/Async-Tokio-17a2b8?logo=tokio)](https://tokio.rs/)
+[![Serialization](https://img.shields.io/badge/Serialization-rkyv-5c6bc0)](https://github.com/rkyv/rkyv)
+[![Transport](https://img.shields.io/badge/Transport-UDS%20%7C%20SHM-6c757d)](#)
 
 This document explains how the current system works end-to-end: the standalone Router (server side), the ProviderManager/Workers, the ProjectX adapter, the wire protocol (rkyv), and the engine test strategy that connects over a Unix Domain Socket (UDS).
 
@@ -11,7 +17,7 @@ If you just want to try it quickly, see the Quick start section.
 - Wire protocol and data types: tt-types (crates/tt-types)
 
 
-## Control plane and data plane (current state)
+## 🧭 Control plane and data plane (current state)
 
 - Control plane (implemented):
   - Request/Response messages (rkyv-serialized) over length-delimited frames on a UDS.
@@ -25,9 +31,9 @@ If you just want to try it quickly, see the Quick start section.
   - Bars remain on framed rkyv.
 
 
-## Key components
+## 🧩 Key components
 
-### Router (server hub)
+### 🚌 Router (server hub)
 Location: crates/bus/src/router.rs, exported as tt_bus::Router.
 
 Responsibilities:
@@ -44,7 +50,7 @@ Selected APIs:
 - set_backend(Arc<dyn UpstreamManager>): provides the link to providers via a manager.
 - publish_* methods used by providers to emit data (tick/quote/bar/orderbook/etc.).
 
-### UpstreamManager and ProviderManager
+### 🔌 UpstreamManager and ProviderManager
 Location: crates/bus/src/router.rs (trait) and crates/providers/src/manager.rs (implementation).
 
 - UpstreamManager: async trait with subscribe_md/unsubscribe_md for market data streams.
@@ -53,7 +59,7 @@ Location: crates/bus/src/router.rs (trait) and crates/providers/src/manager.rs (
 - Worker model: an InprocessWorker wraps a MD provider and refcounts interest per (topic, key), calling provider.subscribe_md on first subscribe and provider.unsubscribe_md on last.
 - ProviderManager ensures the MD side is connected (connect_to_market) the first time a provider pair is created.
 
-### ProjectX adapter
+### 🔷 ProjectX adapter
 Location: crates/adapters/projectx
 
 - PXClient implements both MarketDataProvider and ExecutionProvider traits.
@@ -64,7 +70,7 @@ Location: crates/adapters/projectx
   - GatewayDepth → Response::OrderBookBatch (OrderBook snapshots via rkyv)
   - User/account/order/position updates → corresponding batches
 
-### Server main
+### 🖥️ Server main
 Location: crates/server/src/main.rs
 
 - Loads .env and reads TT_BUS_ADDR for the UDS path. On Linux, abstract namespace like "@tick-trader.sock" is supported via a custom bind helper.
@@ -72,7 +78,7 @@ Location: crates/server/src/main.rs
 - Accept loop: for each UDS connection, spawns Router::attach_client.
 - The server does not hold concrete provider types; providers publish directly to the Router.
 
-### Engine (single strategy)
+### ⚙️ Engine (single strategy)
 Location: crates/engine
 
 - ClientMessageBus is an in-process bus for a single strategy. It maintains local topic-level interest, forwards Requests to the server, and fans in Responses to the strategy loop.
@@ -80,7 +86,7 @@ Location: crates/engine
 - The demo strategy binary connects over UDS and issues both topic-level and key-based subscriptions.
 
 
-## Wire protocol (tt-types)
+## 📡 Wire protocol (tt-types)
 Location: crates/tt-types/src/wire.rs
 
 Requests (subset):
@@ -102,7 +108,7 @@ Responses (subset):
 All messages are archived with rkyv and sent as length-delimited frames (tokio-util codec).
 
 
-## Environment and credentials (.env)
+## 🔐 Environment and credentials (.env)
 
 - The server and providers load .env automatically. ProviderSessionSpec::from_env scans all environment variables to construct credentials for multiple providers.
 - ProjectX keys use the PX_ prefix:
@@ -117,35 +123,43 @@ All messages are archived with rkyv and sent as length-delimited frames (tokio-u
   - TT_BUS_ADDR defaults to /tmp/tick-trader.sock (macOS) or @tick-trader.sock (Linux abstract). Override in .env or env.
 
 
-## Quick start
+## ⚡ Quick start
 
 1) Build the workspace:
 
-   cargo build
+```bash
+cargo build
+```
 
 2) Start the server (separate terminal):
 
-   TT_BUS_ADDR=/tmp/tick-trader.sock cargo run -p tt-server
+```bash
+TT_BUS_ADDR=/tmp/tick-trader.sock cargo run -p tt-server
+```
 
 3) Prepare .env with your provider credentials (ProjectX example):
 
-   PX_TOPSTEP_USERNAME=your_user
-   PX_TOPSTEP_APIKEY=your_key
-   PX_TOPSTEP_FIRM=topstep
-   TT_BUS_ADDR=/tmp/tick-trader.sock
+```env
+PX_TOPSTEP_USERNAME=your_user
+PX_TOPSTEP_APIKEY=your_key
+PX_TOPSTEP_FIRM=topstep
+TT_BUS_ADDR=/tmp/tick-trader.sock
+```
 
 4) Run the test strategy (client) in another terminal:
 
-   cargo run -p tt-engine --bin tt-engine-test_strategy
+```bash
+cargo run -p tt-engine --bin tt-engine-test_strategy
+```
 
 It connects over UDS, performs topic-level Subscribe for hot and account topics, and then requests a key-based market data stream.
 
 
-## Key-based subscription example
+## 🔑 Key-based subscription example
 
 Example taken from the engine test binary (MNQZ25 via ProjectX Topstep):
 
-```
+```rust
 use tt_types::keys::Topic;
 use tt_types::wire::{Request, SubscribeKey};
 
@@ -159,7 +173,7 @@ let _ = req_tx.send(Request::SubscribeKey(SubscribeKey { topic: Topic::Depth, ke
 - For lossless topics (Orders/Positions/AccountEvt), the Router tolerates transient backpressure and will only disconnect a client after sustained backlog (i.e., serious slowdown) beyond an internal threshold; otherwise it prefers to drop isolated batches for that client to keep the system healthy.
 
 
-## Data delivery to strategies
+## 📬 Data delivery to strategies
 
 - EngineRuntime sends Responses to your Strategy implementation via callbacks:
   - on_tick, on_quote, on_depth (OrderBook), on_bar
@@ -168,14 +182,14 @@ let _ = req_tx.send(Request::SubscribeKey(SubscribeKey { topic: Topic::Depth, ke
 - Ensure your Strategy’s desired_topics returns the coarse topics you want; the engine handles the initial topic-level Subscribe automatically (no FlowCredit needed).
 
 
-## Current limitations and planned work
+## 🗺️ Current limitations and planned work
 
 - SHM data plane for Ticks/Quotes/Depth: Implemented. Providers write rkyv snapshots into SHM using a seqlock header via tt-shm and the Router announces streams with AnnounceShm (cached for late subscribers). Client-side zero-copy readers are a TODO (engine still consumes framed rkyv; sample SHM reader helpers to be added).
 - Full out-of-process ProviderWorker processes: Scaffolding added (providers::ipc) with a minimal command protocol; current workers are in-process. Next step: spawn/process management and UDS/TCP transport.
 - Remove legacy Request variants once all clients use key-based messages.
 
 
-## Symbology quick reference
+## 📈 Symbology quick reference
 
 - Instrument = ROOT + month code + year code (e.g., "MNQZ5" or "MNQZ25").
 - Symbol = ROOT only (e.g., "MNQ").
