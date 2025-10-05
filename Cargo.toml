@@ -7,8 +7,9 @@ members = [
     "crates/adapters/projectx",
     "crates/server",
     "crates/providers",
-    "crates/shm", 
-    "crates/database"]
+    "crates/shm",
+    "crates/database"
+]
 resolver = "2"
 
 [workspace.package]

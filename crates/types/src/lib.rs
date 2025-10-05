@@ -9,5 +9,6 @@ pub mod reality_models;
 pub mod rkyv_types;
 pub mod securities;
 pub mod wire;
+pub mod history;
 
 pub use guid::Guid;

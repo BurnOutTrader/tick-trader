@@ -5,36 +5,56 @@ use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 pub use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use strum_macros::Display;
+use crate::providers::ProviderKind;
 
 #[derive(Clone, PartialEq, Eq, Debug, Hash, Display)]
 pub enum Feed {
     Bbo {
-        symbol: String,
+        instrument: Instrument,
         exchange: Exchange,
+        provider: ProviderKind,
     },
     Ticks {
-        symbol: String,
+        instrument: Instrument,
         exchange: Exchange,
+        provider: ProviderKind,
     },
     Candles {
-        symbol: String,
+        instrument: Instrument,
         exchange: Exchange,
         resolution: Resolution,
+        provider: ProviderKind,
     },
     TickBars {
-        symbol: String,
+        instrument: Instrument,
         exchange: Exchange,
+        provider: ProviderKind,
         ticks: u32,
     },
     OrderBookL2 {
-        symbol: String,
+        instrument: Instrument,
         exchange: Exchange,
+        provider: ProviderKind,
         depth: u8,
     },
     OrderBookL3 {
-        symbol: String,
+        instrument: Instrument,
         exchange: Exchange,
+        provider: ProviderKind,
     },
+}
+
+impl Feed {
+    pub fn exchange(&self) -> Exchange {
+        match self {
+            Feed::Bbo { exchange, .. } => *exchange,
+            Feed::Ticks { exchange, .. } => *exchange,
+            Feed::Candles { exchange, .. } => *exchange,
+            Feed::TickBars { exchange, .. } => *exchange,
+            Feed::OrderBookL2 { exchange, .. } => *exchange,
+            Feed::OrderBookL3 { exchange, .. } => *exchange,
+        }
+    }
 }
 
 pub type Price = Decimal;

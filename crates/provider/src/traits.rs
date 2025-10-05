@@ -2,7 +2,9 @@ use ahash::AHashMap;
 use async_trait::async_trait;
 use dotenvy::dotenv;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Instant;
+use tt_types::base_data::{DateTime, Utc};
 use tt_types::keys::{AccountKey, SymbolKey, Topic};
 use tt_types::providers::{ProjectXTenant, ProviderKind, RithmicSystem};
 
@@ -226,6 +228,40 @@ pub trait ExecutionProvider: Send + Sync {
     async fn cancel_order(&self, spec: tt_types::wire::CancelOrder) -> CommandAck;
     async fn replace_order(&self, spec: tt_types::wire::ReplaceOrder) -> CommandAck;
     async fn auto_update(&self) -> anyhow::Result<()>;
+}
+
+
+/// Providers implement this to supply historical data.
+///
+/// Contract:
+/// - `fetch()` returns immediately with a handle and an `mpsc::Receiver<HistoryEvent>`.
+/// - The provider streams results (possibly chunked) to the receiver.
+/// - Cancellation via `handle.cancel()` should stop the stream ASAP.
+#[async_trait::async_trait]
+pub trait HistoricalDataProvider: Send + Sync {
+    fn name(&self) -> ProviderKind;
+
+    /// Optional: connect/login; should be idempotent.
+    async fn ensure_connected(self: Arc<Self>) -> anyhow::Result<()>;
+
+    /// The job of this function is to return any data within the period, for the specifications,
+    /// how your function does that doesnt matter, as long as you return all data available for the period
+    async fn fetch(
+        self: Arc<Self>,
+        req: HistoricalRequest,
+    ) -> anyhow::Result<(Arc<dyn HistoryHandle>, mpsc::Receiver<HistoryEvent>)>;
+
+    /// Feature flags help the router pick/shape requests.
+    fn supports(&self, _feed: Feed) -> bool {
+        true
+    }
+    fn supports_resolution(&self, _res: &Option<Resolution>) -> bool {
+        true
+    }
+
+    fn resolver(self: Arc<Self>) -> Arc<dyn SecurityResolver>;
+
+    fn earliest_available(&self, feed: Feed) -> DateTime<Utc>;
 }
 
 #[derive(Debug, Clone)]
