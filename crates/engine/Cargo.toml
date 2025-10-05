@@ -16,6 +16,7 @@ bytes = { workspace = true }
 dotenvy = { workspace = true }
 tt-types = { path = "../types" }
 tt-bus = { path = "../bus" }
+dashmap = { workspace = true }
 
 [[bin]]
 name = "tt-engine-test_strategy"

@@ -1,11 +1,14 @@
 use async_trait::async_trait;
 use provider::traits::{MarketDataProvider, ProbeStatus, ProviderParams};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::Arc;
+use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
 use std::time::{Duration, Instant};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, oneshot};
 use tracing::info;
 use tt_types::keys::{SymbolKey, Topic};
+use tt_types::providers::ProviderKind;
+use tt_types::securities::symbols::Instrument;
+use dashmap::DashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubState {
@@ -255,8 +258,6 @@ impl<P: MarketDataProvider + 'static> Engine<P> {
 use tokio::sync::mpsc;
 use tt_bus::{ClientMessageBus, ClientSubId};
 use tt_types::base_data::{Bbo, Candle, OrderBook, Tick};
-use tt_types::providers::ProviderKind;
-use tt_types::securities::symbols::Instrument;
 use tt_types::wire::{
     AccountDeltaBatch, BarBatch, OrdersBatch, PositionsBatch, QuoteBatch, Request, Response,
     Subscribe, TickBatch,
@@ -289,10 +290,37 @@ pub struct EngineRuntime {
     sub_id: Option<ClientSubId>,
     rx: Option<mpsc::Receiver<Response>>,
     task: Option<tokio::task::JoinHandle<()>>,
-    state: Arc<Mutex<EngineAccountsState>>,
+    state: Arc<Mutex<EngineAccountsState>>, 
+    // Correlated request/response callbacks (engine-local)
+    next_corr_id: Arc<AtomicU64>,
+    pending: Arc<DashMap<u64, oneshot::Sender<Response>>>,
+    // Vendor securities cache and watchers
+    securities_by_provider: Arc<DashMap<ProviderKind, Vec<Instrument>>>,
+    watching_providers: Arc<DashMap<ProviderKind, ()>>,
 }
 
 impl EngineRuntime {
+    /// Send a correlated request that expects a single Response back from the server.
+    /// The engine maintains a DashMap of pending callbacks keyed by corr_id.
+    pub async fn request_with_corr<F>(&self, make: F) -> oneshot::Receiver<Response>
+    where
+        F: FnOnce(u64) -> Request,
+    {
+        let corr_id = self.next_corr_id.fetch_add(1, Ordering::SeqCst);
+        let (tx, rx) = oneshot::channel();
+        self.pending.insert(corr_id, tx);
+        // Forward to server via client bus using our own sub_id
+        let req = make(corr_id);
+        let _ = self
+            .bus
+            .handle_request(
+                &self.sub_id.as_ref().expect("engine started"),
+                req,
+            )
+            .await;
+        rx
+    }
+
     pub async fn list_instruments(
         &self,
         provider: ProviderKind,
@@ -301,7 +329,6 @@ impl EngineRuntime {
         use tokio::time::timeout;
         use tt_types::wire::{InstrumentsRequest, Response as WireResp};
         let rx = self
-            .bus
             .request_with_corr(|corr_id| {
                 Request::InstrumentsRequest(InstrumentsRequest {
                     provider,
@@ -318,6 +345,8 @@ impl EngineRuntime {
         }
     }
     pub async fn subscribe_symbol(&self, topic: Topic, key: SymbolKey) -> anyhow::Result<()> {
+        // On first subscribe for this provider, start vendor securities refresh (hourly)
+        self.ensure_vendor_securities_watch(key.provider).await;
         // Forward to server
         let _ = self
             .bus
@@ -346,6 +375,8 @@ impl EngineRuntime {
 
     // Convenience: subscribe/unsubscribe by key without exposing sender
     pub async fn subscribe_key(&self, topic: Topic, key: SymbolKey) -> anyhow::Result<()> {
+        // Ensure vendor securities refresh is active for this provider
+        self.ensure_vendor_securities_watch(key.provider).await;
         let _ = self
             .bus
             .handle_request(
@@ -447,6 +478,75 @@ impl EngineRuntime {
             .unwrap_or_default()
     }
 
+    /// Return cached securities list for a provider (may be empty if not fetched yet)
+    pub fn securities_for(&self, provider: ProviderKind) -> Vec<Instrument> {
+        self.securities_by_provider
+            .get(&provider)
+            .map(|v| v.value().clone())
+            .unwrap_or_default()
+    }
+
+    /// Ensure that we fetch instruments from the vendor now and refresh every hour.
+    async fn ensure_vendor_securities_watch(&self, provider: ProviderKind) {
+        if self.watching_providers.contains_key(&provider) {
+            return;
+        }
+        self.watching_providers.insert(provider, ());
+        // Immediate fetch using the client bus correlation helper
+        let bus = self.bus.clone();
+        let sec_map = self.securities_by_provider.clone();
+        // Helper closure to perform one fetch
+        async fn fetch_into(bus: Arc<ClientMessageBus>, provider: ProviderKind, sec_map: Arc<DashMap<ProviderKind, Vec<Instrument>>>) {
+            use tokio::time::timeout;
+            use tt_types::wire::{InstrumentsRequest, Request as WireReq, Response as WireResp};
+            // Use bus-level correlation to avoid depending on EngineRuntime internals
+            let rx = bus
+                .request_with_corr(|corr_id| WireReq::InstrumentsRequest(InstrumentsRequest { provider, pattern: None, corr_id }))
+                .await;
+            if let Ok(Ok(WireResp::InstrumentsResponse(ir))) = timeout(Duration::from_secs(3), rx).await {
+                sec_map.insert(provider, ir.instruments);
+            }
+        }
+        fetch_into(bus.clone(), provider, sec_map.clone()).await;
+        // Spawn hourly refresh
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(3600));
+            loop {
+                tick.tick().await;
+                fetch_into(bus.clone(), provider, sec_map.clone()).await;
+            }
+        });
+    }
+
+    // Position helpers (account currently ignored; model aggregates by instrument)
+    pub async fn is_long(&self, _account: Option<tt_types::accounts::account::AccountName>, instrument: &Instrument) -> bool {
+        let st = self.state.lock().await;
+        if let Some(pb) = &st.last_positions {
+            if let Some(p) = pb.positions.iter().find(|p| &p.instrument == instrument) {
+                return p.net_qty_after > 0;
+            }
+        }
+        false
+    }
+    pub async fn is_short(&self, _account: Option<tt_types::accounts::account::AccountName>, instrument: &Instrument) -> bool {
+        let st = self.state.lock().await;
+        if let Some(pb) = &st.last_positions {
+            if let Some(p) = pb.positions.iter().find(|p| &p.instrument == instrument) {
+                return p.net_qty_after < 0;
+            }
+        }
+        false
+    }
+    pub async fn is_flat(&self, _account: Option<tt_types::accounts::account::AccountName>, instrument: &Instrument) -> bool {
+        let st = self.state.lock().await;
+        if let Some(pb) = &st.last_positions {
+            if let Some(p) = pb.positions.iter().find(|p| &p.instrument == instrument) {
+                return p.net_qty_after == 0;
+            }
+        }
+        true
+    }
+
     pub fn new(bus: Arc<ClientMessageBus>) -> Self {
         Self {
             bus,
@@ -458,6 +558,10 @@ impl EngineRuntime {
                 last_positions: None,
                 last_accounts: None,
             })),
+            next_corr_id: Arc::new(AtomicU64::new(1)),
+            pending: Arc::new(DashMap::new()),
+            securities_by_provider: Arc::new(DashMap::new()),
+            watching_providers: Arc::new(DashMap::new()),
         }
     }
 
@@ -478,9 +582,26 @@ impl EngineRuntime {
         }
         let mut rx = self.rx.take().expect("rx present after start");
         let state = self.state.clone();
+        let pending = self.pending.clone();
         strategy.on_start().await;
         let handle = tokio::spawn(async move {
             while let Some(resp) = rx.recv().await {
+                // Fulfill engine-local correlated callbacks first
+                match &resp {
+                    Response::InstrumentsResponse(ir) => {
+                        if let Some((_k, tx)) = pending.remove(&ir.corr_id) {
+                            let _ = tx.send(resp.clone());
+                            continue;
+                        }
+                    }
+                    Response::InstrumentsMapResponse(imr) => {
+                        if let Some((_k, tx)) = pending.remove(&imr.corr_id) {
+                            let _ = tx.send(resp.clone());
+                            continue;
+                        }
+                    }
+                    _ => {}
+                }
                 match resp {
                     Response::TickBatch(TickBatch { ticks, .. }) => {
                         for t in ticks {
