@@ -39,7 +39,7 @@ use tt_types::wire::{AccountDeltaBatch, OrdersBatch, PositionsBatch};
 /// a bearer for SignalR access tokens.
 #[derive(Clone)]
 pub struct PxWebSocketClient {
-    bus: Arc<tt_bus::bus::ServerMessageBus>,
+    bus: Arc<ServerMessageBus>, 
     firm: ProjectXTenant,
     /// Base URL for the websocket service, e.g. `https://rtc.tradeify.projectx.com`
     pub base_url: String,

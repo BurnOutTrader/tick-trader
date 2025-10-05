@@ -1,0 +1,16 @@
+[package]
+name = "tt-router"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = { workspace = true }
+tokio = { workspace = true, features = ["net", "rt-multi-thread", "macros", "time"] }
+tokio-util = { workspace = true }
+futures-util = { workspace = true }
+bytes = { workspace = true }
+tracing = { workspace = true }
+dashmap = { workspace = true }
+
+# reuse existing wire and keys for now (incremental step)
+tt-types = { path = "../tt-types" }

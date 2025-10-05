@@ -7,7 +7,9 @@ edition.workspace = true
 [dependencies]
 projectx = { path = "../adapters/projectx" }
 tt-types = { path = "../tt-types" }
+# old bus can remain for adapters; server main will switch to router
 tt-bus = {path = "../bus", features = ["server"]}
+tt-router = { path = "../router" }
 provider = { path = "../provider", package = "tt-provider" }
 ahash = { workspace = true }
 anyhow = { workspace = true }

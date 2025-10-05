@@ -1,0 +1,16 @@
+[package]
+name = "tt-providers"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }
+dashmap = { workspace = true }
+arc-swap = "1.7"
+
+provider = { path = "../provider", package = "tt-provider" }
+tt-types = { path = "../tt-types" }
+tt-bus = { path = "../bus", features = ["server"] }
+adapters-projectx = { package = "projectx", path = "../adapters/projectx" }

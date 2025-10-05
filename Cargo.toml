@@ -5,7 +5,10 @@ members = [
     "crates/engine",
     "crates/tt-types",
     "crates/adapters/projectx",
-    "crates/server"]
+    "crates/server",
+    "crates/router",
+    "crates/providers"
+]
 resolver = "2"
 
 [workspace.package]
