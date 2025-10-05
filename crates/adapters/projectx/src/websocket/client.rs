@@ -725,7 +725,6 @@ impl PxWebSocketClient {
                                                 let mut latest_ts: Option<DateTime<Utc>> = None;
 
                                                 for it in items.into_iter() {
-                                                    println!("{:?}", it);
                                                     let price = match Price::from_f64(it.price) { Some(p) => p, None => continue };
                                                     let vol_i64 = if it.current_volume != 0 { it.current_volume } else { it.volume };
                                                     let volume = match Volume::from_i64(vol_i64) { Some(v) => v, None => continue };
