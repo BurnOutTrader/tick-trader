@@ -60,7 +60,6 @@ fn candle(
     l: i64,
     c: i64,
     vol: i64,
-    trades: i64,
 ) -> Candle {
     Candle {
         symbol: sym.to_string(),
@@ -231,7 +230,6 @@ async fn candles_to_m5_from_m1() {
             9990 + i,
             10005 + i,
             10,
-            5,
         );
         tx_in.send(c_in).unwrap();
     }
@@ -245,7 +243,6 @@ async fn candles_to_m5_from_m1() {
         10015,
         10022,
         7,
-        4,
     );
     tx_in.send(c_next).unwrap();
 
@@ -350,7 +347,6 @@ async fn candles_to_m5_no_feedback_duplicate() {
             9990 + i,
             10005 + i,
             10,
-            5,
         );
         tx_in.send(c_in).unwrap();
     }
@@ -364,7 +360,6 @@ async fn candles_to_m5_no_feedback_duplicate() {
         10015,
         10022,
         7,
-        4,
     );
     tx_in.send(c_next).unwrap();
 

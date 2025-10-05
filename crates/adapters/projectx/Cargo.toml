@@ -11,19 +11,16 @@ name = "projectx"
 server = []
 
 [dependencies]
-tt-types = { path = "../../tt-types" }
+tt-types = { path = "../../types" }
 tt-provider = {path = "../../provider"}
 tt-bus = { path = "../../bus", features = ["server"] }
 tt-shm = { path = "../../shm" }
 rkyv = { workspace = true }
 ahash = { workspace = true }
 anyhow = { workspace = true }
-async-stream = { workspace = true }
 chrono = { workspace = true }
-chrono-tz = { workspace = true }
 dashmap = { workspace = true }
 futures-util = { workspace = true }
-indexmap = { workspace = true }
 log = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
@@ -33,15 +30,12 @@ tokio = { workspace = true }
 ustr = { workspace = true }
 serde_json = { workspace = true }
 tokio-tungstenite = { workspace = true }
-zeroize = { workspace = true }
-hmac = "0.12.1"
 tracing = {workspace = true}
 tracing-subscriber = { workspace = true }
 async-trait = { workspace = true }  # Needed for example binaries
 rust_decimal = { workspace = true }
 rust_decimal_macros = { workspace = true }
 rustls = { workspace = true }
-lazy_static = "1.5.0"
 
 
 

@@ -7,7 +7,7 @@ use tokio_util::codec::{FramedRead, FramedWrite};
 use futures_util::{SinkExt, StreamExt};
 use bytes::Bytes;
 use tt_bus::ClientMessageBus;
-use tt_types::wire::{Kick, Request, Response, UnsubscribeAll, WireMessage};
+use tt_types::wire::{Kick, Request, WireMessage};
 use tt_types::wire as wire;
 use tt_types::keys::Topic;
 use tracing::{info, warn};
@@ -43,7 +43,7 @@ impl Strategy for TestStrategy {
     async fn on_depth(&self, d: OrderBook) {
         println!("{:?}", d);
     }
-    async fn on_bar(&self, b: tt_types::base_data::Candle) { }
+    async fn on_bar(&self, _b: tt_types::base_data::Candle) { }
     async fn on_orders_batch(&self, b: wire::OrdersBatch) {
         println!("{:?}", b);
     }
@@ -53,10 +53,10 @@ impl Strategy for TestStrategy {
     async fn on_account_delta_batch(&self, b: wire::AccountDeltaBatch) {
         println!("{:?}", b);
     }
-    async fn on_subscribe(&self, instrument: Instrument, topic: Topic, success: bool) {
+    async fn on_subscribe(&self, _instrument: Instrument, topic: Topic, success: bool) {
         println!("{:?}: {}", topic, success);
     }
-    async fn on_unsubscribe(&self, instrument: Instrument, topic: Topic) {
+    async fn on_unsubscribe(&self, _instrument: Instrument, topic: Topic) {
         println!("{:?}", topic);
     }
 }

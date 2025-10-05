@@ -13,19 +13,13 @@ anyhow = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 once_cell = { workspace = true }
-ustr = { workspace = true }
 rkyv = { workspace = true}
-nonzero = "0.2.0"
 futures = "0.3.31"
 tokio = { workspace = true }
 dashmap = { workspace = true }
-tokio-util = "0.7.16"
 ahash = { workspace = true }
 lazy_static = {workspace = true}
-zeroize = "1.8.2"
 [features]
 default = []
 
 [dev-dependencies]
-proptest = "1.8.0"
-rstest = { workspace = true }

@@ -163,7 +163,6 @@ impl<P: MarketDataProvider + 'static> Engine<P> {
             let prev = ent.downstream_count;
             ent.downstream_count = ent.downstream_count.saturating_add(delta as u32);
             if prev == 0 {
-                let params_clone = ent.params.clone();
                 drop(inner);
                 info!(?sk, "upstream subscribe start");
                 // idempotency: only call if not already Subscribed/Subscribing
@@ -278,8 +277,8 @@ pub trait Strategy: Send + Sync + 'static {
     async fn on_orders_batch(&self, _b: OrdersBatch) {}
     async fn on_positions_batch(&self, _b: PositionsBatch) {}
     async fn on_account_delta_batch(&self, _b: AccountDeltaBatch) {}
-    async fn on_subscribe(&self, instrument: Instrument, topic: Topic, success: bool) {}
-    async fn on_unsubscribe(&self, instrument: Instrument, topic: Topic) {}
+    async fn on_subscribe(&self, _instrument: Instrument, _topic: Topic, _success: bool) {}
+    async fn on_unsubscribe(&self, _instrument: Instrument, _topic: Topic) {}
 }
 
 struct EngineAccountsState {

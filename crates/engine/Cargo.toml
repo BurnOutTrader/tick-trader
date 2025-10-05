@@ -5,7 +5,6 @@ edition = "2024"
 
 [dependencies]
 anyhow = { workspace = true }
-thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 async-trait = { workspace = true }
@@ -14,11 +13,8 @@ tokio-util = { workspace = true }
 futures-util = { workspace = true }
 bytes = { workspace = true }
 dotenvy = { workspace = true }
-
-tt-provider = { path = "../provider" }
-tt-types = { path = "../tt-types" }
+tt-types = { path = "../types" }
 tt-bus = { path = "../bus" }
-ahash = {workspace = true}
 
 [[bin]]
 name = "tt-engine-test_strategy"

@@ -39,7 +39,7 @@ impl ProviderWorker for InprocessWorker {
                 } else {
                     tt_shm::DEFAULT_TICK_SNAPSHOT_SIZE
                 };
-                let ann = tt_types::wire::AnnounceShm { topic, key: key.clone(), name, layout_ver: 1, size };
+                let ann = tt_types::wire::AnnounceShm { topic, key: key.clone(), name, layout_ver: 1, size: size as u64 };
                 let _ = self.router.announce_shm_for_key(ann).await;
             }
         }
@@ -54,6 +54,10 @@ impl ProviderWorker for InprocessWorker {
                 drop(e);
                 self.interest.remove(&(topic, key.clone()));
                 self.md.unsubscribe_md(topic, key).await?;
+                // On last local unsubscribe, remove SHM snapshot for hot topics
+                if matches!(topic, Topic::Quotes | Topic::Depth | Topic::Ticks) {
+                    tt_shm::remove_snapshot(topic, key);
+                }
             }
         }
         Ok(())

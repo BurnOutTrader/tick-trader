@@ -3,7 +3,7 @@ members = [
     "crates/bus",
     "crates/provider",
     "crates/engine",
-    "crates/tt-types",
+    "crates/types",
     "crates/adapters/projectx",
     "crates/server",
     "crates/providers",

@@ -10,6 +10,5 @@ name = "provider"
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 ahash = {workspace = true}
-tt-types = { path = "../tt-types" }
-tokio = {workspace = true}
+tt-types = { path = "../types" }
 dotenvy = { workspace = true }

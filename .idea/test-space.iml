@@ -9,14 +9,14 @@
       <sourceFolder url="file://$MODULE_DIR$/crates/proto/tests" isTestSource="true" />
       <sourceFolder url="file://$MODULE_DIR$/crates/provider/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/tt-key/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/crates/tt-types/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/crates/tt-types/tests" isTestSource="true" />
       <sourceFolder url="file://$MODULE_DIR$/crates/adapters/projectx/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/adapters/projectx/tests" isTestSource="true" />
       <sourceFolder url="file://$MODULE_DIR$/crates/server/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/providers/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/router/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/shm/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/types/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/types/tests" isTestSource="true" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />
