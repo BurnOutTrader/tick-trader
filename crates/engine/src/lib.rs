@@ -262,7 +262,7 @@ use tt_types::base_data::{Bbo, Candle, OrderBook, Tick};
 use tt_types::providers::ProviderKind;
 use tt_types::securities::symbols::Instrument;
 use tt_types::wire::{
-    AccountDeltaBatch, BarBatch, FlowCredit, OrdersBatch, PositionsBatch, QuoteBatch,
+    AccountDeltaBatch, BarBatch, OrdersBatch, PositionsBatch, QuoteBatch,
     Request, Response, Subscribe, TickBatch,
 };
 
@@ -366,8 +366,6 @@ impl EngineRuntime {
                 from_seq: 0,
             };
             self.bus.handle_request(&sub_id, Request::Subscribe(sub)).await?;
-            let fc = FlowCredit { topic, credits: 1000 };
-            self.bus.handle_request(&sub_id, Request::FlowCredit(fc)).await?;
         }
         let mut rx = self.rx.take().expect("rx present after start");
         let state = self.state.clone();

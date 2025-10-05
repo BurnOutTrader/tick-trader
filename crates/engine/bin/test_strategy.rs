@@ -138,9 +138,7 @@ async fn main() -> anyhow::Result<()> {
     // Send key-based subscribe and initial credits directly over the transport channel.
     let _ = req_tx.send(Request::SubscribeKey(tt_types::wire::SubscribeKey { topic: Topic::Ticks, key: key.clone(), latest_only: false, from_seq: 0 })).await;
     let _ = req_tx.send(Request::SubscribeKey(tt_types::wire::SubscribeKey { topic: Topic::Depth, key: key.clone(), latest_only: false, from_seq: 0 })).await;
-    let _ = req_tx.send(Request::FlowCreditKey(tt_types::wire::FlowCreditKey { topic: Topic::Ticks, key: key.clone(), credits: 1000 })).await;
-    let _ = req_tx.send(Request::FlowCreditKey(tt_types::wire::FlowCreditKey { topic: Topic::Depth, key: key.clone(), credits: 1000 })).await;
-    info!(?key, "sent SubscribeKey + FlowCreditKey for MNQZ5 ticks + depth");
+    info!(?key, "sent SubscribeKey for MNQZ5 ticks + depth (server-managed backpressure; no credits)");
 
     // Keep running for a bit to receive live data
     sleep(Duration::from_secs(15)).await;
