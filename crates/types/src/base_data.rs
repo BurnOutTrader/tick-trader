@@ -76,6 +76,13 @@ impl Feed {
             Feed::OrderBookL3 { instrument, .. } => instrument.clone(),
         }
     }
+    
+    pub fn resolution(&self) -> Option<Resolution> {
+        match self {
+            Feed::Candles { resolution, .. } => Some(*resolution),
+            _ => None,
+        }
+    }
 }
 
 pub type Price = Decimal;

@@ -1,6 +1,9 @@
 use crate::models::DataKind;
 use chrono::{Datelike, NaiveDate};
 use std::path::{Path, PathBuf};
+use tt_types::base_data::Resolution;
+use tt_types::providers::ProviderKind;
+use tt_types::securities::symbols::{Instrument, MarketType};
 
 /// Logical dataset split knobs
 #[derive(Debug, Clone, Copy)]
@@ -24,26 +27,26 @@ fn kind_dir(kind: DataKind) -> &'static str {
 
 pub fn get_partion(
     data_root: &Path,
-    provider: &str,
+    provider: &ProviderKind,
     market_type: MarketType,
-    symbol: &str,
+    symbol: &Instrument,
     kind: DataKind,
-    res: Resolution,
+    res: Option<Resolution>,
     day: NaiveDate,
 ) -> PathBuf {
-    match res {
-        Resolution::Ticks
-        | Resolution::Seconds(_)
-        | Resolution::Minutes(_)
-        | Resolution::TickBars(_) => {
-            intraday_partition_dir(data_root, provider, market_type, symbol, kind, res, day)
+    if let Some(res) = res {
+        match res {
+            | Resolution::Seconds(_)
+            | Resolution::Minutes(_) |
+            Resolution::Hours(_) | Resolution::Daily => {
+                monthly_partition_dir(data_root, provider, market_type, symbol, kind, day.year())
+            }
+            Resolution::Weekly => {
+                entire_history_partition_dir(data_root, provider, market_type, symbol, kind)
+            }
         }
-        Resolution::Hours(_) | Resolution::Daily => {
-            monthly_partition_dir(data_root, provider, market_type, symbol, kind, day.year())
-        }
-        Resolution::Weekly => {
-            entire_history_partition_dir(data_root, provider, market_type, symbol, kind)
-        }
+    } else {
+        monthly_partition_dir(data_root, provider, market_type, symbol, kind, day.year())
     }
 }
 // Layout rules:
@@ -77,14 +80,14 @@ pub fn intraday_partition_dir(
 /// provider/symbol/{kind}/daily/YYYY/
 pub fn monthly_partition_dir(
     data_root: &Path,
-    provider: &str,
+    provider: &ProviderKind,
     market_type: MarketType,
-    symbol: &str,
+    symbol: &Instrument,
     kind: DataKind,
     year: i32,
 ) -> PathBuf {
     data_root
-        .join(provider)
+        .join(provider.to_string())
         .join(market_type.to_string())
         .join(symbol)
         .join(format!("{} {}", kind_dir(kind), "daily".to_string()))
@@ -94,13 +97,13 @@ pub fn monthly_partition_dir(
 /// provider/symbol/{kind}/weekly/YYYY/Www/
 pub fn entire_history_partition_dir(
     data_root: &Path,
-    provider: &str,
+    provider: &ProviderKind,
     market_type: MarketType,
-    symbol: &str,
+    symbol: &Instrument,
     kind: DataKind,
 ) -> PathBuf {
     data_root
-        .join(provider)
+        .join(provider.to_string())
         .join(market_type.to_string())
         .join(symbol)
         .join(format!("{} weekly", kind_dir(kind)))
@@ -120,14 +123,24 @@ fn sanitize_string(sym: &str) -> String {
 
 /// Intraday: 1 file per day
 /// {symbol}.{kind}.{res}.{YYYYMMDD}.parquet
-pub fn intraday_file_name(symbol: &str, kind: DataKind, res: Resolution, day: NaiveDate) -> String {
-    format!(
-        "{}.{}.{}.{}.parquet",
-        sanitize_string(symbol),
-        kind_dir(kind),
-        res.to_os_string(),
-        day.format("%Y%m%d")
-    )
+pub fn intraday_file_name(symbol: &str, kind: DataKind, res: Option<Resolution>, day: NaiveDate) -> String {
+    if let Some(res) = res {
+        format!(
+            "{}.{}.{}.{}.parquet",
+            sanitize_string(symbol),
+            kind_dir(kind),
+            res,
+            day.format("%Y%m%d")
+        )
+    } else {
+        format!(
+            "{}.{}.{}.parquet",
+            sanitize_string(symbol),
+            kind_dir(kind),
+            day.format("%Y%m%d")
+        )
+    }
+
 }
 
 /// Daily: 1 file per year

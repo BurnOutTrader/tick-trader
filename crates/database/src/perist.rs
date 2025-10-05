@@ -12,7 +12,9 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
-use tt_types::securities::symbols::MarketType;
+use tt_types::base_data::{OrderBook, Resolution};
+use tt_types::providers::ProviderKind;
+use tt_types::securities::symbols::{Instrument, MarketType};
 // ------------------------------
 // Shared time utils
 // ------------------------------
@@ -23,8 +25,8 @@ use tt_types::securities::symbols::MarketType;
 
 pub fn persist_ticks_partition_zstd(
     conn: &duckdb::Connection,
-    provider: &str,
-    symbol: &str,
+    provider: &ProviderKind,
+    symbol: &Instrument,
     market_type: MarketType,
     date: NaiveDate,
     rows_vec: &[TickRow],
@@ -43,13 +45,13 @@ pub fn persist_ticks_partition_zstd(
         market_type,
         symbol,
         DataKind::Tick,
-        Resolution::Ticks,
+        None,
         date,
     );
     fs::create_dir_all(&dir)?;
 
     // Deterministic target file (one per day per symbol/provider)
-    let target_name = intraday_file_name(symbol, DataKind::Tick, Resolution::Ticks, date);
+    let target_name = intraday_file_name(&symbol.to_string(), DataKind::Tick, None, date);
     let target_path = dir.join(target_name);
 
     // Write incoming batch to a temp parquet in same dir
@@ -135,9 +137,9 @@ pub fn persist_ticks_partition_zstd(
 
 pub fn persist_candles_partition_zstd(
     conn: &duckdb::Connection,
-    provider: &str,
+    provider: &ProviderKind,
     market_type: MarketType,
-    symbol: &str,
+    symbol: &Instrument,
     resolution: Resolution,
     date: NaiveDate,
     rows_vec: &[CandleRow],
@@ -156,19 +158,19 @@ pub fn persist_candles_partition_zstd(
         market_type,
         symbol,
         DataKind::Candle,
-        resolution,
+        Some(resolution),
         date,
     );
     fs::create_dir_all(&dir)?;
 
     // Choose deterministic target file path based on resolution (align with paths.rs)
     let target_name = match resolution {
-        Resolution::Weekly => weekly_file_name(symbol, DataKind::Candle),
-        Resolution::Daily => daily_file_name(symbol, DataKind::Candle, date.year()),
+        Resolution::Weekly => weekly_file_name(&symbol.to_string(), DataKind::Candle),
+        Resolution::Daily => daily_file_name(&symbol.to_string(), DataKind::Candle, date.year()),
         Resolution::Hours(_) => {
-            monthly_file_name(symbol, DataKind::Candle, date.year(), date.month())
+            monthly_file_name(&symbol.to_string(), DataKind::Candle, date.year(), date.month())
         }
-        _ => intraday_file_name(symbol, DataKind::Candle, resolution, date),
+        _ => intraday_file_name(&symbol.to_string(), DataKind::Candle, Some(resolution), date),
     };
     let target_path = dir.join(target_name);
 
@@ -207,9 +209,9 @@ pub fn persist_candles_partition_zstd(
     } else {
         // Avoid DuckDB parquet read for stats; use Rust parquet reader
         let (rows, min_start, _max_start) =
-            crate::database::parquet::parquet_count_min_max_i64(&target_path, "time_start_ns")?;
+            crate::parquet::parquet_count_min_max_i64(&target_path, "time_start_ns")?;
         let (_rows2, _min_end, max_end) =
-            crate::database::parquet::parquet_count_min_max_i64(&target_path, "time_end_ns")?;
+            crate::parquet::parquet_count_min_max_i64(&target_path, "time_end_ns")?;
         (rows, min_start, max_end)
     };
 
@@ -240,9 +242,9 @@ pub fn persist_candles_partition_zstd(
 
 pub fn persist_bbo_partition_zstd(
     conn: &duckdb::Connection,
-    provider: &str,
+    provider: &ProviderKind,
     market_type: MarketType,
-    symbol: &str,
+    symbol: &Instrument,
     resolution: Resolution,
     date: NaiveDate,
     rows_vec: &[BboRow],
@@ -261,13 +263,13 @@ pub fn persist_bbo_partition_zstd(
         market_type,
         symbol,
         DataKind::Bbo,
-        resolution,
+        None,
         date,
     );
     fs::create_dir_all(&dir)?;
 
     // Deterministic target file per day/resolution
-    let target_name = intraday_file_name(symbol, DataKind::Bbo, resolution, date);
+    let target_name = intraday_file_name(&symbol.to_string(), DataKind::Bbo, None, date);
     let target_path = dir.join(target_name);
 
     // Write incoming to temp parquet then merge
@@ -299,7 +301,7 @@ pub fn persist_bbo_partition_zstd(
     } else {
         // Avoid DuckDB parquet read for stats; use Rust parquet reader
         let (rows, min_ns, max_ns) =
-            crate::database::parquet::parquet_count_min_max_i64(&target_path, "key_ts_utc_ns")?;
+            crate::parquet::parquet_count_min_max_i64(&target_path, "key_ts_utc_ns")?;
         (rows, min_ns, max_ns)
     };
 
@@ -336,9 +338,9 @@ pub fn persist_bbo_partition_zstd(
 
 pub fn persist_books_partition_duckdb(
     conn: &duckdb::Connection,
-    provider: &str,
+    provider: &ProviderKind,
     market_type: MarketType,
-    symbol: &str,
+    symbol: &Instrument,
     resolution: Resolution,
     date: chrono::NaiveDate,
     snapshots: &[OrderBook],

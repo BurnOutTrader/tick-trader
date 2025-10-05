@@ -3,7 +3,9 @@ use chrono::{DateTime, NaiveDate, Utc};
 use duckdb::Connection;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use tt_types::securities::symbols::MarketType;
+use tt_types::base_data::{OrderBook, Resolution};
+use tt_types::providers::ProviderKind;
+use tt_types::securities::symbols::{Instrument, MarketType};
 use crate::duck::{upsert_dataset, upsert_provider, upsert_symbol};
 use crate::models::{BboRow, CandleRow, DataKind, TickRow};
 use crate::perist::{persist_bbo_partition_zstd, persist_books_partition_duckdb, persist_candles_partition_zstd, persist_ticks_partition_zstd};
@@ -154,9 +156,9 @@ pub fn ingest_bbo(
 /// (This uses your DuckDB temp-table + COPY writer.)
 pub fn ingest_books(
     conn: &duckdb::Connection,
-    provider: &str,
+    provider: &ProviderKind,
     market_type: MarketType,
-    symbol: &str,
+    symbol: &Instrument,
     res: Resolution,
     all_snaps: &[OrderBook],
     data_root: &Path,

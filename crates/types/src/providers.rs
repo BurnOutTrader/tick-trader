@@ -235,4 +235,10 @@ impl ProviderKind {
             ProviderKind::Rithmic(_) => unimplemented!(),
         }
     }
+    pub fn to_db_string(&self) -> String {
+        match self {
+            ProviderKind::ProjectX(t) => format!("projectx_{}", t.to_id_segment()),
+            ProviderKind::Rithmic(s) => format!("rithmic_{}", s.to_id_segment()),
+        }
+    }
 }

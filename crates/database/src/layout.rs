@@ -3,6 +3,8 @@
 // Keep this for reference only; avoid using it in new code paths.
 use chrono::{DateTime, Datelike, Utc};
 use std::path::{Path, PathBuf};
+use tt_types::base_data::Resolution;
+use crate::models::DataKind;
 
 /// Filesystem layout with resolution-aware partitioning.
 /// Examples:
@@ -59,20 +61,18 @@ impl LakeLayout {
                 .join("all.zstd.parquet"),
             Resolution::Seconds(_)
             | Resolution::Minutes(_)
-            | Resolution::Hours(_)
-            | Resolution::TickBars(_) => {
+            | Resolution::Hours(_) => {
                 // Keep them “daily” like ticks for write locality and compression
                 self.root
                     .join("parquet")
                     .join("candles")
                     .join(provider)
                     .join(symbol_id)
-                    .join(Self::res_dir(res))
+                    .join(Self::res_dir(DataKind::Candle, Some(res.clone())))
                     .join(format!("{:04}", ts.year()))
                     .join(format!("{:02}", ts.month()))
                     .join(format!("{:02}.zstd.parquet", ts.day()))
             }
-            Resolution::Ticks => unreachable!("use tick_path or bbo_path"),
         }
     }
 
@@ -92,16 +92,17 @@ impl LakeLayout {
             .join(format!("{:02}.zstd.parquet", ts.day()))
     }
 
-    pub fn res_dir(res: &Resolution) -> String {
-        match res {
-            Resolution::Seconds(n) => format!("S{}", n),
-            Resolution::Minutes(n) => format!("M{}", n),
-            Resolution::Hours(n) => format!("H{}", n),
-            Resolution::TickBars(n) => format!("TBAR_{}", n),
-            Resolution::Daily => "D".into(),
-            Resolution::Weekly => "W".into(),
-            Resolution::Ticks => "TICK".into(),
+    pub fn res_dir(kind: DataKind, res: Option<Resolution>) -> String {
+        if let Some(res) = res {
+            return match res {
+                Resolution::Seconds(n) => format!("S{}", n),
+                Resolution::Minutes(n) => format!("M{}", n),
+                Resolution::Hours(n) => format!("H{}", n),
+                Resolution::Daily => "D".into(),
+                Resolution::Weekly => "W".into(),
+            }
         }
+        kind.to_string()
     }
 }
 
@@ -127,7 +128,6 @@ fn res_str(res: &Resolution) -> String {
         Seconds(n) => format!("Seconds{n}"),
         Minutes(n) => format!("Minutes{n}"),
         Hours(n) => format!("Hours{n}"),
-        TickBars(n) => format!("TickBars{n}"),
         Daily => "Daily".into(),
         Weekly => "Weekly".into(),
     }

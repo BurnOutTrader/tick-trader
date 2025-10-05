@@ -2,9 +2,10 @@ use ahash::AHashMap;
 use async_trait::async_trait;
 use dotenvy::dotenv;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
 use std::time::Instant;
-use tt_types::base_data::{DateTime, Utc};
+use tt_types::base_data::{DateTime, Feed, Resolution, Utc};
+use tt_types::history::{HistoricalRequest, HistoryEvent, HistoryHandle};
 use tt_types::keys::{AccountKey, SymbolKey, Topic};
 use tt_types::providers::{ProjectXTenant, ProviderKind, RithmicSystem};
 
@@ -258,8 +259,6 @@ pub trait HistoricalDataProvider: Send + Sync {
     fn supports_resolution(&self, _res: &Option<Resolution>) -> bool {
         true
     }
-
-    fn resolver(self: Arc<Self>) -> Arc<dyn SecurityResolver>;
 
     fn earliest_available(&self, feed: Feed) -> DateTime<Utc>;
 }

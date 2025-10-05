@@ -100,10 +100,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::error;
 use provider::traits::HistoricalDataProvider;
-use tt_types::base_data::Feed;
+use tt_types::base_data::{Feed, OrderBook, Resolution, Side};
+use tt_types::history::{HistoricalRequest, HistoryEvent};
 use tt_types::keys::SymbolKey;
 use tt_types::providers::ProviderKind;
-use tt_types::securities::market_hours::hours_for_exchange;
+use tt_types::securities::market_hours::{hours_for_exchange, next_session_open_after, MarketHours, SessionKind};
 use tt_types::securities::symbols::{exchange_market_type, Instrument};
 
 // your helper
@@ -164,7 +165,6 @@ async fn run_download(
         }
 
         let req = HistoricalRequest {
-            vendor: provider_code.to_string(),
             feed: feed.clone(),
             start: cursor,
             end, // end-exclusive expected; +1ns cursor guards even if provider is inclusive
@@ -178,7 +178,7 @@ async fn run_download(
         let mut ticks: Vec<TickRow> = Vec::new();
         let mut candles: Vec<CandleRow> = Vec::new();
         let mut quotes: Vec<BboRow> = Vec::new();
-        let mut books: Vec<crate::market_data::base_data::OrderBook> = Vec::new();
+        let mut books: Vec<OrderBook> = Vec::new();
 
         while let Some(ev) = rx.recv().await {
             match ev {
@@ -195,14 +195,13 @@ async fn run_download(
                         let ts = t.time;
                         max_ts = Some(max_ts.map_or(ts, |m| m.max(ts)));
                         let side_u8 = match t.side {
-                            crate::market_data::base_data::Side::Buy => 1,
-                            crate::market_data::base_data::Side::Sell => 2,
+                            Side::Buy => 1,
+                            Side::Sell => 2,
                             _ => 0,
                         };
                         ticks.push(TickRow {
-                            provider: provider_code.to_string(),
+                            provider: provider_code.to_db_string(),
                             symbol_id: t.symbol,
-                            exchange: format!("{:?}", t.exchange),
                             price: t.price.to_f64().unwrap_or(0.0),
                             size: t.volume.to_f64().unwrap_or(0.0),
                             side: side_u8,
@@ -220,7 +219,6 @@ async fn run_download(
                         quotes.push(BboRow {
                             provider: provider_code.to_string(),
                             symbol_id: q.symbol,
-                            exchange: format!("{:?}", q.exchange),
                             key_ts_utc_ns: dt_to_ns_i64(q.time),
                             bid: q.bid.to_f64().unwrap_or(0.0),
                             bid_size: q.bid_size.to_f64().unwrap_or(0.0),
@@ -268,15 +266,11 @@ async fn run_download(
             }
             DataKind::Bbo => {
                 if !quotes.is_empty() {
-                    let res = feed
-                        .resolution()
-                        .expect("BBO requires a resolution (e.g., sec1)");
                     let out_paths = ingest_bbo(
                         &conn,
                         provider_code,
                         market_type,
                         &symbol,
-                        res,
                         &quotes,
                         &data_root,
                         9,
@@ -310,7 +304,7 @@ async fn run_download(
                         .expect("OrderBook requires a resolution (depth/window key)");
                     let out_paths = ingest_books(
                         &conn,
-                        provider_code,
+                        &provider_code,
                         market_type,
                         &symbol,
                         res,
@@ -414,7 +408,7 @@ fn wants_intraday(kind: DataKind, res: Option<Resolution>) -> bool {
 
 /// True if every calendar day intersecting [start,end) is fully closed.
 fn window_is_all_closed(
-    hours: &crate::securities::market_hours::MarketHours,
+    hours: &MarketHours,
     cal_tz: chrono_tz::Tz,
     start: chrono::DateTime<Utc>,
     end: chrono::DateTime<Utc>,

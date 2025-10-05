@@ -1,6 +1,8 @@
 use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use strum_macros::Display;
+use tt_types::base_data::Candle;
+use tt_types::providers::ProviderKind;
 
 /// What’s stored (determines folder layout + schema columns)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display)]
@@ -28,7 +30,6 @@ pub struct EventKey {
 pub struct TickRow {
     pub provider: String,
     pub symbol_id: String,
-    pub exchange: String,
     pub price: f64,
     pub size: f64,
     pub side: u8,           // 0 None, 1 Buy, 2 Sell
@@ -42,7 +43,6 @@ pub struct TickRow {
 pub struct CandleRow {
     pub provider: String,
     pub symbol_id: String,
-    pub exchange: String,
     pub res: String,        // "S1","M5","D",...
     pub time_start_ns: i64, // <-- ns
     pub time_end_ns: i64,   // <-- ns (we key candles by END time in replay)
@@ -53,15 +53,13 @@ pub struct CandleRow {
     pub volume: f64,
     pub ask_volume: f64,
     pub bid_volume: f64,
-    pub num_trades: u64,
 }
 
 impl CandleRow {
-    pub fn from_candle(provider: String, candle: Candle) -> Self {
+    pub fn from_candle(provider: ProviderKind, candle: Candle) -> Self {
         Self {
-            provider,
+            provider: provider.to_string(),
             symbol_id: candle.symbol,
-            exchange: format!("{:?}", candle.exchange),
             res: candle.resolution.to_os_string(),
             time_start_ns: candle.time_start.timestamp_nanos_opt().unwrap_or(0),
             time_end_ns: candle.time_end.timestamp_nanos_opt().unwrap_or(0),
@@ -72,7 +70,6 @@ impl CandleRow {
             volume: candle.volume.to_f64().unwrap_or(0.0),
             ask_volume: candle.ask_volume.to_f64().unwrap_or(0.0),
             bid_volume: candle.bid_volume.to_f64().unwrap_or(0.0),
-            num_trades: candle.num_of_trades.to_u64().unwrap_or(0),
         }
     }
 }
@@ -81,7 +78,6 @@ impl CandleRow {
 pub struct BboRow {
     pub provider: String,
     pub symbol_id: String,
-    pub exchange: String,
     pub key_ts_utc_ns: i64, // <-- ns
     pub bid: f64,
     pub bid_size: f64,
@@ -104,7 +100,6 @@ pub struct Provider {
 pub struct SymbolMeta {
     pub symbol_id: String,
     pub security: String,
-    pub exchange: String,
     pub currency: String,
     pub root: Option<String>,          // for futures
     pub continuous_of: Option<String>, // if this is a continuous symbol

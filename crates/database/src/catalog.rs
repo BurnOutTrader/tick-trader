@@ -1,5 +1,8 @@
 use anyhow::anyhow;
 use duckdb::{Connection, params};
+use tt_types::base_data::Resolution;
+use tt_types::providers::ProviderKind;
+use tt_types::securities::symbols::Instrument;
 use crate::duck::{Duck, DuckError};
 use crate::models::{DataKind, Provider, SymbolMeta, UniverseMember};
 
@@ -40,7 +43,6 @@ impl Duck {
             Ok(Some(SymbolMeta {
                 symbol_id: row.get(0)?,
                 security: row.get(1)?,
-                exchange: row.get(2)?,
                 currency: row.get(3)?,
                 root: row.get(4)?,
                 continuous_of: row.get(5)?,
@@ -51,7 +53,7 @@ impl Duck {
     }
 
     // expose &Connection for internal helpers
-    pub(crate) fn conn(&self) -> &duckdb::Connection {
+    pub(crate) fn conn(&self) -> &Connection {
         &self.conn
     }
 }
@@ -130,12 +132,12 @@ pub fn get_or_create_dataset_id(
 
 pub fn ensure_dataset(
     conn: &Connection,
-    provider: &str,
-    symbol: &str,
+    provider: &ProviderKind,
+    symbol: &Instrument,
     kind: DataKind,
     resolution: Option<Resolution>,
 ) -> anyhow::Result<i64> {
-    let provider_id = ensure_provider_id(conn, provider)?;
+    let provider_id = ensure_provider_id(conn, provider.to_string().as_str())?;
     let symbol_id = ensure_symbol_id(conn, provider_id, symbol)?;
     ensure_dataset_row(conn, provider_id, symbol_id, kind, resolution)
 }

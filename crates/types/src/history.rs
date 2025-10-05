@@ -1,12 +1,11 @@
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
-use crate::base_data::{Bbo, Candle, OrderBook, Tick};
-use crate::keys::SymbolKey;
+use crate::base_data::{Bbo, Candle, Feed, OrderBook, Tick};
 
 /// What a backtest wants to pull.
 #[derive(Clone, Debug)]
 pub struct HistoricalRequest {
-    pub feed: SymbolKey,
+    pub feed: Feed,
     pub start: DateTime<Utc>,
     pub end: DateTime<Utc>,
 }
