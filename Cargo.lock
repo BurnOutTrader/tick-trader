@@ -2765,6 +2765,7 @@ dependencies = [
  "tracing-subscriber",
  "tt-bus",
  "tt-provider",
+ "tt-providers",
  "tt-types",
  "ustr",
  "zeroize",

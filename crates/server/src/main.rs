@@ -104,6 +104,9 @@ async fn main() -> anyhow::Result<()> {
 
     // New standalone Router (initial, single-process, unsharded stub)
     let router = Arc::new(Router::new(8));
+    // Wire upstream manager (providers) into the router for first/last sub notifications
+    let mgr = Arc::new(tt_providers::manager::ProviderManager::new());
+    router.set_backend(mgr);
 
     loop {
         let (sock, _addr) = listener.accept().await?;

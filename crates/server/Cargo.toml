@@ -8,6 +8,7 @@ edition.workspace = true
 projectx = { path = "../adapters/projectx" }
 tt-types = { path = "../tt-types" }
 tt-bus = {path = "../bus", features = ["server"]}
+tt-providers = { path = "../providers" }
 provider = { path = "../provider", package = "tt-provider" }
 ahash = { workspace = true }
 anyhow = { workspace = true }
