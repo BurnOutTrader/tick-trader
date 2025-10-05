@@ -101,19 +101,6 @@ pub struct AccountDeltaBatch {
     pub accounts: Vec<crate::accounts::events::AccountDelta>,
 }
 
-#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq)]
-pub struct MdSubscribeCmd {
-    pub provider: ProviderKind,
-    pub topic: Topic,
-    pub key: SymbolKey,
-}
-
-#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq)]
-pub struct MdUnsubscribeCmd {
-    pub provider: ProviderKind,
-    pub topic: Topic,
-    pub key: SymbolKey,
-}
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq)]
 pub struct InstrumentsRequest {
@@ -216,9 +203,6 @@ pub enum Request {
     UnsubscribeAll(UnsubscribeAll),
     // Client-initiated disconnect (request to be kicked)
     Kick(Kick),
-    // Provider commands initiated by clients (legacy; to be removed)
-    MdSubscribe(MdSubscribeCmd),
-    MdUnsubscribe(MdUnsubscribeCmd),
     InstrumentsRequest(InstrumentsRequest),
 }
 

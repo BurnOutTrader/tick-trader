@@ -327,7 +327,7 @@ impl EngineRuntime {
         // Forward to server
         let _ = self
             .bus
-            .handle_request(&self.sub_id.as_ref().expect("engine started"), Request::MdSubscribe(tt_types::wire::MdSubscribeCmd { provider, topic, key }))
+            .handle_request(&self.sub_id.as_ref().expect("engine started"), Request::SubscribeKey(tt_types::wire::SubscribeKey { topic, key, latest_only: false, from_seq: 0 }))
             .await?;
         Ok(())
     }
@@ -339,7 +339,7 @@ impl EngineRuntime {
     ) -> anyhow::Result<()> {
         let _ = self
             .bus
-            .handle_request(&self.sub_id.as_ref().expect("engine started"), Request::MdUnsubscribe(tt_types::wire::MdUnsubscribeCmd { provider, topic, key }))
+            .handle_request(&self.sub_id.as_ref().expect("engine started"), Request::UnsubscribeKey(tt_types::wire::UnsubscribeKey { topic, key }))
             .await?;
         Ok(())
     }

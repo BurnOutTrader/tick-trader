@@ -810,10 +810,6 @@ impl PxWebSocketClient {
                             }
                             // User hub events
                             "GatewayUserAccount" => {
-                                let seq = match Utc::now().timestamp_nanos_opt() {
-                                    None => u64::MIN,
-                                    Some(ts) => ts as u64
-                                };
                                 let account =
                                     match serde_json::from_value::<GatewayUserAccount>(val) {
                                         Ok(a) => a,
@@ -847,7 +843,7 @@ impl PxWebSocketClient {
                                 };
                                 let batch = AccountDeltaBatch {
                                     topic: tt_types::keys::Topic::AccountEvt,
-                                    seq,
+                                    seq: 0,
                                     accounts: vec![delta],
                                 };
                                 if let Err(e) = self.bus.publish_account_delta_batch(batch).await {
@@ -855,10 +851,6 @@ impl PxWebSocketClient {
                                 }
                             }
                             "GatewayUserOrder" => {
-                                let seq = match Utc::now().timestamp_nanos_opt() {
-                                    None => u64::MIN,
-                                    Some(ts) => ts as u64
-                                };
                                 let order =
                                     match serde_json::from_value::<GatewayUserOrder>(val.clone()) {
                                         Ok(o) => o,
@@ -922,7 +914,7 @@ impl PxWebSocketClient {
                                 };
                                 let batch = OrdersBatch {
                                     topic: tt_types::keys::Topic::Orders,
-                                    seq,
+                                    seq: 0,
                                     orders: vec![ou],
                                 };
                                 if let Err(e) = self.bus.publish_orders_batch(batch).await {
@@ -930,10 +922,6 @@ impl PxWebSocketClient {
                                 }
                             }
                             "GatewayUserPosition" => {
-                                let seq = match Utc::now().timestamp_nanos_opt() {
-                                    None => u64::MIN,
-                                    Some(ts) => ts as u64
-                                };
                                 let position = match serde_json::from_value::<GatewayUserPosition>(
                                     val.clone(),
                                 ) {
@@ -979,7 +967,7 @@ impl PxWebSocketClient {
                                 };
                                 let batch = PositionsBatch {
                                     topic: tt_types::keys::Topic::Positions,
-                                    seq,
+                                    seq: 0,
                                     positions: vec![pd],
                                 };
                                 if let Err(e) = self.bus.publish_positions_batch(batch).await {
