@@ -24,8 +24,14 @@ impl Strategy for TestStrategy {
     fn desired_topics(&self) -> std::collections::HashSet<Topic> {
         use std::collections::HashSet;
         let mut s = HashSet::new();
+        // Subscribe to all hot and account topics so router delivers them
         s.insert(Topic::Ticks);
         s.insert(Topic::Quotes);
+        s.insert(Topic::Depth);
+        s.insert(Topic::Bars1s);
+        s.insert(Topic::Orders);
+        s.insert(Topic::Positions);
+        s.insert(Topic::AccountEvt);
         s
     }
     async fn on_start(&self) { info!("strategy start"); }
@@ -133,6 +139,7 @@ async fn main() -> anyhow::Result<()> {
     let _ = req_tx.send(Request::SubscribeKey(tt_types::wire::SubscribeKey { topic: Topic::Ticks, key: key.clone(), latest_only: false, from_seq: 0 })).await;
     let _ = req_tx.send(Request::SubscribeKey(tt_types::wire::SubscribeKey { topic: Topic::Depth, key: key.clone(), latest_only: false, from_seq: 0 })).await;
     let _ = req_tx.send(Request::FlowCreditKey(tt_types::wire::FlowCreditKey { topic: Topic::Ticks, key: key.clone(), credits: 1000 })).await;
+    let _ = req_tx.send(Request::FlowCreditKey(tt_types::wire::FlowCreditKey { topic: Topic::Depth, key: key.clone(), credits: 1000 })).await;
     info!(?key, "sent SubscribeKey + FlowCreditKey for MNQZ5 ticks + depth");
 
     // Keep running for a bit to receive live data
