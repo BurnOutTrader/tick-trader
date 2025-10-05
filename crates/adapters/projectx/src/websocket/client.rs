@@ -19,7 +19,7 @@ use tokio::sync::{RwLock, mpsc};
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{error, info};
-use tt_bus::MessageBus;
+use tt_bus::ServerMessageBus;
 use tt_types::accounts::account::{AccountName, AccountSnapShot};
 use tt_types::accounts::events::{
     AccountDelta, ClientOrderId, OrderUpdate, PositionDelta, ProviderOrderId,
@@ -39,7 +39,7 @@ use tt_types::wire::{AccountDeltaBatch, OrdersBatch, PositionsBatch};
 /// a bearer for SignalR access tokens.
 #[derive(Clone)]
 pub struct PxWebSocketClient {
-    bus: Arc<tt_bus::bus::MessageBus>,
+    bus: Arc<tt_bus::bus::ServerMessageBus>,
     firm: ProjectXTenant,
     /// Base URL for the websocket service, e.g. `https://rtc.tradeify.projectx.com`
     pub base_url: String,
@@ -107,7 +107,7 @@ impl PxWebSocketClient {
         base_url: impl Into<String>,
         bearer_token: Arc<RwLock<Option<String>>>,
         firm: ProjectXTenant,
-        bus: Arc<MessageBus>,
+        bus: Arc<ServerMessageBus>,
     ) -> Self {
         // Dedicated per-hub message queues to avoid head-of-line blocking
         let (user_tx, mut user_rx) = mpsc::channel::<Value>(4096);

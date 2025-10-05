@@ -195,6 +195,8 @@ pub enum Response {
     OrdersBatch(OrdersBatch),
     PositionsBatch(PositionsBatch),
     AccountDeltaBatch(AccountDeltaBatch),
+    SubscribeResponse(Topic),
+    UnsubscribeResponse(Topic),
     // Single items (for completeness; bus generally batches)
     Tick(Tick),
     Quote(Bbo),

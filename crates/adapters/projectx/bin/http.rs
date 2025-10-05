@@ -3,6 +3,8 @@ use projectx::http::client::PxHttpClient;
 use projectx::http::credentials::PxCredential;
 use rustls::crypto::{CryptoProvider, ring};
 use tracing::level_filters::LevelFilter;
+use provider::traits::ProviderSessionSpec;
+use tt_types::providers::{ProjectXTenant, ProviderKind};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -10,10 +12,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_max_level(LevelFilter::INFO)
         .init();
 
-    dotenv().ok();
-
     let _ = CryptoProvider::install_default(ring::default_provider());
-    let cfg = PxCredential::from_env().expect("Missing PX env vars");
+    dotenv().ok();
+    let session_creds = ProviderSessionSpec::from_env();
+    let firm = ProjectXTenant::Topstep;
+    let provider = ProviderKind::ProjectX(firm);
+    let cfg = PxCredential::new(firm, session_creds.user_names.get(&provider).unwrap().clone(), session_creds.api_keys.get(&provider).unwrap().clone() );
     #[allow(unused)]
     let client = PxHttpClient::new(cfg, None, None, None, None)?;
 

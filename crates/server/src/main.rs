@@ -9,7 +9,7 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Bytes;
 use tokio_util::codec::length_delimited::LengthDelimitedCodec;
 use tokio_util::codec::{FramedRead, FramedWrite};
-use tt_bus::MessageBus;
+use tt_bus::ServerMessageBus;
 use tt_types::providers::ProviderKind;
 use tt_types::wire::{Request, Response, WireMessage};
 
@@ -124,7 +124,7 @@ impl ProviderFactory {
         &self,
         kind: ProviderKind,
         session: ProviderSessionSpec,
-        bus: Arc<MessageBus>,
+        bus: Arc<ServerMessageBus>,
     ) -> anyhow::Result<Arc<dyn MarketDataProvider>> {
         if let Some(p) = self.md_providers.get(&kind) {
             return Ok(p.clone());
@@ -148,7 +148,7 @@ impl ProviderFactory {
         &self,
         kind: ProviderKind,
         session: ProviderSessionSpec,
-        bus: Arc<MessageBus>,
+        bus: Arc<ServerMessageBus>,
     ) -> anyhow::Result<Arc<dyn ExecutionProvider>> {
         if let Some(p) = self.ex_providers.get(&kind) {
             return Ok(p.clone());
@@ -212,7 +212,7 @@ async fn main() -> anyhow::Result<()> {
     let path = std::env::var("TT_BUS_ADDR").unwrap_or_else(|_| default_addr.to_string());
     let listener = bind_uds(&path)?;
     eprintln!("tick-trader server listening on UDS: {}", path);
-    let bus = Arc::new(MessageBus::new());
+    let bus = Arc::new(ServerMessageBus::new());
     let factory = Arc::new(ProviderFactory::new());
     let default_session: ProviderSessionSpec = ProviderSessionSpec::from_env();
 
@@ -247,7 +247,7 @@ async fn main() -> anyhow::Result<()> {
                         match &msg {
                             WireMessage::Request(Request::MdSubscribe(cmd)) => {
                                 // lazily ensure provider exists and is attached
-                                if !bus_clone.is_provider_registered(&cmd.provider) {
+                                if !bus_clone.is_md_provider_registered(&cmd.provider) {
                                     let mut sess = default_session_clone.clone();
                                     if let Ok(md) = factory
                                         .ensure_md_provider(
@@ -316,7 +316,7 @@ async fn main() -> anyhow::Result<()> {
                                 }
                             }
                             WireMessage::Request(Request::InstrumentsRequest(req)) => {
-                                if !bus_clone.is_provider_registered(&req.provider) {
+                                if !bus_clone.is_md_provider_registered(&req.provider) {
                                     let mut sess = default_session_clone.clone();
                                     if let Err(e) = factory
                                         .ensure_md_provider(

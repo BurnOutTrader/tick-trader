@@ -169,7 +169,7 @@ impl<P: MarketDataProvider + 'static> Engine<P> {
                 // idempotency: only call if not already Subscribed/Subscribing
                 let _ = self
                     .provider
-                    .subscribe_md(topic, &key, params_clone.as_ref())
+                    .subscribe_md(topic, &key)
                     .await;
                 let mut inner2 = self.inner.lock().await;
                 if let Some(ent2) = inner2.interest.get_mut(&sk) {
@@ -257,13 +257,13 @@ impl<P: MarketDataProvider + 'static> Engine<P> {
 
 // -------- Strategy runtime over the MessageBus --------
 use tokio::sync::mpsc;
-use tt_bus::bus::{MessageBus, SubId};
+use tt_bus::{ClientMessageBus, ClientSubId};
 use tt_types::base_data::{Bbo, Candle, Tick};
 use tt_types::providers::ProviderKind;
 use tt_types::securities::symbols::Instrument;
 use tt_types::wire::{
-    AccountDeltaBatch, BarBatch, Envelope, FlowCredit, OrdersBatch, PositionsBatch, QuoteBatch,
-    Subscribe, TickBatch,
+    AccountDeltaBatch, BarBatch, FlowCredit, OrdersBatch, PositionsBatch, QuoteBatch,
+    Request, Response, Subscribe, TickBatch,
 };
 
 #[async_trait]
@@ -277,13 +277,22 @@ pub trait Strategy: Send + Sync + 'static {
     async fn on_orders_batch(&self, _b: OrdersBatch) {}
     async fn on_positions_batch(&self, _b: PositionsBatch) {}
     async fn on_account_delta_batch(&self, _b: AccountDeltaBatch) {}
+    async fn on_subscribe(&self, topic: Topic) {}
+    async fn on_unsubscribe(&self, topic: Topic) {}
+}
+
+struct EngineAccountsState {
+    last_orders: Option<OrdersBatch>,
+    last_positions: Option<PositionsBatch>,
+    last_accounts: Option<AccountDeltaBatch>,
 }
 
 pub struct EngineRuntime {
-    bus: Arc<MessageBus>,
-    sub_id: Option<SubId>,
-    rx: Option<mpsc::Receiver<Envelope>>,
+    bus: Arc<ClientMessageBus>,
+    sub_id: Option<ClientSubId>,
+    rx: Option<mpsc::Receiver<Response>>,
     task: Option<tokio::task::JoinHandle<()>>,
+    state: Arc<Mutex<EngineAccountsState>>,
 }
 
 impl EngineRuntime {
@@ -292,7 +301,22 @@ impl EngineRuntime {
         provider: ProviderKind,
         pattern: Option<String>,
     ) -> anyhow::Result<Vec<Instrument>> {
-        self.bus.request_instruments(provider, pattern).await
+        use tt_types::wire::{InstrumentsRequest, Response as WireResp};
+        use tokio::time::timeout;
+        let rx = self
+            .bus
+            .request_with_corr(|corr_id| Request::InstrumentsRequest(InstrumentsRequest {
+                provider,
+                pattern,
+                corr_id,
+            }))
+            .await;
+        // Wait briefly for the server to respond; if unsupported, return empty
+        match timeout(Duration::from_millis(750), rx).await {
+            Ok(Ok(WireResp::InstrumentsResponse(ir))) => Ok(ir.instruments),
+            Ok(Ok(_other)) => Ok(vec![]),
+            _ => Ok(vec![]),
+        }
     }
     pub async fn subscribe_symbol(
         &self,
@@ -300,7 +324,12 @@ impl EngineRuntime {
         topic: Topic,
         key: SymbolKey,
     ) -> anyhow::Result<()> {
-        self.bus.md_subscribe(provider, topic, key).await
+        // Forward to server
+        let _ = self
+            .bus
+            .handle_request(&self.sub_id.as_ref().expect("engine started"), Request::MdSubscribe(tt_types::wire::MdSubscribeCmd { provider, topic, key }))
+            .await?;
+        Ok(())
     }
     pub async fn unsubscribe_symbol(
         &self,
@@ -308,19 +337,24 @@ impl EngineRuntime {
         topic: Topic,
         key: SymbolKey,
     ) -> anyhow::Result<()> {
-        self.bus.md_unsubscribe(provider, topic, key).await
+        let _ = self
+            .bus
+            .handle_request(&self.sub_id.as_ref().expect("engine started"), Request::MdUnsubscribe(tt_types::wire::MdUnsubscribeCmd { provider, topic, key }))
+            .await?;
+        Ok(())
     }
-    pub fn new(bus: Arc<MessageBus>) -> Self {
+    pub fn new(bus: Arc<ClientMessageBus>) -> Self {
         Self {
             bus,
             sub_id: None,
             rx: None,
             task: None,
+            state: Arc::new(Mutex::new(EngineAccountsState { last_orders: None, last_positions: None, last_accounts: None })),
         }
     }
 
     pub async fn start<S: Strategy>(&mut self, strategy: Arc<S>) -> anyhow::Result<()> {
-        let (tx, rx) = mpsc::channel::<Envelope>(1024);
+        let (tx, rx) = mpsc::channel::<Response>(1024);
         let sub_id = self.bus.add_client(tx).await;
         self.sub_id = Some(sub_id.clone());
         self.rx = Some(rx);
@@ -330,54 +364,56 @@ impl EngineRuntime {
                 latest_only: false,
                 from_seq: 0,
             };
-            self.bus.handle(&sub_id, Envelope::Subscribe(sub)).await?;
-            let fc = FlowCredit {
-                topic,
-                credits: 1000,
-            };
-            self.bus.handle(&sub_id, Envelope::FlowCredit(fc)).await?;
+            self.bus.handle_request(&sub_id, Request::Subscribe(sub)).await?;
+            let fc = FlowCredit { topic, credits: 1000 };
+            self.bus.handle_request(&sub_id, Request::FlowCredit(fc)).await?;
         }
         let mut rx = self.rx.take().expect("rx present after start");
+        let state = self.state.clone();
         strategy.on_start().await;
-        let handle = tokio::spawn(async move {
-            while let Some(env) = rx.recv().await {
-                match env {
-                    Envelope::TickBatch(TickBatch { ticks, .. }) => {
-                        for t in ticks {
-                            strategy.on_tick(t).await;
+        let handle = tokio::spawn(async move { 
+            while let Some(resp) = rx.recv().await {
+                match resp {
+                    Response::TickBatch(TickBatch { ticks, .. }) => {
+                        for t in ticks { strategy.on_tick(t).await; }
+                    }
+                    Response::QuoteBatch(QuoteBatch { quotes, .. }) => {
+                        for q in quotes { strategy.on_quote(q).await; }
+                    }
+                    Response::BarBatch(BarBatch { bars, .. }) => {
+                        for b in bars { strategy.on_bar(b).await; }
+                    }
+                    Response::OrdersBatch(ob) => {
+                        // Update engine account state cache then notify strategy
+                        // Clone minimal to move into async call
+                        {
+                            let mut st = state.lock().await;
+                            st.last_orders = Some(ob.clone());
                         }
+                        strategy.on_orders_batch(ob.clone()).await;
                     }
-                    Envelope::QuoteBatch(QuoteBatch { quotes, .. }) => {
-                        for q in quotes {
-                            strategy.on_quote(q).await;
+                    Response::PositionsBatch(pb) => {
+                        {
+                            let mut st = state.lock().await;
+                            st.last_positions = Some(pb.clone());
                         }
+                        strategy.on_positions_batch(pb.clone()).await;
                     }
-                    Envelope::BarBatch(BarBatch { bars, .. }) => {
-                        for b in bars {
-                            strategy.on_bar(b).await;
+                    Response::AccountDeltaBatch(ab) => {
+                        {
+                            let mut st = state.lock().await;
+                            st.last_accounts = Some(ab.clone());
                         }
+                        strategy.on_account_delta_batch(ab.clone()).await;
                     }
-                    Envelope::OrdersBatch(ob) => {
-                        strategy.on_orders_batch(ob).await;
+                    Response::Pong(_) | Response::InstrumentsResponse(_) | Response::InstrumentsMapResponse(_)
+                    | Response::VendorData(_) | Response::Tick(_) | Response::Quote(_) | Response::Bar(_) => {}
+                    Response::SubscribeResponse(r) => {
+                        strategy.on_subscribe(r).await;
                     }
-                    Envelope::PositionsBatch(pb) => {
-                        strategy.on_positions_batch(pb).await;
+                    Response::UnsubscribeResponse(r) => {
+                        strategy.on_unsubscribe(r).await;
                     }
-                    Envelope::AccountDeltaBatch(ab) => {
-                        strategy.on_account_delta_batch(ab).await;
-                    }
-                    Envelope::Pong(_)
-                    | Envelope::VendorData(_)
-                    | Envelope::Tick(_)
-                    | Envelope::Quote(_)
-                    | Envelope::Bar(_) => {}
-                    Envelope::Subscribe(_) | Envelope::FlowCredit(_) | Envelope::Ping(_) => {}
-                    Envelope::MdSubscribe(_)
-                    | Envelope::MdUnsubscribe(_)
-                    | Envelope::InstrumentsRequest(_)
-                    | Envelope::InstrumentsResponse(_)
-                    | Envelope::InstrumentsMapResponse(_)
-                    | Envelope::AuthCredentials(_) => {}
                 }
             }
             let _ = strategy.on_stop().await;
@@ -392,9 +428,23 @@ impl EngineRuntime {
         }
         self.rx.take();
     }
+
+    // Account state getters
+    pub async fn last_orders_batch(&self) -> Option<OrdersBatch> {
+        let st = self.state.lock().await;
+        st.last_orders.clone()
+    }
+    pub async fn last_positions_batch(&self) -> Option<PositionsBatch> {
+        let st = self.state.lock().await;
+        st.last_positions.clone()
+    }
+    pub async fn last_account_delta_batch(&self) -> Option<AccountDeltaBatch> {
+        let st = self.state.lock().await;
+        st.last_accounts.clone()
+    }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod tests {
     use super::*;
     use std::str::FromStr;
@@ -403,8 +453,8 @@ mod tests {
     use tt_types::base_data::{Bbo, Candle, Decimal, Resolution, Side, Utc};
     use tt_types::wire::codec;
     use tt_types::wire::{
-        AccountDeltaBatch, BarBatch, Envelope, OrdersBatch, PositionsBatch, QuoteBatch, TickBatch,
-    };
+            AccountDeltaBatch, BarBatch, OrdersBatch, PositionsBatch, QuoteBatch, TickBatch,
+        };
 
     struct TestStrategy {
         ticks: Arc<AtomicUsize>,
@@ -442,8 +492,9 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn engine_runtime_receives_ticks() {
-        let bus = Arc::new(MessageBus::new());
-        let mut rt = EngineRuntime::new(bus.clone());
+        let bus = Arc::new(tt_bus::ServerMessageBus::new());
+        let client = tt_bus::ClientMessageBus::attach_to_server(bus.clone()).await;
+        let mut rt = EngineRuntime::new(client.clone());
         let mut topics = HashSet::new();
         topics.insert(Topic::Ticks);
         let strat = Arc::new(TestStrategy {
@@ -475,10 +526,9 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn engine_and_bus_work_across_serialized_envelopes() {
         // Simulate a separate server and strategy by serializing Envelopes across a boundary.
-        let bus = Arc::new(MessageBus::new());
-        // Register a provider (server) endpoint with a throwaway channel
-        let (srv_tx, mut _srv_rx) = tokio::sync::mpsc::channel::<Envelope>(16);
-        let provider_id = bus.add_client(srv_tx).await;
+        let bus = Arc::new(tt_bus::ServerMessageBus::new());
+        // Register a provider (server) endpoint with a throwaway channel (not used here)
+        let client = tt_bus::ClientMessageBus::attach_to_server(bus.clone()).await;
 
         // Start the strategy runtime subscribing to multiple topics
         let mut topics: HashSet<Topic> = HashSet::new();
@@ -497,10 +547,10 @@ mod tests {
             accounts: Arc::new(AtomicUsize::new(0)),
             topics,
         });
-        let mut rt = EngineRuntime::new(bus.clone());
+        let mut rt = EngineRuntime::new(client.clone());
         rt.start(strat.clone()).await.unwrap();
 
-        // Build sample frames for each topic and send via bus.handle after encode/decode
+        // Build sample frames for each topic and publish via server bus
         // TickBatch
         let tick = tt_types::base_data::Tick {
             symbol: "ES".to_string(),

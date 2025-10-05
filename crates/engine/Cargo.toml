@@ -14,3 +14,7 @@ tt-provider = { path = "../provider" }
 tt-types = { path = "../tt-types" }
 tt-bus = { path = "../bus" }
 ahash = {workspace = true}
+
+[[bin]]
+name = "tt-engine-test_strategy"
+path = "bin/test_strategy.rs"

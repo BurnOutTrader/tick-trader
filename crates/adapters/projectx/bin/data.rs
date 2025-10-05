@@ -1,3 +1,4 @@
+#![cfg(feature = "server")]
 //! Sandbox test bed: authenticate, connect realtime, subscribe MNQ trades, quotes or depth, print incoming.
 use dotenvy::dotenv;
 use projectx::http::client::PxHttpClient;
@@ -7,7 +8,9 @@ use projectx::websocket::client::PxWebSocketClient;
 use rustls::crypto::{CryptoProvider, ring};
 use std::sync::Arc;
 use tracing::{error, info, level_filters::LevelFilter, warn};
-use tt_bus::MessageBus;
+use provider::traits::ProviderSessionSpec;
+use tt_bus::ServerMessageBus;
+use tt_types::providers::{ProjectXTenant, ProviderKind};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -16,10 +19,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     dotenv().ok();
+    let session_creds = ProviderSessionSpec::from_env();
+    let firm = ProjectXTenant::Topstep;
+    let provider = ProviderKind::ProjectX(firm);
+    let cfg = PxCredential::new(firm, session_creds.user_names.get(&provider).unwrap().clone(), session_creds.api_keys.get(&provider).unwrap().clone() );
     let _ = CryptoProvider::install_default(ring::default_provider());
 
-    // Authenticate via HTTP to obtain a JWT for the SignalR market hub
-    let cfg = PxCredential::from_env().expect("Missing PX env vars");
     let http = PxHttpClient::new(cfg, None, None, None, None)?;
     http.start().await?;
     info!("Authentication: Success");
@@ -47,7 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Build realtime client using the authenticated token
     let token = http.inner.token_string().await;
     let base = http.inner.rtc_base();
-    let bus = Arc::new(MessageBus::new());
+    let bus = Arc::new(ServerMessageBus::new());
     let rt = PxWebSocketClient::new(base, token, http.firm.clone(), bus.clone());
 
     // Connect market hub and subscribe to trades for the contract

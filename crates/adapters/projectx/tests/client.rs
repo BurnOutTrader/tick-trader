@@ -1,13 +1,17 @@
 use dotenvy::dotenv;
 use projectx::http::credentials::PxCredential;
 use projectx::http::inner_client::PxHttpInnerClient;
+use provider::traits::ProviderSessionSpec;
+use tt_types::providers::{ProjectXTenant, ProviderKind};
 
 #[ignore]
 #[tokio::test]
 async fn test_authenticate_returns_token() {
     dotenv().ok();
-
-    let cfg = PxCredential::from_env().expect("Missing PX env vars");
+    let session_creds = ProviderSessionSpec::from_env();
+    let firm = ProjectXTenant::Topstep;
+    let provider = ProviderKind::ProjectX(firm);
+    let cfg = PxCredential::new(firm, session_creds.user_names.get(&provider).unwrap().clone(), session_creds.api_keys.get(&provider).unwrap().clone() );
     let http = PxHttpInnerClient::new(cfg, None, None, None, None).unwrap();
 
     // now returns Result<(), PxError>
@@ -34,9 +38,10 @@ async fn test_authenticate_returns_token() {
 #[ignore]
 #[tokio::test]
 async fn auth_key_smoke_test() {
-    dotenv().ok();
-
-    let cfg = PxCredential::from_env().expect("PX env var missing");
+    let session_creds = ProviderSessionSpec::from_env();
+    let firm = ProjectXTenant::Topstep;
+    let provider = ProviderKind::ProjectX(firm);
+    let cfg = PxCredential::new(firm, session_creds.user_names.get(&provider).unwrap().clone(), session_creds.api_keys.get(&provider).unwrap().clone() );
     let http = PxHttpInnerClient::new(cfg, None, None, None, None).unwrap();
 
     http.authenticate().await.expect("Failed to auth");
@@ -57,7 +62,10 @@ async fn auth_key_smoke_test() {
 async fn validate_returns_new_token() {
     dotenv().ok();
 
-    let cfg = PxCredential::from_env().expect("env");
+    let session_creds = ProviderSessionSpec::from_env();
+    let firm = ProjectXTenant::Topstep;
+    let provider = ProviderKind::ProjectX(firm);
+    let cfg = PxCredential::new(firm, session_creds.user_names.get(&provider).unwrap().clone(), session_creds.api_keys.get(&provider).unwrap().clone() );
     let http = PxHttpInnerClient::new(cfg, None, None, None, None).unwrap();
 
     // initial auth

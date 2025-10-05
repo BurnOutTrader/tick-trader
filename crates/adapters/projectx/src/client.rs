@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tt_bus::MessageBus;
+use tt_bus::ServerMessageBus;
 use tt_types::keys::{AccountKey, SymbolKey, Topic};
 use tt_types::providers::{ProjectXTenant, ProviderKind};
 use tt_types::securities::futures_helpers::{extract_month_year, extract_root};
@@ -39,7 +39,7 @@ impl PXClient {
     pub async fn new_from_session(
         kind: ProviderKind,
         session: ProviderSessionSpec,
-        bus: Arc<MessageBus>,
+        bus: Arc<ServerMessageBus>,
     ) -> anyhow::Result<Self> {
         let user_name = session
             .user_names
