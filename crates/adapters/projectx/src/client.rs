@@ -4,7 +4,7 @@ use std::sync::Arc;
 use ahash::AHashMap;
 use async_trait::async_trait;
 use tokio::sync::RwLock;
-use provider::traits::{CommandAck, ConnectionState, DisconnectReason, ExecutionProvider, MarketDataProvider, ProviderBootstrap, ProviderParams, ProviderSessionSpec};
+use provider::traits::{CommandAck, ConnectionState, DisconnectReason, ExecutionProvider, MarketDataProvider, ProviderParams, ProviderSessionSpec};
 use tt_types::keys::{AccountKey, SymbolKey, Topic};
 use tt_types::securities::futures_helpers::{extract_month_year, extract_root};
 use tt_types::securities::symbols::Instrument;
@@ -16,7 +16,7 @@ use tt_bus::MessageBus;
 use tt_types::providers::{ProjectXTenant, ProviderKind};
 
 pub struct PXClient {
-    provider_kind: ProviderKind,
+    pub provider_kind: ProviderKind,
     http: Arc<PxHttpClient>,
     websocket: Arc<PxWebSocketClient>,
     http_connection_state: Arc<RwLock<ConnectionState>>,
@@ -28,7 +28,7 @@ impl PXClient {
         self.http.instruments_snapshot().await
     }
     #[allow(dead_code)]
-    async fn new_from_session(session: ProviderSessionSpec, bus: Arc<MessageBus>) -> anyhow::Result<Self> {
+    pub async fn new_from_session(session: ProviderSessionSpec, bus: Arc<MessageBus>) -> anyhow::Result<Self> {
         let user_name = session.creds.get("user_name").expect(">&user_name credential to be set in the session credentials");
         let api_key = session.creds.get("api_key").expect(
             "PXClient requires a 'api_key' credential to be set in the session credentials",
@@ -123,7 +123,7 @@ impl MarketDataProvider for PXClient {
         }
     }
 
-    async fn connect(&self, _session: ProviderSessionSpec) -> anyhow::Result<()> {
+    async fn connect_to_market(&self, _session: ProviderSessionSpec) -> anyhow::Result<()> {
         self.connect_all().await
     }
 
@@ -200,7 +200,7 @@ impl ExecutionProvider for PXClient {
         self.provider_kind
     }
 
-    async fn connect(&self, session: ProviderSessionSpec) -> anyhow::Result<()> {
+    async fn connect_to_broker(&self, session: ProviderSessionSpec) -> anyhow::Result<()> {
         self.connect_all().await
     }
 

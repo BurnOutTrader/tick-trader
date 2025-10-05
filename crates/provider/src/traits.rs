@@ -73,7 +73,7 @@ pub trait MarketDataProvider: Send + Sync {
     fn supports(&self, topic: Topic) -> bool;
 
     // Lifecycle
-    async fn connect(&self, session: ProviderSessionSpec) -> anyhow::Result<()>;
+    async fn connect_to_market(&self, session: ProviderSessionSpec) -> anyhow::Result<()>;
     async fn disconnect(&self, reason: DisconnectReason);
     async fn connection_state(&self) -> ConnectionState;
 
@@ -97,7 +97,7 @@ pub trait MarketDataProvider: Send + Sync {
 pub trait ExecutionProvider: Send + Sync {
     // Identity & lifecycle
     fn id(&self) -> ProviderKind;
-    async fn connect(&self, session: ProviderSessionSpec) -> anyhow::Result<()>;
+    async fn connect_to_broker(&self, session: ProviderSessionSpec) -> anyhow::Result<()>;
     async fn disconnect(&self, reason: DisconnectReason);
     async fn connection_state(&self) -> ConnectionState;
 
@@ -123,13 +123,6 @@ pub trait ExecutionProvider: Send + Sync {
 pub struct CommandAck {
     pub ok: bool,
     pub message: Option<String>,
-}
-
-/// Optional bootstrap interface the server can use to lazily construct providers
-#[async_trait]
-pub trait ProviderBootstrap: Send + Sync {
-    async fn make_market_data(&self, provider_id: &ProviderKind, session: ProviderSessionSpec) -> anyhow::Result<Arc<dyn MarketDataProvider>>;
-    async fn make_execution(&self, provider_id: &ProviderKind, session: ProviderSessionSpec) -> anyhow::Result<Arc<dyn ExecutionProvider>>;
 }
 
 
