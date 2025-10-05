@@ -563,7 +563,7 @@ impl PxWebSocketClient {
                             // Market hub events
                             "GatewayQuote" => {
                                 // SignalR Invocation typically passes [contractId, data] or just [data]
-                                // Extract the data object and deserialize into GatewayQuote, then convert to Nautilus QuoteTick
+                                // Extract the data object and deserialize into GatewayQuote, then convert to Quote
                                 let args_opt = val.get("arguments").and_then(|a| a.as_array());
                                 if let Some(args) = args_opt {
                                     let data_val = if args.len() >= 2 {
@@ -705,7 +705,7 @@ impl PxWebSocketClient {
                                 }
                             }
                             "GatewayDepth" => {
-                                // Extract args and handle payload which may be an array of up to 10 levels
+                                // Extract args and handle payload which may be an array of levels
                                 let args_opt = val.get("arguments").and_then(|a| a.as_array());
                                 if let Some(args) = args_opt {
                                     let (instrument_opt, data_val) = if args.len() >= 2 {
@@ -810,6 +810,10 @@ impl PxWebSocketClient {
                             }
                             // User hub events
                             "GatewayUserAccount" => {
+                                let seq = match Utc::now().timestamp_nanos_opt() {
+                                    None => u64::MIN,
+                                    Some(ts) => ts as u64
+                                };
                                 let account =
                                     match serde_json::from_value::<GatewayUserAccount>(val) {
                                         Ok(a) => a,
@@ -818,7 +822,7 @@ impl PxWebSocketClient {
                                             return;
                                         }
                                     };
-                                info!(target: "projectx.ws", "GatewayUserAccount: {:?}", account);
+                                //info!(target: "projectx.ws", "GatewayUserAccount: {:?}", account);
                                 let name = AccountName::new(account.name);
                                 let balance = match Decimal::from_f64(account.balance) {
                                     Some(b) => b,
@@ -833,7 +837,7 @@ impl PxWebSocketClient {
                                     balance,
                                     can_trade: account.can_trade,
                                 };
-                                info!(target: "projectx.ws", "AccountSnapShot: {:?}", snap_shot);
+                                //info!(target: "projectx.ws", "AccountSnapShot: {:?}", snap_shot);
                                 // Publish minimal AccountDelta to bus
                                 let delta = AccountDelta {
                                     equity: balance,
@@ -843,7 +847,7 @@ impl PxWebSocketClient {
                                 };
                                 let batch = AccountDeltaBatch {
                                     topic: tt_types::keys::Topic::AccountEvt,
-                                    seq: 0,
+                                    seq,
                                     accounts: vec![delta],
                                 };
                                 if let Err(e) = self.bus.publish_account_delta_batch(batch).await {
@@ -851,6 +855,10 @@ impl PxWebSocketClient {
                                 }
                             }
                             "GatewayUserOrder" => {
+                                let seq = match Utc::now().timestamp_nanos_opt() {
+                                    None => u64::MIN,
+                                    Some(ts) => ts as u64
+                                };
                                 let order =
                                     match serde_json::from_value::<GatewayUserOrder>(val.clone()) {
                                         Ok(o) => o,
@@ -890,7 +898,7 @@ impl PxWebSocketClient {
                                 let time_last = DateTime::<Utc>::from_str(&order.update_timestamp)
                                     .unwrap_or_else(|_| Utc::now());
 
-                                info!(target: "projectx.ws", "GatewayUserOrder standardized: id={} status={} side={:?} type={:?}", order.id, order.status, side, order_type);
+                                //info!(target: "projectx.ws", "GatewayUserOrder standardized: id={} status={} side={:?} type={:?}", order.id, order.status, side, order_type);
                                 // Publish minimal OrderUpdate to bus
                                 let state_code: u8 = models::map_status(order.status) as u8;
                                 let cum_qty: i64 = order.fill_volume.unwrap_or(0);
@@ -914,7 +922,7 @@ impl PxWebSocketClient {
                                 };
                                 let batch = OrdersBatch {
                                     topic: tt_types::keys::Topic::Orders,
-                                    seq: 0,
+                                    seq,
                                     orders: vec![ou],
                                 };
                                 if let Err(e) = self.bus.publish_orders_batch(batch).await {
@@ -922,6 +930,10 @@ impl PxWebSocketClient {
                                 }
                             }
                             "GatewayUserPosition" => {
+                                let seq = match Utc::now().timestamp_nanos_opt() {
+                                    None => u64::MIN,
+                                    Some(ts) => ts as u64
+                                };
                                 let position = match serde_json::from_value::<GatewayUserPosition>(
                                     val.clone(),
                                 ) {
@@ -967,16 +979,20 @@ impl PxWebSocketClient {
                                 };
                                 let batch = PositionsBatch {
                                     topic: tt_types::keys::Topic::Positions,
-                                    seq: 0,
+                                    seq,
                                     positions: vec![pd],
                                 };
                                 if let Err(e) = self.bus.publish_positions_batch(batch).await {
                                     error!(target: "projectx.ws", "failed to publish PositionDelta: {:?}", e);
                                 }
 
-                                info!(target: "projectx.ws", "GatewayUserPosition cached: id={} account_id={} contract={}", position.id, position.account_id, position.contract_id);
+                                //info!(target: "projectx.ws", "GatewayUserPosition cached: id={} account_id={} contract={}", position.id, position.account_id, position.contract_id);
                             }
                             "GatewayUserTrade" => {
+                                /*let seq = match Utc::now().timestamp_nanos_opt() {
+                                    None => u64::MIN,
+                                    Some(ts) => ts as u64
+                                };
                                 let trade =
                                     match serde_json::from_value::<GatewayUserTrade>(val.clone()) {
                                         Ok(t) => t,
@@ -1009,7 +1025,7 @@ impl PxWebSocketClient {
                                 let time_accepted =
                                     DateTime::<Utc>::from_str(&trade.creation_timestamp)
                                         .unwrap_or_else(|_| Utc::now());
-                                info!(target: "projectx.ws", "GatewayUserTrade standardized: id={} order_id={} side={:?} px={} qty={} fees={}", trade.id, trade.order_id, side, trade.price, trade.size, trade.fees);
+                                info!(target: "projectx.ws", "GatewayUserTrade standardized: id={} order_id={} side={:?} px={} qty={} fees={}", trade.id, trade.order_id, side, trade.price, trade.size, trade.fees);*/
                             }
                             _ => {}
                         }
@@ -1077,11 +1093,11 @@ impl PxWebSocketClient {
             }
         }
         {
-            let mut w = self.user_trades_subs.write().await;
+            /*let mut w = self.user_trades_subs.write().await;
             let s = account_id.to_string();
             if !w.contains(&account_id) {
                 w.push(account_id);
-            }
+            }*/
         }
         // Subscribe to per-account streams
         let id_val = Value::from(account_id);
