@@ -258,7 +258,7 @@ impl<P: MarketDataProvider + 'static> Engine<P> {
 // -------- Strategy runtime over the MessageBus --------
 use tokio::sync::mpsc;
 use tt_bus::{ClientMessageBus, ClientSubId};
-use tt_types::base_data::{Bbo, Candle, Tick};
+use tt_types::base_data::{Bbo, Candle, OrderBook, Tick};
 use tt_types::providers::ProviderKind;
 use tt_types::securities::symbols::Instrument;
 use tt_types::wire::{
@@ -274,6 +274,7 @@ pub trait Strategy: Send + Sync + 'static {
     async fn on_tick(&self, _t: Tick) {}
     async fn on_quote(&self, _q: Bbo) {}
     async fn on_bar(&self, _b: Candle) {}
+    async fn on_depth(&self, _d: OrderBook) {}
     async fn on_orders_batch(&self, _b: OrdersBatch) {}
     async fn on_positions_batch(&self, _b: PositionsBatch) {}
     async fn on_account_delta_batch(&self, _b: AccountDeltaBatch) {}

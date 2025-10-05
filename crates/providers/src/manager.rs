@@ -61,6 +61,11 @@ impl ProviderManager {
         match kind {
             ProviderKind::ProjectX(_) => {
                 let (md, ex) = adapters_projectx::factory::create_provider_pair(kind, self.session.clone(), self.bus.clone()).await?;
+                // Connect market side once on first creation so that subsequent subscribes succeed
+                if let Err(e) = md.connect_to_market(kind, self.session.clone()).await {
+                    tracing::error!(provider=?kind, error=%e, "ProviderManager: connect_to_market failed");
+                    return Err(e);
+                }
                 // Build workers (shards) that share the same underlying MD provider
                 for shard in 0..self.shards {
                     let w = Arc::new(crate::worker::InprocessWorker::new(md.clone()));
