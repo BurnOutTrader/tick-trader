@@ -5,7 +5,7 @@ use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, oneshot};
 use tracing::info;
-use tt_types::keys::{SymbolKey, Topic};
+use tt_types::keys::{SymbolKey, Topic, AccountKey};
 use tt_types::providers::ProviderKind;
 use tt_types::securities::symbols::Instrument;
 use dashmap::DashMap;
@@ -451,6 +451,34 @@ impl EngineRuntime {
             )
             .await?;
         Ok(())
+    }
+
+    /// Initialize one or more accounts at engine startup by subscribing to all
+    /// account-related streams (orders, positions, account events). This is a
+    /// convenience wrapper around `activate_account_interest`.
+    pub async fn initialize_accounts<I>(&self, accounts: I) -> anyhow::Result<()>
+    where
+        I: IntoIterator<Item = AccountKey>,
+    {
+        for key in accounts {
+            self.activate_account_interest(key).await?;
+        }
+        Ok(())
+    }
+
+    /// Convenience: initialize by account names for a given provider kind.
+    pub async fn initialize_account_names<I>(
+        &self,
+        provider: ProviderKind,
+        names: I,
+    ) -> anyhow::Result<()>
+    where
+        I: IntoIterator<Item = tt_types::accounts::account::AccountName>,
+    {
+        let keys = names
+            .into_iter()
+            .map(|account_name| AccountKey { provider, account_name });
+        self.initialize_accounts(keys).await
     }
 
     // Portfolio helpers
