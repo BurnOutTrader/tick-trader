@@ -6,7 +6,7 @@ use crate::securities::symbols::Instrument;
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use rust_decimal::Decimal;
 use rust_decimal::prelude::FromPrimitive;
-use std::collections::{HashMap, HashSet};
+use ahash::{AHashMap, AHashSet};
 use tokio::sync::mpsc;
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, Default, PartialEq)]
@@ -29,11 +29,11 @@ impl AccountActorHandle {
 }
 
 pub struct AccountActor {
-    pub orders_by_provider: HashMap<ProviderOrderId, Order>,
-    pub orders_by_client: HashMap<ClientOrderId, Order>,
-    pub exec_by_id: HashSet<ExecId>,
+    pub orders_by_provider: AHashMap<ProviderOrderId, Order>,
+    pub orders_by_client: AHashMap<ClientOrderId, Order>,
+    pub exec_by_id: AHashSet<ExecId>,
     pub positions: PositionLedger,
-    pub marks: HashMap<Instrument, Decimal>,
+    pub marks: AHashMap<Instrument, Decimal>,
     pub state: AccountState,
     pub wal: Vec<Vec<u8>>, // in-memory WAL (rkyv-serialized)
 }
@@ -42,11 +42,11 @@ impl AccountActor {
     pub fn spawn() -> (AccountActorHandle, tokio::task::JoinHandle<()>) {
         let (tx, mut rx) = mpsc::channel::<AccountEvent>(4096);
         let mut actor = AccountActor {
-            orders_by_provider: HashMap::new(),
-            orders_by_client: HashMap::new(),
-            exec_by_id: HashSet::new(),
+            orders_by_provider: AHashMap::new(),
+            orders_by_client: AHashMap::new(),
+            exec_by_id: AHashSet::new(),
             positions: PositionLedger::new(),
-            marks: HashMap::new(),
+            marks: AHashMap::new(),
             state: AccountState::default(),
             wal: Vec::new(),
         };
@@ -258,11 +258,11 @@ mod tests {
     #[test]
     fn order_lifecycle_ack_replace_cancel() {
         let mut actor = AccountActor {
-            orders_by_provider: HashMap::new(),
-            orders_by_client: HashMap::new(),
-            exec_by_id: HashSet::new(),
+            orders_by_provider: AHashMap::new(),
+            orders_by_client: AHashMap::new(),
+            exec_by_id: AHashSet::new(),
             positions: PositionLedger::new(),
-            marks: HashMap::new(),
+            marks: AHashMap::new(),
             state: AccountState::default(),
             wal: Vec::new(),
         };
@@ -313,11 +313,11 @@ mod tests {
     #[test]
     fn exec_updates_order_and_positions_and_dedupe() {
         let mut actor = AccountActor {
-            orders_by_provider: HashMap::new(),
-            orders_by_client: HashMap::new(),
-            exec_by_id: HashSet::new(),
+            orders_by_provider: AHashMap::new(),
+            orders_by_client: AHashMap::new(),
+            exec_by_id: AHashSet::new(),
             positions: PositionLedger::new(),
-            marks: HashMap::new(),
+            marks: AHashMap::new(),
             state: AccountState::default(),
             wal: Vec::new(),
         };
@@ -413,11 +413,11 @@ mod tests {
     fn cancel_after_fill_with_no_seq_rules_overrides_in_current_impl() {
         // Document current behavior: since exec does not set last_provider_seq, a later cancel without seq can override
         let mut actor = AccountActor {
-            orders_by_provider: HashMap::new(),
-            orders_by_client: HashMap::new(),
-            exec_by_id: HashSet::new(),
+            orders_by_provider: AHashMap::new(),
+            orders_by_client: AHashMap::new(),
+            exec_by_id: AHashSet::new(),
             positions: PositionLedger::new(),
-            marks: HashMap::new(),
+            marks: AHashMap::new(),
             state: AccountState::default(),
             wal: Vec::new(),
         };
@@ -462,11 +462,11 @@ mod tests {
     #[test]
     fn out_of_order_cancel_older_seq_is_ignored() {
         let mut actor = AccountActor {
-            orders_by_provider: HashMap::new(),
-            orders_by_client: HashMap::new(),
-            exec_by_id: HashSet::new(),
+            orders_by_provider: AHashMap::new(),
+            orders_by_client: AHashMap::new(),
+            exec_by_id: AHashSet::new(),
             positions: PositionLedger::new(),
-            marks: HashMap::new(),
+            marks: AHashMap::new(),
             state: AccountState::default(),
             wal: Vec::new(),
         };
@@ -502,11 +502,11 @@ mod tests {
     fn equal_seq_precedence_cancel_beats_filled() {
         // Document precedence behavior: with equal seq, Cancel > Filled
         let mut actor = AccountActor {
-            orders_by_provider: HashMap::new(),
-            orders_by_client: HashMap::new(),
-            exec_by_id: HashSet::new(),
+            orders_by_provider: AHashMap::new(),
+            orders_by_client: AHashMap::new(),
+            exec_by_id: AHashSet::new(),
             positions: PositionLedger::new(),
-            marks: HashMap::new(),
+            marks: AHashMap::new(),
             state: AccountState::default(),
             wal: Vec::new(),
         };
@@ -555,11 +555,11 @@ mod tests {
     fn late_fill_after_cancel_applies_and_updates_positions_current_impl() {
         // Current implementation applies executions regardless of order cancel state/seq.
         let mut actor = AccountActor {
-            orders_by_provider: HashMap::new(),
-            orders_by_client: HashMap::new(),
-            exec_by_id: HashSet::new(),
+            orders_by_provider: AHashMap::new(),
+            orders_by_client: AHashMap::new(),
+            exec_by_id: AHashSet::new(),
             positions: PositionLedger::new(),
-            marks: HashMap::new(),
+            marks: AHashMap::new(),
             state: AccountState::default(),
             wal: Vec::new(),
         };
@@ -612,11 +612,11 @@ mod tests {
     fn duplicate_same_seq_lower_precedence_ignored() {
         // A New event with same seq should not override a higher-precedence Canceled
         let mut actor = AccountActor {
-            orders_by_provider: HashMap::new(),
-            orders_by_client: HashMap::new(),
-            exec_by_id: HashSet::new(),
+            orders_by_provider: AHashMap::new(),
+            orders_by_client: AHashMap::new(),
+            exec_by_id: AHashSet::new(),
             positions: PositionLedger::new(),
-            marks: HashMap::new(),
+            marks: AHashMap::new(),
             state: AccountState::default(),
             wal: Vec::new(),
         };
@@ -661,11 +661,11 @@ mod tests {
     #[test]
     fn correction_event_is_noop_in_minimal_impl() {
         let mut actor = AccountActor {
-            orders_by_provider: HashMap::new(),
-            orders_by_client: HashMap::new(),
-            exec_by_id: HashSet::new(),
+            orders_by_provider: AHashMap::new(),
+            orders_by_client: AHashMap::new(),
+            exec_by_id: AHashSet::new(),
             positions: PositionLedger::new(),
-            marks: HashMap::new(),
+            marks: AHashMap::new(),
             state: AccountState::default(),
             wal: Vec::new(),
         };
@@ -684,11 +684,11 @@ mod tests {
     #[test]
     fn multi_instrument_marks_recompute_open_pnl() {
         let mut actor = AccountActor {
-            orders_by_provider: HashMap::new(),
-            orders_by_client: HashMap::new(),
-            exec_by_id: HashSet::new(),
+            orders_by_provider: AHashMap::new(),
+            orders_by_client: AHashMap::new(),
+            exec_by_id: AHashSet::new(),
             positions: PositionLedger::new(),
-            marks: HashMap::new(),
+            marks: AHashMap::new(),
             state: AccountState::default(),
             wal: Vec::new(),
         };
@@ -734,11 +734,11 @@ mod tests {
     #[test]
     fn wal_appends_for_events_and_admin_noop() {
         let mut actor = AccountActor {
-            orders_by_provider: HashMap::new(),
-            orders_by_client: HashMap::new(),
-            exec_by_id: HashSet::new(),
+            orders_by_provider: AHashMap::new(),
+            orders_by_client: AHashMap::new(),
+            exec_by_id: AHashSet::new(),
             positions: PositionLedger::new(),
-            marks: HashMap::new(),
+            marks: AHashMap::new(),
             state: AccountState::default(),
             wal: Vec::new(),
         };
