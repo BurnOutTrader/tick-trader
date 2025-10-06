@@ -494,16 +494,45 @@ pub fn latest_for_many(
 
 // Prune catalog entries pointing to missing parquet files. Safe to run at startup.
 pub fn prune_missing_partitions(conn: &Connection) -> duckdb::Result<()> {
-    // Temporarily drop indexes to avoid DuckDB index maintenance assertion during DELETE
+    use std::path::Path;
+
+    // Gather all paths and filter those missing on the filesystem using Rust std APIs
+    let mut stmt = conn.prepare("SELECT path FROM partitions")?;
+    let mut rows = stmt.query([])?;
+    let mut missing: Vec<String> = Vec::new();
+    while let Some(r) = rows.next()? {
+        let p: String = r.get(0)?;
+        if !Path::new(&p).exists() {
+            missing.push(p);
+        }
+    }
+
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    // Temporarily drop indexes to avoid index maintenance assertion during DELETE
     conn.execute_batch(
         r#"
         DROP INDEX IF EXISTS idx_partitions_dataset_time;
         DROP INDEX IF EXISTS idx_partitions_day;
-        DELETE FROM partitions WHERE NOT file_exists(path);
+        "#,
+    )?;
+
+    let tx = conn.unchecked_transaction()?;
+    for p in missing {
+        let _ = tx.execute("DELETE FROM partitions WHERE path = ?", duckdb::params![p])?;
+    }
+    tx.commit()?;
+
+    // Recreate indexes after cleanup
+    conn.execute_batch(
+        r#"
         CREATE INDEX IF NOT EXISTS idx_partitions_dataset_time ON partitions(dataset_id, min_ts_ns, max_ts_ns);
         CREATE INDEX IF NOT EXISTS idx_partitions_day ON partitions(dataset_id, day_key);
         "#
     )?;
+
     Ok(())
 }
 

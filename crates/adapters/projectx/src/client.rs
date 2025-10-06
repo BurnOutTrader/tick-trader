@@ -174,16 +174,24 @@ impl PXClient {
         let _exchange = exchange.expect("exchange must be present for known instrument");
 
         let limit: i32 = 20_000;
-        let mut all: Vec<Candle> = Vec::new();
-        // Work backwards from end to start to respect API's typical descending ordering
-        let mut cur_end = req.end;
-        let mut last_oldest: Option<DateTime<Utc>> = None;
+        let step = resolution.as_duration();
+        let chunk_span = step * (limit as i32);
 
-        while req.start < cur_end {
+        let mut all: Vec<Candle> = Vec::new();
+        let mut cur_start: DateTime<Utc> = req.start;
+        let end = req.end;
+        let tt_root = extract_root(&req.instrument);
+
+        while cur_start < end {
+            let mut cur_end = cur_start + chunk_span;
+            if cur_end > end {
+                cur_end = end;
+            }
+
             let body = RetrieveBarsReq {
                 contract_id: contract_id.clone(),
                 live: false,
-                start_time: req.start.to_rfc3339(),
+                start_time: cur_start.to_rfc3339(),
                 end_time: cur_end.to_rfc3339(),
                 unit,
                 unit_number,
@@ -199,59 +207,38 @@ impl PXClient {
                     resp.error_message
                 );
             }
-            if resp.bars.is_empty() {
-                break;
-            }
 
             // Convert API bars to engine candles; parse RFC3339 with offset to UTC
-            let mut converted: Vec<Candle> = Vec::with_capacity(resp.bars.len());
-            let step = resolution.as_duration();
-            for b in resp.bars.iter() {
-                let t_utc = chrono::DateTime::parse_from_rfc3339(&b.t)
-                    .map(|dt| dt.with_timezone(&Utc))
-                    .map_err(|e| anyhow::anyhow!("parse bar time failed: {}", e))?;
-                if t_utc < req.start || t_utc >= req.end {
-                    continue;
+            if !resp.bars.is_empty() {
+                let mut converted: Vec<Candle> = Vec::with_capacity(resp.bars.len());
+                for b in resp.bars.iter() {
+                    let t_utc = chrono::DateTime::parse_from_rfc3339(&b.t)
+                        .map(|dt| dt.with_timezone(&Utc))
+                        .map_err(|e| anyhow::anyhow!("parse bar time failed: {}", e))?;
+                    if t_utc < req.start || t_utc >= req.end {
+                        continue;
+                    }
+                    converted.push(Candle {
+                        symbol: tt_root.clone(),
+                        instrument: req.instrument.clone(),
+                        time_start: t_utc,
+                        time_end: t_utc + step,
+                        open: Decimal::from_f64(b.o).unwrap_or_default(),
+                        high: Decimal::from_f64(b.h).unwrap_or_default(),
+                        low: Decimal::from_f64(b.l).unwrap_or_default(),
+                        close: Decimal::from_f64(b.c).unwrap_or_default(),
+                        volume: Decimal::from_i64(b.v).unwrap_or_default(),
+                        ask_volume: Decimal::ZERO,
+                        bid_volume: Decimal::ZERO,
+                        resolution,
+                    });
                 }
-                let root = extract_root(&req.instrument);
-                converted.push(Candle {
-                    symbol: root,
-                    instrument: req.instrument.clone(),
-                    time_start: t_utc,
-                    time_end: t_utc + step,
-                    open: Decimal::from_f64(b.o).unwrap_or_default(),
-                    high: Decimal::from_f64(b.h).unwrap_or_default(),
-                    low: Decimal::from_f64(b.l).unwrap_or_default(),
-                    close: Decimal::from_f64(b.c).unwrap_or_default(),
-                    volume: Decimal::from_i64(b.v).unwrap_or_default(),
-                    ask_volume: Decimal::ZERO,
-                    bid_volume: Decimal::ZERO,
-                    resolution,
-                });
+                all.extend(converted);
             }
-            if converted.is_empty() {
-                break;
-            }
-            // Track oldest time to paginate
-            let oldest = converted
-                .iter()
-                .map(|c| c.time_start)
-                .min()
-                .unwrap();
-            if last_oldest.is_some() && last_oldest == Some(oldest) {
-                // no progress; break to avoid infinite loop
-                break;
-            }
-            last_oldest = Some(oldest);
 
-            all.extend(converted);
-
-            // If we received fewer than the limit, we likely exhausted the range
-            if (resp.bars.len() as i32) < limit {
-                break;
-            }
-            // Move end just before the oldest we got to avoid duplicates
-            cur_end = oldest;
+            // Advance to next window; ensure progress in case of zero bars
+            // We advance by chunk_span, not by number of bars, to avoid ordering assumptions.
+            cur_start = cur_end;
         }
 
         // Finalize: sort ascending, de-dup by start time, and clip to [start, end)
