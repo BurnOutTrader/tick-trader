@@ -1,3 +1,11 @@
+//! DuckDB catalog and query helpers.
+//! 
+//! This module owns the in-DB catalog schema (datasets, partitions) and provides helpers to:
+//! - Upsert providers/symbols/datasets and monthly partitions with stats.
+//! - Discover earliest/latest availability across partitions without reading payloads.
+//! - Prune catalog rows that reference missing files and quarantine unreadable Parquet.
+//! - Resolve dataset IDs from human-friendly keys and bridge Topic -> resolution keys.
+
 use crate::models::SeqBound;
 use anyhow::Result;
 use chrono::{DateTime, Utc};

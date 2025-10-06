@@ -6,7 +6,8 @@ use std::str::FromStr;
 use tokio::{sync::watch, task::JoinHandle};
 use tt_types::base_data::{Candle, Exchange, Resolution};
 use tt_types::securities::futures_helpers::extract_root;
-use tt_types::securities::market_hours::hours_for_exchange;
+use tt_types::securities::market_hours;
+use tt_types::securities::market_hours::{hours_for_exchange, MarketHours};
 use tt_types::securities::symbols::Instrument;
 
 #[allow(unused)]
@@ -128,9 +129,10 @@ impl RetrieveBarsResponse {
         resolution: Resolution,
         exchange: Exchange,
     ) -> anyhow::Result<Vec<Candle>> {
+        let market_hours = market_hours::hours_for_exchange(exchange);
         self.bars
             .iter()
-            .map(|bar| Self::bar_to_candle(bar, instrument.clone(), resolution, exchange))
+            .map(|bar| Self::bar_to_candle(bar, instrument.clone(), resolution, &market_hours))
             .collect()
     }
 
@@ -138,19 +140,13 @@ impl RetrieveBarsResponse {
         bar: &PxApiBar,
         instrument: Instrument,
         resolution: Resolution,
-        exchange: Exchange,
+        market_hours: &MarketHours,
     ) -> anyhow::Result<Candle> {
-        let time_start = DateTime::<Utc>::from_str(&bar.t)?;
-        let time_end = match resolution {
-            Resolution::Daily => {
-                let _market_hours = hours_for_exchange(exchange);
-                todo!()
-            }
-            Resolution::Weekly => {
-                let _market_hours = hours_for_exchange(exchange);
-                todo!()
-            }
-            _ => time_start + resolution.as_duration(),
+        let time_start = chrono::DateTime::parse_from_rfc3339(&bar.t)
+            .map(|dt| dt.with_timezone(&Utc))
+            .map_err(|e| anyhow::anyhow!("parse bar time failed: {}", e))?;
+        let time_end = {
+            market_hours.next_bar_end(time_start, resolution)
         };
         let root = extract_root(&instrument);
         let candle = Candle {

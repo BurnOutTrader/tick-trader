@@ -1,3 +1,7 @@
+//! High-level ingestion APIs that bucket incoming rows by (year, month) and delegate to persistence.
+//! Each function validates non-empty input, groups rows by the month of their timestamp, and
+//! calls the corresponding `perist::*_partition_zstd` writer to update Parquet and the catalog.
+
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Datelike, Month, Utc};
 use duckdb::Connection;

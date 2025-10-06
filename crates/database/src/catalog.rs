@@ -1,3 +1,6 @@
+//! Convenience helpers around the DuckDB catalog for listing providers, universes, and symbols,
+//! and for ensuring dataset identities exist.
+
 use anyhow::anyhow;
 use duckdb::{params, Connection};
 use tt_types::keys::Topic;

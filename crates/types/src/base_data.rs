@@ -5,7 +5,6 @@ use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 pub use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use strum_macros::Display;
-use crate::providers::ProviderKind;
 
 pub type Price = Decimal;
 pub type Volume = Decimal;

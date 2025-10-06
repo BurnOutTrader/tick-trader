@@ -1,3 +1,7 @@
+//! Parquet IO utilities used by persistence:
+//! - Writers for ticks, candles, and BBO with configurable ZSTD compression.
+//! - Lightweight stats readers to get row counts and min/max timestamps (and optional sequence).
+
 use crate::models::{BboRow, CandleRow, TickRow};
 use arrow::array::*;
 use arrow::datatypes::*;

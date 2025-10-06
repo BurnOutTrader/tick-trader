@@ -1,3 +1,10 @@
+//! Authoritative filesystem layout helpers for the database.
+//! 
+//! Rules:
+//! - Exactly one Parquet file per instrument per topic per month.
+//! - Directory layout: provider/market_type/(root_symbol/)?instrument/topic/YYYY/
+//! - Deterministic file name: instrument.topic.monthly.YYYYMM.parquet
+
 use tt_types::keys::Topic;
 use chrono::{Datelike, Month, NaiveDate};
 use std::path::{Path, PathBuf};
@@ -5,9 +12,7 @@ use tt_types::providers::ProviderKind;
 use tt_types::securities::futures_helpers::extract_root;
 use tt_types::securities::symbols::{Instrument, MarketType};
 
-// Rules
-// 1 file per instrument per topic per month
-
+/// Map Topic to its canonical on-disk string used in paths and file names.
 pub fn topic_to_db_string(topic: Topic) -> String {
     match topic {
         Topic::Ticks => "ticks".to_string(),

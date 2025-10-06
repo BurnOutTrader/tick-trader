@@ -1,3 +1,13 @@
+//! Persistence helpers: write monthly Parquet partitions and maintain the DuckDB catalog.
+//!
+//! These functions are called by `ingest::*` after grouping rows by (year, month). They:
+//! - Ensure the dataset exists in the catalog.
+//! - Compute deterministic monthly paths via `paths`.
+//! - Write incoming rows to a temporary Parquet with ZSTD compression.
+//! - Merge with an existing Parquet (stable de-dup by key) and atomically replace.
+//! - Compute/update partition stats efficiently.
+//! - Upsert the partition row in the catalog.
+
 use crate::append::append_merge_parquet;
 use crate::catalog::ensure_dataset;
 use crate::duck::upsert_partition;
@@ -22,6 +32,8 @@ use crate::paths::{data_file_name, partition_dir};
 // TICKS
 // ------------------------------
 
+/// Persist a single month's worth of tick rows to Parquet using ZSTD compression, merging with
+/// any existing monthly file, and upserting/merging the corresponding partition row in the catalog.
 pub fn persist_ticks_partition_zstd(
     conn: &duckdb::Connection,
     provider: &ProviderKind,

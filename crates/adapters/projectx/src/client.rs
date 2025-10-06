@@ -19,10 +19,12 @@ use tt_types::securities::symbols::Instrument;
 use tt_types::history::HistoricalRequest;
 use tt_types::base_data::{Candle, Resolution};
 use tt_types::securities::symbols::Exchange;
+use tt_types::securities::market_hours::hours_for_exchange;
 use crate::http::models::{RetrieveBarsReq, RetrieveBarsResponse};
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use rust_decimal::prelude::FromPrimitive;
+use crate::http::models;
 
 pub struct PXClient {
     pub provider_kind: ProviderKind,
@@ -171,7 +173,8 @@ impl PXClient {
                 req.instrument
             )
         })?;
-        let _exchange = exchange.expect("exchange must be present for known instrument");
+        let exchange = exchange.expect("exchange must be present for known instrument");
+        let hours = hours_for_exchange(exchange);
 
         let limit: i32 = 20_000;
         let step = resolution.as_duration();
@@ -180,9 +183,7 @@ impl PXClient {
         let mut all: Vec<Candle> = Vec::new();
         let mut cur_start: DateTime<Utc> = req.start;
         let end = req.end;
-        let tt_root = extract_root(&req.instrument);
-
-        while cur_start < end {
+        'main_loop: while cur_start < end {
             let mut cur_end = cur_start + chunk_span;
             if cur_end > end {
                 cur_end = end;
@@ -210,35 +211,30 @@ impl PXClient {
 
             // Convert API bars to engine candles; parse RFC3339 with offset to UTC
             if !resp.bars.is_empty() {
-                let mut converted: Vec<Candle> = Vec::with_capacity(resp.bars.len());
-                for b in resp.bars.iter() {
-                    let t_utc = chrono::DateTime::parse_from_rfc3339(&b.t)
-                        .map(|dt| dt.with_timezone(&Utc))
-                        .map_err(|e| anyhow::anyhow!("parse bar time failed: {}", e))?;
-                    if t_utc < req.start || t_utc >= req.end {
-                        continue;
+                let candles = match resp.to_engine_candles(req.instrument.clone(), resolution, exchange) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        log::error!("Error parsing ProjectX bars: {}", e);
+                        break 'main_loop
                     }
-                    converted.push(Candle {
-                        symbol: tt_root.clone(),
-                        instrument: req.instrument.clone(),
-                        time_start: t_utc,
-                        time_end: t_utc + step,
-                        open: Decimal::from_f64(b.o).unwrap_or_default(),
-                        high: Decimal::from_f64(b.h).unwrap_or_default(),
-                        low: Decimal::from_f64(b.l).unwrap_or_default(),
-                        close: Decimal::from_f64(b.c).unwrap_or_default(),
-                        volume: Decimal::from_i64(b.v).unwrap_or_default(),
-                        ask_volume: Decimal::ZERO,
-                        bid_volume: Decimal::ZERO,
-                        resolution,
-                    });
+                };
+                // Determine next window start from the last candle's time_end when available
+                let last_end_opt = candles.last().map(|c| c.time_end);
+                all.extend(candles);
+                if let Some(last_end) = last_end_opt {
+                    // Ensure monotonic progress; fall back to cur_end if something is off
+                    if last_end > cur_start {
+                        cur_start = last_end;
+                    } else {
+                        cur_start = cur_end;
+                    }
+                } else {
+                    cur_start = cur_end;
                 }
-                all.extend(converted);
+            } else {
+                // No bars returned; ensure progress by advancing to the current window end
+                cur_start = cur_end;
             }
-
-            // Advance to next window; ensure progress in case of zero bars
-            // We advance by chunk_span, not by number of bars, to avoid ordering assumptions.
-            cur_start = cur_end;
         }
 
         // Finalize: sort ascending, de-dup by start time, and clip to [start, end)
