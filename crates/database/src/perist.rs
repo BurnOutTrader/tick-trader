@@ -4,16 +4,16 @@ use crate::duck::upsert_partition;
 use crate::models::{BboRow, CandleRow, TickRow};
 use crate::parquet::{write_bbo_zstd, write_candles_zstd, write_ticks_zstd};
 use anyhow::{Result, anyhow};
-use chrono::Datelike;
-use chrono::{NaiveDate, Utc};
+use chrono::{Datelike, Month, NaiveDate, Utc};
 use std::{
     fs,
     path::{Path, PathBuf},
 };
-use tt_types::base_data::{OrderBook, Resolution};
+use tt_types::base_data::OrderBook;
+use tt_types::keys::Topic;
 use tt_types::providers::ProviderKind;
 use tt_types::securities::symbols::{Instrument, MarketType};
-use crate::paths::partition_dir;
+use crate::paths::{data_file_name, partition_dir};
 // ------------------------------
 // Shared time utils
 // ------------------------------
@@ -25,9 +25,10 @@ use crate::paths::partition_dir;
 pub fn persist_ticks_partition_zstd(
     conn: &duckdb::Connection,
     provider: &ProviderKind,
-    symbol: &Instrument,
+    instrument: &Instrument,
     market_type: MarketType,
-    date: NaiveDate,
+    topic: Topic,
+    month: Month,
     rows_vec: &[TickRow],
     data_root: &Path,
     zstd_level: i32,
@@ -36,21 +37,27 @@ pub fn persist_ticks_partition_zstd(
         return Err(anyhow!("persist_ticks_partition_zstd: empty batch"));
     }
 
-    let dataset_id = ensure_dataset(conn, provider, symbol)?;
+    let dataset_id = ensure_dataset(conn, *provider, instrument, topic)?;
+
+    // Determine the month/year from data for partitioning and naming
+    let min_ns_rows = rows_vec.iter().map(|r| r.key_ts_utc_ns).min().unwrap_or(0);
+    let min_dt = ns_to_dt(min_ns_rows);
+    let year = min_dt.year() as u32;
+    let date = NaiveDate::from_ymd_opt(min_dt.year(), month.number_from_month(), 1)
+        .ok_or_else(|| anyhow!("invalid year/month for ticks partition"))?;
 
     let dir = partition_dir(
         data_root,
-        provider,
+        *provider,
         market_type,
-        symbol,
-        DataKind::Tick,
-        None,
-        date,
+        instrument,
+        topic,
+        year,
     );
     fs::create_dir_all(&dir)?;
 
-    // Deterministic target file (one per day per symbol/provider)
-    let target_name = intraday_file_name(&symbol.to_string(), DataKind::Tick, None, date);
+    // Deterministic monthly target file
+    let target_name = data_file_name(instrument, topic, date);
     let target_path = dir.join(target_name);
 
     // Write incoming batch to a temp parquet in same dir
@@ -100,7 +107,7 @@ pub fn persist_ticks_partition_zstd(
         } else {
             // Avoid DuckDB parquet read for stats; use Rust parquet reader
             let (rows, min_ns, max_ns, min_seq, max_seq) =
-                crate::database::parquet::parquet_count_min_max_i64_with_seq(
+                crate::parquet::parquet_count_min_max_i64_with_seq(
                     &target_path,
                     "key_ts_utc_ns",
                     "venue_seq",
@@ -138,9 +145,9 @@ pub fn persist_candles_partition_zstd(
     conn: &duckdb::Connection,
     provider: &ProviderKind,
     market_type: MarketType,
-    symbol: &Instrument,
-    resolution: Resolution,
-    date: NaiveDate,
+    instrument: &Instrument,
+    topic: Topic,
+    month: Month,
     rows_vec: &[CandleRow],
     data_root: &Path,
     zstd_level: i32,
@@ -149,28 +156,27 @@ pub fn persist_candles_partition_zstd(
         return Err(anyhow!("persist_candles_partition_zstd: empty batch"));
     }
 
-    let dataset_id = ensure_dataset(conn, provider, symbol, DataKind::Candle, Some(resolution))?;
+    let dataset_id = ensure_dataset(conn, *provider, instrument, topic)?;
 
-    let dir = get_partion(
+    // Determine the month/year from data (use the earliest candle start)
+    let min_ns_rows = rows_vec.iter().map(|r| r.time_start_ns).min().unwrap_or(0);
+    let min_dt = ns_to_dt(min_ns_rows);
+    let year = min_dt.year() as u32;
+    let date = NaiveDate::from_ymd_opt(min_dt.year(), month.number_from_month(), 1)
+        .ok_or_else(|| anyhow!("invalid year/month for candles partition"))?;
+
+    let dir = partition_dir(
         data_root,
-        provider,
+        *provider,
         market_type,
-        symbol,
-        DataKind::Candle,
-        Some(resolution),
-        date,
+        instrument,
+        topic,
+        year,
     );
     fs::create_dir_all(&dir)?;
 
-    // Choose deterministic target file path based on resolution (align with paths.rs)
-    let target_name = match resolution {
-        Resolution::Weekly => weekly_file_name(&symbol.to_string(), DataKind::Candle),
-        Resolution::Daily => daily_file_name(&symbol.to_string(), DataKind::Candle, date.year()),
-        Resolution::Hours(_) => {
-            monthly_file_name(&symbol.to_string(), DataKind::Candle, date.year(), date.month())
-        }
-        _ => intraday_file_name(&symbol.to_string(), DataKind::Candle, Some(resolution), date),
-    };
+    // Deterministic monthly target file
+    let target_name = data_file_name(instrument, topic, date);
     let target_path = dir.join(target_name);
 
     // Write incoming batch to temp and merge
@@ -243,9 +249,9 @@ pub fn persist_bbo_partition_zstd(
     conn: &duckdb::Connection,
     provider: &ProviderKind,
     market_type: MarketType,
-    symbol: &Instrument,
-    resolution: Resolution,
-    date: NaiveDate,
+    instrument: &Instrument,
+    topic: Topic,
+    month: Month,
     rows_vec: &[BboRow],
     data_root: &Path,
     zstd_level: i32,
@@ -254,21 +260,27 @@ pub fn persist_bbo_partition_zstd(
         return Err(anyhow!("persist_bbo_partition_zstd: empty batch"));
     }
 
-    let dataset_id = ensure_dataset(conn, provider, symbol, DataKind::Bbo, Some(resolution))?;
+    let dataset_id = ensure_dataset(conn, *provider, instrument, topic)?;
 
-    let dir = get_partion(
+    // Determine the month/year from data
+    let min_ns_rows = rows_vec.iter().map(|r| r.key_ts_utc_ns).min().unwrap_or(0);
+    let min_dt = ns_to_dt(min_ns_rows);
+    let year = min_dt.year() as u32;
+    let date = NaiveDate::from_ymd_opt(min_dt.year(), month.number_from_month(), 1)
+        .ok_or_else(|| anyhow!("invalid year/month for bbo partition"))?;
+
+    let dir = partition_dir(
         data_root,
-        provider,
+        *provider,
         market_type,
-        symbol,
-        DataKind::Bbo,
-        None,
-        date,
+        instrument,
+        topic,
+        year,
     );
     fs::create_dir_all(&dir)?;
 
-    // Deterministic target file per day/resolution
-    let target_name = intraday_file_name(&symbol.to_string(), DataKind::Bbo, None, date);
+    // Deterministic monthly target file
+    let target_name = data_file_name(instrument, topic, date);
     let target_path = dir.join(target_name);
 
     // Write incoming to temp parquet then merge
@@ -339,9 +351,9 @@ pub fn persist_books_partition_duckdb(
     conn: &duckdb::Connection,
     provider: &ProviderKind,
     market_type: MarketType,
-    symbol: &Instrument,
-    resolution: Resolution,
-    date: chrono::NaiveDate,
+    instrument: &Instrument,
+    topic: Topic,
+    month: Month,
     snapshots: &[OrderBook],
     data_root: &std::path::Path,
 ) -> anyhow::Result<std::path::PathBuf> {
@@ -352,148 +364,7 @@ pub fn persist_books_partition_duckdb(
         anyhow::bail!("persist_books_partition_duckdb: empty batch");
     }
 
-    // 1) dataset
-    let dataset_id = ensure_dataset(conn, provider, symbol, DataKind::Depth, Some(resolution))?;
-
-    // 2) target directory (deterministic per-day file like other intraday data)
-    let dir = get_partion(
-        data_root,
-        provider,
-        market_type,
-        symbol,
-        DataKind::Depth,
-        resolution,
-        date,
-    );
-    fs::create_dir_all(&dir)?;
-    let ts_ns = Utc::now().timestamp_nanos_opt().unwrap_or(0);
-    let tmp_incoming: PathBuf = dir.join(format!(
-        ".__incoming-books-{}-{}.parquet",
-        ts_ns,
-        nanoid::nanoid!(4)
-    ));
-
-    // 3) staging table with BIGINT ns time
-    conn.execute_batch(
-        r#"
-        create temp table if not exists _tmp_books_ingest (
-            symbol     TEXT,
-            exchange   TEXT,
-            time_ns    BIGINT,    -- epoch ns, NOT TIMESTAMP
-            bids_json  TEXT,
-            asks_json  TEXT
-        );
-        delete from _tmp_books_ingest;
-        "#,
-    )?;
-
-    let mut ins = conn.prepare(
-        "insert into _tmp_books_ingest(symbol, exchange, time_ns, bids_json, asks_json)
-         values (?, ?, ?, ?, ?)",
-    )?;
-
-    let mut _rows = 0i64;
-    let mut min_ns: Option<i64> = None;
-    let mut max_ns: Option<i64> = None;
-
-    for ob in snapshots {
-        // encode ladders as compact [[price,size], ...] strings
-        let bids_arr: Vec<_> = ob
-            .bids
-            .iter()
-            .map(|(p, s)| serde_json::json!([p.to_string(), s.to_string()]))
-            .collect();
-        let asks_arr: Vec<_> = ob
-            .asks
-            .iter()
-            .map(|(p, s)| serde_json::json!([p.to_string(), s.to_string()]))
-            .collect();
-        let bids_json = serde_json::to_string(&bids_arr)?;
-        let asks_json = serde_json::to_string(&asks_arr)?;
-        let exch_str = format!("{:?}", ob.exchange);
-
-        // epoch ns (i128 -> i64 clamp: your times should be safe within i64 epoch ns range)
-        let t_ns = ob
-            .time
-            .timestamp_nanos_opt()
-            .ok_or_else(|| anyhow::anyhow!("invalid timestamp in OrderBook"))?
-            as i64;
-
-        ins.execute(duckdb::params![
-            &ob.symbol, &exch_str, t_ns, &bids_json, &asks_json
-        ])?;
-
-        _rows += 1;
-
-        let t_ns = t_ns;
-        min_ns = Some(min_ns.map_or(t_ns, |m| m.min(t_ns)));
-        max_ns = Some(max_ns.map_or(t_ns, |m| m.max(t_ns)));
-    }
-
-    // 4) COPY temp parquet, then merge into deterministic target file
-    let tmp_str = tmp_incoming.to_string_lossy().replace('\'', "''");
-    conn.execute_batch(&format!(
-        r#"
-        -- Use explicit COPY options; avoid PRAGMA for portability across DuckDB versions
-        copy _tmp_books_ingest to '{path}'
-        (format parquet, compression 'zstd');
-        "#,
-        path = tmp_str,
-    ))?;
-
-    // Deterministic target file (per day)
-    let target_name = intraday_file_name(symbol, DataKind::Depth, resolution, date);
-    let target_path = dir.join(target_name);
-
-    // Merge/replace (dedup by time + identifiers)
-    append_merge_parquet(
-        conn,
-        &target_path,
-        &tmp_incoming,
-        &["time_ns", "symbol", "exchange"],
-        &["time_ns"],
-    )?;
-    let _ = std::fs::remove_file(&tmp_incoming);
-
-    // Stats from merged parquet
-    let mut out_rows: i64 = 0;
-    let mut min_ns_q: i64 = 0;
-    let mut max_ns_q: i64 = 0;
-    {
-        let sql = format!(
-            "SELECT COUNT(*)::BIGINT AS cnt, MIN(time_ns)::BIGINT AS min_ns, MAX(time_ns)::BIGINT AS max_ns FROM read_parquet('{}')",
-            target_path.display()
-        );
-        let mut stmt = conn.prepare(&sql)?;
-        let mut r = stmt.query([])?;
-        if let Some(row) = r.next()? {
-            out_rows = row.get::<usize, i64>(0)?;
-            min_ns_q = row.get::<usize, i64>(1)?;
-            max_ns_q = row.get::<usize, i64>(2)?;
-        }
-    }
-
-    let bytes = fs::metadata(&target_path)?.len() as i64;
-
-    // catalog upsert
-    let min_ts = ns_to_dt(min_ns_q);
-    let max_ts = ns_to_dt(max_ns_q);
-
-    upsert_partition(
-        conn,
-        dataset_id,
-        target_path.to_string_lossy().as_ref(),
-        "parquet",
-        out_rows,
-        bytes,
-        min_ts,
-        max_ts,
-        None,
-        None,
-        Some(date),
-    )?;
-
-    Ok(target_path)
+    todo!("persist_books_partition_duckdb: not implemented");
 }
 
 #[inline]

@@ -16,6 +16,13 @@ use tt_types::keys::{AccountKey, SymbolKey, Topic};
 use tt_types::providers::{ProjectXTenant, ProviderKind};
 use tt_types::securities::futures_helpers::{extract_month_year, extract_root};
 use tt_types::securities::symbols::Instrument;
+use tt_types::history::HistoricalRequest;
+use tt_types::base_data::{Candle, Resolution};
+use tt_types::securities::symbols::Exchange;
+use crate::http::models::{RetrieveBarsReq, RetrieveBarsResponse};
+use chrono::{DateTime, Utc};
+use rust_decimal::Decimal;
+use rust_decimal::prelude::FromPrimitive;
 
 pub struct PXClient {
     pub provider_kind: ProviderKind,
@@ -125,6 +132,133 @@ impl PXClient {
             }
         }
         Ok(())
+    }
+
+    /// Retrieve historical bars for a given instrument and topic over [start, end).
+    /// Paginates using the ProjectX 20,000-bars limit and normalizes timestamps to UTC.
+    pub async fn retrieve_bars(&self, req: &HistoricalRequest) -> anyhow::Result<Vec<Candle>> {
+        // Map Topic -> Resolution and PX unit fields
+        let (resolution, unit, unit_number) = match req.topic {
+            Topic::Candles1s => (Resolution::Seconds(1), 1, 1),
+            Topic::Candles1m => (Resolution::Minutes(1), 2, 1),
+            Topic::Candles1h => (Resolution::Hours(1), 3, 1),
+            Topic::Candles1d => (Resolution::Daily, 4, 1),
+            _ => anyhow::bail!("retrieve_bars only supports candle topics (1s/1m/1h/1d)"),
+        };
+
+        // Resolve contract id and exchange from cache; refresh if needed
+        let mut contract_id: Option<String> = None;
+        let mut exchange: Option<Exchange> = None;
+        {
+            let map = self.http.instruments_snapshot().await;
+            if let Some(fc) = map.get(&req.instrument) {
+                contract_id = Some(fc.provider_contract_name.clone());
+                exchange = Some(fc.exchange);
+            }
+        }
+        if contract_id.is_none() {
+            // refresh instruments and retry once
+            let _ = self.http.manual_update_instruments(false).await;
+            let map = self.http.instruments_snapshot().await;
+            if let Some(fc) = map.get(&req.instrument) {
+                contract_id = Some(fc.provider_contract_name.clone());
+                exchange = Some(fc.exchange);
+            }
+        }
+        let contract_id = contract_id.ok_or_else(|| {
+            anyhow::anyhow!(
+                "ProjectX: unknown instrument {}; run auto_update_instruments first",
+                req.instrument
+            )
+        })?;
+        let _exchange = exchange.expect("exchange must be present for known instrument");
+
+        let limit: i32 = 20_000;
+        let mut all: Vec<Candle> = Vec::new();
+        // Work backwards from end to start to respect API's typical descending ordering
+        let mut cur_end = req.end;
+        let mut last_oldest: Option<DateTime<Utc>> = None;
+
+        while req.start < cur_end {
+            let body = RetrieveBarsReq {
+                contract_id: contract_id.clone(),
+                live: false,
+                start_time: req.start.to_rfc3339(),
+                end_time: cur_end.to_rfc3339(),
+                unit,
+                unit_number,
+                limit,
+                include_partial_bar: false,
+            };
+
+            let resp: RetrieveBarsResponse = self.http.inner.retrieve_bars(&body).await?;
+            if !resp.success {
+                anyhow::bail!(
+                    "ProjectX retrieveBars error: code={:?} msg={:?}",
+                    resp.error_code,
+                    resp.error_message
+                );
+            }
+            if resp.bars.is_empty() {
+                break;
+            }
+
+            // Convert API bars to engine candles; parse RFC3339 with offset to UTC
+            let mut converted: Vec<Candle> = Vec::with_capacity(resp.bars.len());
+            let step = resolution.as_duration();
+            for b in resp.bars.iter() {
+                let t_utc = chrono::DateTime::parse_from_rfc3339(&b.t)
+                    .map(|dt| dt.with_timezone(&Utc))
+                    .map_err(|e| anyhow::anyhow!("parse bar time failed: {}", e))?;
+                if t_utc < req.start || t_utc >= req.end {
+                    continue;
+                }
+                let root = extract_root(&req.instrument);
+                converted.push(Candle {
+                    symbol: root,
+                    instrument: req.instrument.clone(),
+                    time_start: t_utc,
+                    time_end: t_utc + step,
+                    open: Decimal::from_f64(b.o).unwrap_or_default(),
+                    high: Decimal::from_f64(b.h).unwrap_or_default(),
+                    low: Decimal::from_f64(b.l).unwrap_or_default(),
+                    close: Decimal::from_f64(b.c).unwrap_or_default(),
+                    volume: Decimal::from_i64(b.v).unwrap_or_default(),
+                    ask_volume: Decimal::ZERO,
+                    bid_volume: Decimal::ZERO,
+                    resolution,
+                });
+            }
+            if converted.is_empty() {
+                break;
+            }
+            // Track oldest time to paginate
+            let oldest = converted
+                .iter()
+                .map(|c| c.time_start)
+                .min()
+                .unwrap();
+            if last_oldest.is_some() && last_oldest == Some(oldest) {
+                // no progress; break to avoid infinite loop
+                break;
+            }
+            last_oldest = Some(oldest);
+
+            all.extend(converted);
+
+            // If we received fewer than the limit, we likely exhausted the range
+            if (resp.bars.len() as i32) < limit {
+                break;
+            }
+            // Move end just before the oldest we got to avoid duplicates
+            cur_end = oldest;
+        }
+
+        // Finalize: sort ascending, de-dup by start time, and clip to [start, end)
+        all.sort_by_key(|c| c.time_start);
+        all.dedup_by_key(|c| c.time_start);
+        all.retain(|c| c.time_start >= req.start && c.time_start < req.end);
+        Ok(all)
     }
 }
 

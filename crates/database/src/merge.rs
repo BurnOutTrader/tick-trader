@@ -1,5 +1,6 @@
 use std::cmp::{Ordering, Reverse};
 use std::collections::BinaryHeap;
+use tt_types::base_data::{Bbo, Candle, OrderBook, Tick};
 
 /// Iterator wrapper around `KMerge` so you can hand it to for-loops easily.
 pub struct KMergeIter<'a, T: TimeKey> {
@@ -32,13 +33,13 @@ pub trait TimeKey {
     fn time_ns(&self) -> i128;
 
     /// (sequence, exec_id, maker_id, taker_id) by default; override as needed.
-    fn tie_key(&self) -> (u32, &str, &str, &str) {
-        (u32::MAX, "", "", "")
+    fn tie_key(&self) -> u32 {
+        u32::MAX
     }
 
     #[inline]
     fn time_key(&self) -> (i128, u32) {
-        let (seq, _, _, _) = self.tie_key();
+        let seq = self.tie_key();
         (self.time_ns(), seq)
     }
 }
@@ -50,7 +51,7 @@ impl<'a, T: TimeKey + ?Sized> TimeKey for &'a T {
         (**self).time_ns()
     }
     #[inline]
-    fn tie_key(&self) -> (u32, &str, &str, &str) {
+    fn tie_key(&self) -> u32 {
         (**self).tie_key()
     }
     #[inline]
@@ -68,13 +69,8 @@ impl TimeKey for Tick {
         self.time.timestamp_nanos_opt().unwrap() as i128
     }
     #[inline]
-    fn tie_key(&self) -> (u32, &str, &str, &str) {
-        (
-            self.venue_seq.unwrap_or(u32::MAX),
-            self.exec_id.as_deref().unwrap_or(""),
-            self.maker_order_id.as_deref().unwrap_or(""),
-            self.taker_order_id.as_deref().unwrap_or(""),
-        )
+    fn tie_key(&self) -> u32 {
+        self.venue_seq.unwrap_or(u32::MAX)
     }
 }
 

@@ -7,6 +7,27 @@ use thiserror::Error;
 use tracing::error;
 use tt_types::base_data::Resolution;
 use tt_types::keys::Topic;
+use crate::paths::topic_to_db_string;
+
+// --- Helpers bridging legacy dataset keys to new Topic layout ---
+fn topic_to_kind_key(topic: Topic) -> String {
+    // Reuse canonical mapping from paths.rs
+    topic_to_db_string(topic)
+}
+
+fn topic_to_resolution(topic: Topic) -> Option<Resolution> {
+    match topic {
+        Topic::Candles1s => Some(Resolution::Seconds(1)),
+        Topic::Candles1m => Some(Resolution::Minutes(1)),
+        Topic::Candles1h => Some(Resolution::Hours(1)),
+        Topic::Candles1d => Some(Resolution::Daily),
+        _ => None,
+    }
+}
+
+fn resolution_key(res: Option<Resolution>) -> String {
+    res.map(|r| r.to_os_string()).unwrap_or_else(|| "none".to_string())
+}
 
 /// Create or reuse a DuckDB connection (file-backed or in-memory).
 pub fn connect(db_file: Option<&Path>) -> anyhow::Result<Connection> {
@@ -102,65 +123,20 @@ impl Duck {
         Ok(())
     }
 
-    pub fn create_candles_view(
+    pub fn create_view(
         &self,
         view_name: &str,
-        candles_root: &Path,
-        res: &Resolution,
+        _topic: Topic,
     ) -> Result<(), DuckError> {
-        let root = candles_root.to_string_lossy();
-        let rdir = crate::database::layout::LakeLayout::res_dir(
-            // Legacy view helper: keep path segment matching legacy layout
-            // We map Resolution to directory token directly here
-            // Seconds(n) => "S{n}", Minutes(n) => "M{n}", Hours(n) => "H{n}", Daily => "D", Weekly => "W"
-            res,
-        );
+        // Legacy helper: we no longer construct filesystem-glob views here.
+        // Create an empty view placeholder to keep API compatibility.
         self.conn.execute_batch(&format!(
             r#"
-            CREATE OR REPLACE VIEW {view} AS
-            SELECT * FROM parquet_scan('{root}/**/{rdir}/**/*.parquet', hive_partitioning = 0);
+            CREATE OR REPLACE VIEW {view} AS SELECT 1 WHERE 1=0;
         "#,
             view = view_name,
-            root = root,
-            rdir = rdir
         ))?;
         Ok(())
-    }
-}
-
-/// ---------------- Topic ↔ dataset mapping helpers ----------------
-
-#[inline]
-fn topic_to_kind_key(topic: Topic) -> &'static str {
-    match topic {
-        Topic::Ticks => "tick",
-        Topic::Quotes => "bbo",
-        Topic::Depth => "orderbook",
-        Topic::Candles1s | Topic::Candles1m | Topic::Candles1h | Topic::Candles1d => "candle",
-        _ => "unknown",
-    }
-}
-
-#[inline]
-fn topic_to_resolution(topic: Topic) -> Option<Resolution> {
-    match topic {
-        Topic::Candles1s => Some(Resolution::Seconds(1)),
-        Topic::Candles1m => Some(Resolution::Minutes(1)),
-        Topic::Candles1h => Some(Resolution::Hours(1)),
-        Topic::Candles1d => Some(Resolution::Daily),
-        _ => None,
-    }
-}
-
-#[inline]
-fn resolution_key(res: Option<Resolution>) -> String {
-    match res {
-        Some(Resolution::Seconds(n)) => format!("sec{}", n),
-        Some(Resolution::Minutes(n)) => format!("min{}", n),
-        Some(Resolution::Hours(n)) => format!("hr{}", n),
-        Some(Resolution::Daily) => "daily".to_string(),
-        Some(Resolution::Weekly) => "weekly".to_string(),
-        None => String::new(),
     }
 }
 

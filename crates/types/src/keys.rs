@@ -4,6 +4,7 @@ use crate::securities::symbols::Instrument;
 use once_cell::sync::Lazy;
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use std::collections::HashMap;
+use std::fmt::{Display, Formatter};
 use std::sync::RwLock;
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq, Copy, Eq, Hash)]
@@ -24,6 +25,24 @@ pub enum Topic {
     Positions = 9,
     Orders = 10,
     Fills = 11,
+}
+
+impl Display for Topic {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Ticks => write!(f, "Ticks"),
+            Self::Quotes => write!(f, "Quotes"),
+            Self::Depth => write!(f, "Depth"),
+            Self::Candles1s => write!(f, "Candles1s"),
+            Self::Candles1m => write!(f, "Candles1m"),
+            Self::Candles1h => write!(f, "Candles1h"),
+            Self::Candles1d => write!(f, "Candles1d"),
+            Self::AccountEvt => write!(f, "AccountEvent"),
+            Self::Positions => write!(f, "Positions"),
+            Self::Orders => write!(f, "Orders"),
+            Self::Fills => write!(f, "Fills"),
+        }
+    }
 }
 
 impl Topic {

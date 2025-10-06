@@ -5,11 +5,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 /// Atomic “append” that never loses existing data:
-/// 1) We read existing parquet + new batch parquet.
+/// 1) We read existing parquet and new batch parquet.
 /// 2) UNION ALL and de-dup by a composite key (your choice).
 /// 3) Sort by a stable ordering (e.g., ts, venue_seq, exec_id).
 /// 4) Write to tmp with max compression.
-/// 5) Atomic replace.
+/// 5) Atomic replacement.
 ///
 /// Notes:
 /// • If `existing_path` doesn’t exist, we just sort/dedup the new batch and move it in.
@@ -22,9 +22,9 @@ pub fn append_merge_parquet(
     key_cols: &[&str],
     order_by: &[&str],
 ) -> Result<()> {
-    // Ensure dirs for final location exist
+    // Ensure dirs for the final location exist
     if let Some(parent) = existing_path.parent() {
-        std::fs::create_dir_all(parent)?;
+        fs::create_dir_all(parent)?;
     }
 
     let key_list = key_cols.join(", ");
@@ -34,12 +34,12 @@ pub fn append_merge_parquet(
         order_by.join(", ")
     };
 
-    // When file doesn't exist yet OR existing file is empty/corrupt, short-circuit: move the new parquet in place without invoking DuckDB.
+    // When the file doesn't exist yet OR existing file is empty/corrupt, short-circuit: move the new parquet in place without invoking DuckDB.
     let mut exists = existing_path.exists();
     if exists {
         if let Ok(meta) = fs::metadata(existing_path) {
             if meta.len() == 0 {
-                // Remove zero-byte file to avoid DuckDB assertion when reading it
+                // Remove the zero-byte file to avoid DuckDB assertion when reading it
                 let _ = fs::remove_file(existing_path);
                 exists = false;
             }
@@ -47,7 +47,7 @@ pub fn append_merge_parquet(
     }
     if !exists {
         if let Some(parent) = existing_path.parent() {
-            std::fs::create_dir_all(parent)?;
+            fs::create_dir_all(parent)?;
         }
         fs::rename(new_batch_parquet, existing_path)
             .or_else(|_| {
@@ -86,7 +86,7 @@ pub fn append_merge_parquet(
         return Ok(());
     }
 
-    // Build SQL that merges existing + incoming with union-by-name, de-dups by key, orders deterministically
+    // Build SQL that merges existing + incoming with union-by-name, de-duplicates by key, orders deterministically
     let p_existing = existing_path.to_string_lossy().replace('\'', "''");
     let p_incoming = new_batch_parquet.to_string_lossy().replace('\'', "''");
     tracing::debug!(existing=%p_existing, incoming=%p_incoming, keys=%key_list, order=%order_list, "duckdb merge/parquet");
@@ -105,11 +105,11 @@ pub fn append_merge_parquet(
         order_by = order_list
     );
 
-    // Write to a temp parquet with max compression.
+    // Write to temporary parquet with max compression.
     // We use ZSTD + small row groups to compress hard (tune ROW_GROUP_SIZE for your workload).
     let tmp = NamedTempFile::new_in(existing_path.parent().unwrap_or_else(|| Path::new("../../../..")))?;
     let tmp_path: PathBuf = tmp.path().to_path_buf();
-    drop(tmp); // DuckDB will create/overwrite; we just reserved a path on same filesystem.
+    drop(tmp); // DuckDB will create/overwrite; we just reserved a path on the same filesystem.
 
     let copy_sql = format!(
         "COPY ({select_union})
@@ -124,8 +124,8 @@ pub fn append_merge_parquet(
         .with_context(|| "DuckDB COPY to tmp parquet failed")?;
     tracing::debug!("duckdb COPY finished");
 
-    // Atomic replace: rename tmp -> final.
-    // On Windows, std::fs::rename will replace if same volume; on POSIX it’s atomic.
+    // Atomically replace: rename tmp -> final.
+    // On Windows, std::fs::rename will replace the same volume; on POSIX it’s atomic.
     fs::rename(&tmp_path, existing_path)
         .or_else(|_| {
             // Fallback: remove and rename (rarely needed)

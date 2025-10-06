@@ -84,7 +84,7 @@ fn bbo_schema() -> SchemaRef {
 
 // ---------- Builders ----------
 fn to_batch_ticks(rows: &[TickRow]) -> Result<RecordBatch, ParquetError> {
-    let schema = tick_schema(); // make sure schema has an Int64 "key_ts_utc_ns"
+    let schema = tick_schema(); // make sure the schema has an Int64 "key_ts_utc_ns"
     let mut provider = StringBuilder::new();
     let mut symbol_id = StringBuilder::new();
     let mut exchange = StringBuilder::new();
@@ -99,7 +99,6 @@ fn to_batch_ticks(rows: &[TickRow]) -> Result<RecordBatch, ParquetError> {
     for r in rows {
         provider.append_value(&r.provider);
         symbol_id.append_value(&r.symbol_id);
-        exchange.append_value(&r.exchange);
         price.append_value(r.price);
         size.append_value(r.size);
         side.append_value(r.side);
@@ -156,7 +155,6 @@ fn to_batch_candles(rows: &[CandleRow]) -> Result<RecordBatch, ParquetError> {
     for r in rows {
         provider.append_value(&r.provider);
         symbol_id.append_value(&r.symbol_id);
-        exchange.append_value(&r.exchange);
         res.append_value(&r.res);
         ts0_ns.append_value(r.time_start_ns); // <-- ns
         ts1_ns.append_value(r.time_end_ns); // <-- ns
@@ -167,7 +165,6 @@ fn to_batch_candles(rows: &[CandleRow]) -> Result<RecordBatch, ParquetError> {
         v.append_value(r.volume);
         av.append_value(r.ask_volume);
         bv.append_value(r.bid_volume);
-        n.append_value(r.num_trades as i64);
     }
 
     Ok(RecordBatch::try_new(
@@ -211,7 +208,6 @@ fn to_batch_bbo(rows: &[BboRow]) -> Result<RecordBatch, ParquetError> {
     for r in rows {
         provider.append_value(&r.provider);
         symbol_id.append_value(&r.symbol_id);
-        exchange.append_value(&r.exchange);
         ts_ns.append_value(r.key_ts_utc_ns); // <-- ns
         bid.append_value(r.bid);
         bid_sz.append_value(r.bid_size);
@@ -257,7 +253,7 @@ fn to_batch_bbo(rows: &[BboRow]) -> Result<RecordBatch, ParquetError> {
 
 // ---------- Public write helpers ----------
 pub fn write_ticks_zstd(
-    path: &std::path::Path,
+    path: &Path,
     rows: &[TickRow],
     zstd_level: i32,
 ) -> Result<(), ParquetError> {
@@ -276,7 +272,7 @@ pub fn write_ticks_zstd(
 }
 
 pub fn write_candles_zstd(
-    path: &std::path::Path,
+    path: &Path,
     rows: &[CandleRow],
     zstd_level: i32,
 ) -> Result<(), ParquetError> {
@@ -295,7 +291,7 @@ pub fn write_candles_zstd(
 }
 
 pub fn write_bbo_zstd(
-    path: &std::path::Path,
+    path: &Path,
     rows: &[BboRow],
     zstd_level: i32,
 ) -> Result<(), ParquetError> {
@@ -317,7 +313,7 @@ pub fn write_bbo_zstd(
 use std::path::Path;
 
 pub fn parquet_count_min_max_i64(path: &Path, ts_col: &str) -> anyhow::Result<(i64, i64, i64)> {
-    let file = std::fs::File::open(path)?;
+    let file = fs::File::open(path)?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
     let schema = builder.schema().clone();
     let idx = schema.index_of(ts_col)?;
@@ -349,7 +345,7 @@ pub fn parquet_count_min_max_i64(path: &Path, ts_col: &str) -> anyhow::Result<(i
         }
     }
     if count == 0 {
-        // Fallback to 0s if no rows; caller can decide how to handle
+        // Fallback to 0 s if no rows; the caller can decide how to handle
         Ok((0, 0, 0))
     } else {
         Ok((count, min_ts, max_ts))
@@ -361,7 +357,7 @@ pub fn parquet_count_min_max_i64_with_seq(
     ts_col: &str,
     seq_col: &str,
 ) -> anyhow::Result<(i64, i64, i64, Option<i64>, Option<i64>)> {
-    let file = std::fs::File::open(path)?;
+    let file = fs::File::open(path)?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
     let schema = builder.schema().clone();
     let ts_idx = schema.index_of(ts_col)?;

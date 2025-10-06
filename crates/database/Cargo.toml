@@ -28,3 +28,7 @@ parquet = "56.2.0"
 nanoid = "0.4.0"
 tempfile = "3.10.1"
 lazy_static = {workspace = true}
+
+[features]
+# Gate legacy query/update modules until refactored to monthly layout
+queries = []

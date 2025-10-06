@@ -2,7 +2,6 @@ pub mod append;
 pub mod catalog;
 pub mod duck;
 pub mod duck_queries;
-pub mod helpers;
 pub mod ingest;
 pub mod init;
 pub mod layout;
@@ -11,6 +10,9 @@ pub mod models;
 pub mod parquet;
 pub mod paths;
 pub mod perist;
+#[cfg(feature = "queries")]
 pub mod queries;
+#[cfg(feature = "queries")]
 pub mod replay;
+#[cfg(feature = "queries")]
 pub mod update_historical;

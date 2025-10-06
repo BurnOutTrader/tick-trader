@@ -1,8 +1,8 @@
 use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
-use strum_macros::Display;
 use tt_types::base_data::Candle;
 use tt_types::providers::ProviderKind;
+use crate::paths::provider_kind_to_db_string;
 
 // ---------- Disambiguation key for same-timestamp events ----------
 // Store time in microseconds to align with Parquet/Arrow, plus a tie-breaker.
@@ -45,7 +45,7 @@ pub struct CandleRow {
 impl CandleRow {
     pub fn from_candle(provider: ProviderKind, candle: Candle) -> Self {
         Self {
-            provider: provider.to_string(),
+            provider: provider_kind_to_db_string(provider),
             symbol_id: candle.symbol,
             res: candle.resolution.to_os_string(),
             time_start_ns: candle.time_start.timestamp_nanos_opt().unwrap_or(0),

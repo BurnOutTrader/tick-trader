@@ -226,13 +226,3 @@ pub enum ProviderKind {
     ProjectX(ProjectXTenant),
     Rithmic(RithmicSystem),
 }
-
-impl ProviderKind {
-    /// For providers that use HTTP base URLs (ProjectX), return a URL; others may return an empty string.
-    pub fn to_url_string(&self) -> Option<String> {
-        match self {
-            ProviderKind::ProjectX(t) => Some(t.to_url_string()),
-            ProviderKind::Rithmic(_) => unimplemented!(),
-        }
-    }
-}

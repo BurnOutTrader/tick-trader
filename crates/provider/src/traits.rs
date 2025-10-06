@@ -4,10 +4,11 @@ use dotenvy::dotenv;
 use std::collections::HashMap;
 use std::sync::{mpsc, Arc};
 use std::time::Instant;
-use tt_types::base_data::{DateTime, Feed, Resolution, Utc};
+use tt_types::base_data::{DateTime, Resolution, Utc};
 use tt_types::history::{HistoricalRequest, HistoryEvent, HistoryHandle};
 use tt_types::keys::{AccountKey, SymbolKey, Topic};
 use tt_types::providers::{ProjectXTenant, ProviderKind, RithmicSystem};
+use tt_types::securities::symbols::Instrument;
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum ConnectionState {
@@ -253,14 +254,14 @@ pub trait HistoricalDataProvider: Send + Sync {
     ) -> anyhow::Result<(Arc<dyn HistoryHandle>, mpsc::Receiver<HistoryEvent>)>;
 
     /// Feature flags help the router pick/shape requests.
-    fn supports(&self, _feed: Feed) -> bool {
+    fn supports(&self, topic: Topic) -> bool {
         true
     }
     fn supports_resolution(&self, _res: &Option<Resolution>) -> bool {
         true
     }
 
-    fn earliest_available(&self, feed: Feed) -> DateTime<Utc>;
+    fn earliest_available(&self, instrument: Instrument, topic: Topic) -> DateTime<Utc>;
 }
 
 #[derive(Debug, Clone)]

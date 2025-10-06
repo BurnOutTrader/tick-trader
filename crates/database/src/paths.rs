@@ -1,5 +1,5 @@
 use tt_types::keys::Topic;
-use chrono::{Datelike, NaiveDate};
+use chrono::{Datelike, Month, NaiveDate};
 use std::path::{Path, PathBuf};
 use tt_types::providers::ProviderKind;
 use tt_types::securities::futures_helpers::extract_root;
@@ -21,44 +21,37 @@ pub fn topic_to_db_string(topic: Topic) -> String {
     }
 }
 
-pub fn privider_kind_to_db_string(provider_kind: ProviderKind) -> String {
+pub(crate) fn provider_kind_to_db_string(provider_kind: ProviderKind) -> String {
     match provider_kind {
-        ProviderKind::ProjectX(t) => format!("projectx_{}", t.to_id_segment()),
-        ProviderKind::Rithmic(s) => format!("rithmic_{}", s.to_id_segment()),
+        ProviderKind::ProjectX(_) => "projectx".to_string(),
+        ProviderKind::Rithmic(_) => "rithmic".to_string(),
     }
 }
 
+#[allow(clippy::unreachable_patterns)]
 /// provider/symbol/{kind} {res}/YYYY/MM/
 pub fn partition_dir(
     data_root: &Path,
     provider: ProviderKind,
     market_type: MarketType,
-    instrument: Instrument,
+    instrument: &Instrument,
     topic: Topic,
-    day: NaiveDate,
+    year: u32
 ) -> PathBuf {
-    match market_type {
-        MarketType::Futures => {
-            let root_symbol = extract_root(&instrument);
-            data_root
-                .join(privider_kind_to_db_string(provider))
-                .join(market_type.to_string())
-                .join(root_symbol)
-                .join(instrument.to_string())
-                .join(topic_to_db_string(topic))
-                .join(format!("{:04}", day.year()))
-                .join(format!("{:02}", day.month()))
-        }
-        _ => {
-            data_root
-                .join(privider_kind_to_db_string(provider))
-                .join(market_type.to_string())
-                .join(instrument.to_string())
-                .join(topic_to_db_string(topic))
-                .join(format!("{:04}", day.year()))
-                .join(format!("{:02}", day.month()))
-        }
-    }
+    let base = data_root
+        .join(provider_kind_to_db_string(provider))
+        .join(market_type.to_string());
+
+    let base = if market_type == MarketType::Futures {
+        let root_symbol = extract_root(&instrument);
+        base.join(root_symbol).join(instrument.to_string())
+    } else {
+        base.join(instrument.to_string())
+    };
+
+    base
+        .join(topic_to_db_string(topic))
+        .join(format!("{:04}", year))
 }
 
 fn sanitize_string(sym: &str) -> String {
@@ -73,13 +66,13 @@ fn sanitize_string(sym: &str) -> String {
         .collect()
 }
 
-pub fn monthly_file_name(symbol: &str, topic: Topic, year: i32, month: u32) -> String {
+pub fn data_file_name(instrument: &Instrument, topic: Topic, date: NaiveDate) -> String {
     format!(
         "{}.{}.monthly.{:04}{:02}.parquet",
-        sanitize_string(symbol),
+        sanitize_string(instrument.to_string().as_str()),
         topic_to_db_string(topic),
-        year,
-        month
+        date.year(),
+        date.month()
     )
 }
 

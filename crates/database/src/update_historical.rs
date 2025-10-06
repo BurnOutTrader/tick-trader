@@ -157,7 +157,6 @@ async fn run_download(
         }
 
         let req = HistoricalRequest {
-            feed: feed.clone(),
             start: cursor,
             end, // end-exclusive expected; +1ns cursor guards even if provider is inclusive
         };

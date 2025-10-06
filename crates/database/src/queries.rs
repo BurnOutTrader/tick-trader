@@ -11,8 +11,10 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tt_types::base_data::{Feed, Resolution};
 use tt_types::keys::Topic;
-use tt_types::securities::symbols::Exchange;
+use tt_types::securities::symbols::{Exchange, Instrument, MarketType};
 use tt_types::base_data::{Bbo, Tick, Candle, OrderBook, Side};
+use tt_types::providers::ProviderKind;
+use crate::paths::provider_kind_to_db_string;
 
 #[inline]
 fn dt_to_us(dt: DateTime<Utc>) -> i64 {
@@ -28,56 +30,16 @@ fn us_to_dt(us: i64) -> DateTime<Utc> {
     DateTime::from_timestamp(secs, micros * 1_000).expect("valid micros ts")
 }
 
-#[inline]
-fn topic_kind_str(topic: Topic) -> &'static str {
-    match topic {
-        Topic::Ticks => "Tick",
-        Topic::Quotes => "Bbo",
-        Topic::Depth => "Depth",
-        Topic::Candles1s | Topic::Candles1m | Topic::Candles1h | Topic::Candles1d => "Candle",
-        _ => "Unknown",
-    }
-}
-
-#[inline]
-fn res_for_topic(topic: Topic) -> Option<Resolution> {
-    match topic {
-        Topic::Candles1s => Some(Resolution::Seconds(1)),
-        Topic::Candles1m => Some(Resolution::Minutes(1)),
-        Topic::Candles1h => Some(Resolution::Hours(1)),
-        Topic::Candles1d => Some(Resolution::Daily),
-        _ => None,
-    }
-}
-
-#[inline]
-fn feed_to_topic(feed: &Feed) -> Option<Topic> {
-    match feed {
-        Feed::Ticks { .. } => Some(Topic::Ticks),
-        Feed::Bbo { .. } => Some(Topic::Quotes),
-        Feed::OrderBookL2 { .. } => Some(Topic::Depth),
-        Feed::OrderBookL3 { .. } => Some(Topic::Depth), // treat L3 as depth for catalog presence
-        Feed::Candles { resolution, .. } => match resolution {
-            Resolution::Seconds(1) => Some(Topic::Candles1s),
-            Resolution::Minutes(1) => Some(Topic::Candles1m),
-            Resolution::Hours(1) => Some(Topic::Candles1h),
-            Resolution::Daily => Some(Topic::Candles1d),
-            _ => None,
-        },
-        Feed::TickBars { .. } => None,
-    }
-}
-
 /// Return earliest timestamp available for a single (provider, kind, symbol, exchange, res).
 /// Uses partition pruning + Parquet stats; reads no payloads when min/max suffice.
 pub fn earliest_event_ts(
     conn: &Connection,
     layout: &Layout,
-    provider: &str,
+    provider: ProviderKind,
     topic: Topic,
-    symbol: &str,
-    exchange: &str,
-    res: Resolution,
+    instrument: &Instrument,
+    exchange: Exchange,
+    market_type: MarketType,
 ) -> anyhow::Result<Option<DateTime<Utc>>> {
     // choose the “min” column per kind
     let (time_col, is_bigint) = match topic {
@@ -88,8 +50,7 @@ pub fn earliest_event_ts(
         _ => ("key_ts_utc_us", true),
     };
 
-    let glob = layout.glob_for(provider, topic, symbol, &exchange, res);
-    let res_s = format!("{res:?}");
+    let glob = layout.glob_for(provider, topic, instrument, market_type, exchange);
     let kind_s = topic_kind_str(topic);
 
     let sql = format!(
@@ -109,7 +70,7 @@ pub fn earliest_event_ts(
     );
 
     let mut stmt = conn.prepare(&sql)?;
-    let mut rows = stmt.query(params![glob, provider, kind_s, symbol, exchange, res_s])?;
+    let mut rows = stmt.query(params![glob, provider_kind_to_db_string(provider), kind_s, instrument.to_string(), exchange.to_string()])?;
 
     if let Some(row) = rows.next()? {
         if is_bigint {
@@ -132,15 +93,15 @@ pub fn earliest_event_ts(
 pub fn earliest_per_symbol(
     conn: &Connection,
     layout: &Layout,
-    provider: &str,
+    provider: ProviderKind,
     topic: Topic,
-    symbols: &[String],
-    exchange: &str,
-    res: Resolution,
-) -> anyhow::Result<AHashMap<String, Option<DateTime<Utc>>>> {
-    let mut out = AHashMap::with_capacity(symbols.len());
-    for s in symbols {
-        let v = earliest_event_ts(conn, layout, provider, topic, s, exchange, res)?;
+    instruments: &[Instrument],
+    exchange: Exchange,
+    market_type: MarketType,
+) -> anyhow::Result<AHashMap<Instrument, Option<DateTime<Utc>>>> {
+    let mut out = AHashMap::with_capacity(instruments.len());
+    for s in instruments {
+        let v = earliest_event_ts(conn, layout, provider, topic, s, exchange, market_type)?;
         out.insert(s.clone(), v);
     }
     Ok(out)
@@ -150,16 +111,16 @@ pub fn earliest_per_symbol(
 pub fn earliest_any(
     conn: &Connection,
     layout: &Layout,
-    provider: &str,
+    provider: ProviderKind,
     topic: Topic,
-    symbols: &[String],
-    exchange: &str,
-    res: Resolution,
+    instruments: &[Instrument],
+    exchange: Exchange,
+    market_type: MarketType,
 ) -> anyhow::Result<Option<DateTime<Utc>>> {
     // union all with parameterized table functions is awkward; simplest path:
     let mut best: Option<DateTime<Utc>> = None;
-    for s in symbols {
-        if let Some(ts) = earliest_event_ts(conn, layout, provider, topic, s, exchange, res)? {
+    for s in instruments {
+        if let Some(ts) = earliest_event_ts(conn, layout, provider, topic, s, exchange, market_type)? {
             best = match best {
                 None => Some(ts),
                 Some(b) if ts < b => Some(ts),
@@ -178,15 +139,13 @@ pub fn earliest_any(
 pub fn latest_data_time(
     conn: &Arc<Connection>,
     provider: ProviderKind,
-    feed: Feed,
+    instrument: &Instrument,
+    topic: Topic,
 ) -> anyhow::Result<Option<DateTime<Utc>>> {
-    let Some(topic) = feed_to_topic(&feed) else {
-        return Ok(None);
-    };
     let v: Option<SeqBound> = latest_available(
         conn,
         &provider.to_string(),
-        &feed.instrument().to_string(),
+        instrument.to_string(),
         topic,
     )?;
     Ok(v.map(|b| b.ts))

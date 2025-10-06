@@ -1,48 +1,86 @@
-use anyhow::anyhow;
-use chrono::{DateTime, NaiveDate, Utc};
+use anyhow::{anyhow, Result};
+use chrono::{DateTime, Datelike, Month, Utc};
 use duckdb::Connection;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use tt_types::base_data::{OrderBook, Resolution};
+use tt_types::keys::Topic;
 use tt_types::providers::ProviderKind;
 use tt_types::securities::symbols::{Instrument, MarketType};
-use crate::duck::{upsert_dataset, upsert_provider, upsert_symbol};
-use crate::models::{BboRow, CandleRow, DataKind, TickRow};
-use crate::perist::{persist_bbo_partition_zstd, persist_books_partition_duckdb, persist_candles_partition_zstd, persist_ticks_partition_zstd};
 
-/// Ingest a batch of ticks
+use crate::models::{BboRow, CandleRow, TickRow};
+use crate::perist::{
+    persist_bbo_partition_zstd,
+    persist_candles_partition_zstd,
+    persist_ticks_partition_zstd,
+};
+
+fn month_from_u32(m: u32) -> Month {
+    match m {
+        1 => Month::January,
+        2 => Month::February,
+        3 => Month::March,
+        4 => Month::April,
+        5 => Month::May,
+        6 => Month::June,
+        7 => Month::July,
+        8 => Month::August,
+        9 => Month::September,
+        10 => Month::October,
+        11 => Month::November,
+        12 => Month::December,
+        _ => Month::January,
+    }
+}
+
+fn ns_to_year_month(ns: i64) -> Result<(i32, Month)> {
+    let secs = ns.div_euclid(1_000_000_000);
+    let nsec = (ns.rem_euclid(1_000_000_000)) as u32;
+    let dt: DateTime<Utc> = DateTime::from_timestamp(secs, nsec)
+        .ok_or_else(|| anyhow!("invalid ns timestamp: {ns}"))?;
+    Ok((dt.year(), month_from_u32(dt.month())))
+}
+
+fn group_by_year_month<T, F>(rows: &[T], ts_ns: F) -> Result<BTreeMap<(i32, Month), Vec<&T>>>
+where
+    F: Fn(&T) -> i64,
+{
+    let mut buckets: BTreeMap<(i32, Month), Vec<&T>> = BTreeMap::new();
+    for r in rows {
+        let (y, m) = ns_to_year_month(ts_ns(r))?;
+        buckets.entry((y, m)).or_default().push(r);
+    }
+    Ok(buckets)
+}
+
+/// Ingest a batch of ticks grouped monthly
 pub fn ingest_ticks(
     conn: &Connection,
-    data_root: &Path,
-    provider: &str,
+    provider: &ProviderKind,
+    instrument: &Instrument,
     market_type: MarketType,
-    symbol: &str,
+    topic: Topic,
     rows: &[TickRow],
+    data_root: &Path,
     zstd_level: i32,
-) -> anyhow::Result<Vec<PathBuf>> {
+) -> Result<Vec<PathBuf>> {
     if rows.is_empty() {
         return Err(anyhow!("ingest_ticks: empty batch"));
     }
 
-    // 1) ensure catalog ids
-    let provider_id = upsert_provider(conn, provider)?;
-    let symbol_id = upsert_symbol(conn, provider_id, symbol)?;
-    let _dataset_id = upsert_dataset(conn, provider_id, symbol_id, DataKind::Tick, None)?;
-
-    let buckets = group_by_day(rows, |t| t.key_ts_utc_ns)?;
-    let mut paths = vec![];
-    for (day, day_rows) in buckets {
-        // Convert Vec<&TickRow> to Vec<TickRow> for persistence API
-        let mut scratch: Vec<TickRow> = Vec::with_capacity(day_rows.len());
-        for r in day_rows {
+    let buckets = group_by_year_month(rows, |t| t.key_ts_utc_ns)?;
+    let mut paths = Vec::with_capacity(buckets.len());
+    for ((_year, month), group) in buckets {
+        let mut scratch: Vec<TickRow> = Vec::with_capacity(group.len());
+        for r in group {
             scratch.push(r.clone());
         }
         let out = persist_ticks_partition_zstd(
             conn,
             provider,
-            symbol,
+            instrument,
             market_type,
-            day,
+            topic,
+            month,
             &scratch,
             data_root,
             zstd_level,
@@ -53,50 +91,27 @@ pub fn ingest_ticks(
     Ok(paths)
 }
 
-#[inline]
-fn ns_to_utc_day(ns: i64) -> anyhow::Result<NaiveDate> {
-    let secs = ns.div_euclid(1_000_000_000);
-    let nsec = (ns.rem_euclid(1_000_000_000)) as u32;
-    let dt: DateTime<Utc> = DateTime::from_timestamp(secs, nsec)
-        .ok_or_else(|| anyhow!("invalid ns timestamp: {ns}"))?;
-    Ok(dt.date_naive())
-}
-
-/// Group a slice by UTC day derived from the provided extractor.
-fn group_by_day<T, F>(rows: &[T], ts_ns: F) -> anyhow::Result<BTreeMap<NaiveDate, Vec<&T>>>
-where
-    F: Fn(&T) -> i64,
-{
-    let mut buckets: BTreeMap<NaiveDate, Vec<&T>> = BTreeMap::new();
-    for r in rows {
-        let d = ns_to_utc_day(ts_ns(r))?;
-        buckets.entry(d).or_default().push(r);
-    }
-    Ok(buckets)
-}
-
-/// One-call ingestion for **candles** (uses candle **end time** for day bucketing).
+/// One-call ingestion for candles (monthly, keyed by end time)
 pub fn ingest_candles(
-    conn: &duckdb::Connection,
-    provider: &str,
-    symbol: &str, // carried inside rows but passed for symmetry with ticks API if you have one
+    conn: &Connection,
+    provider: &ProviderKind,
+    instrument: &Instrument,
     market_type: MarketType,
-    resolution: Resolution, // which candle dataset
-    all_rows: &[CandleRow],
+    topic: Topic,
+    rows: &[CandleRow],
     data_root: &Path,
     zstd_level: i32,
-) -> anyhow::Result<Vec<PathBuf>> {
-    // Bucket by UTC day from time_end_ns (policy choice).
-    let buckets = group_by_day(all_rows, |c| c.time_end_ns)?;
+) -> Result<Vec<PathBuf>> {
+    if rows.is_empty() {
+        return Err(anyhow!("ingest_candles: empty batch"));
+    }
+
+    let buckets = group_by_year_month(rows, |c| c.time_end_ns)?;
     let mut out_paths = Vec::with_capacity(buckets.len());
 
-    for (day, rows) in buckets {
-        // rows is Vec<&CandleRow> → make a contiguous slice view
-        // persist_* expects &[CandleRow]; collect into a small Vec<&>→Vec<CandleRow> clone-free?
-        // We must pass owned slice; do a lightweight copy if you want (these are on-disk types).
-        // If you prefer zero-copy, change persist_* to accept iter of &CandleRow.
-        let mut scratch: Vec<CandleRow> = Vec::with_capacity(rows.len());
-        for r in rows {
+    for ((_year, month), group) in buckets {
+        let mut scratch: Vec<CandleRow> = Vec::with_capacity(group.len());
+        for r in group {
             scratch.push(r.clone());
         }
 
@@ -104,9 +119,9 @@ pub fn ingest_candles(
             conn,
             provider,
             market_type,
-            symbol,
-            resolution,
-            day,
+            instrument,
+            topic,
+            month,
             &scratch,
             data_root,
             zstd_level,
@@ -116,23 +131,27 @@ pub fn ingest_candles(
     Ok(out_paths)
 }
 
-/// One-call ingestion for **BBO** snapshots.
+/// One-call ingestion for BBO snapshots (monthly)
 pub fn ingest_bbo(
-    conn: &duckdb::Connection,
-    provider: &str,
+    conn: &Connection,
+    provider: &ProviderKind,
+    instrument: &Instrument,
     market_type: MarketType,
-    symbol: &str,
-    res: Resolution,
-    all_rows: &[BboRow],
+    topic: Topic,
+    rows: &[BboRow],
     data_root: &Path,
     zstd_level: i32,
-) -> anyhow::Result<Vec<PathBuf>> {
-    let buckets = group_by_day(all_rows, |q| q.key_ts_utc_ns)?;
+) -> Result<Vec<PathBuf>> {
+    if rows.is_empty() {
+        return Err(anyhow!("ingest_bbo: empty batch"));
+    }
+
+    let buckets = group_by_year_month(rows, |b| b.key_ts_utc_ns)?;
     let mut out_paths = Vec::with_capacity(buckets.len());
 
-    for (day, rows) in buckets {
-        let mut scratch: Vec<BboRow> = Vec::with_capacity(rows.len());
-        for r in rows {
+    for ((_year, month), group) in buckets {
+        let mut scratch: Vec<BboRow> = Vec::with_capacity(group.len());
+        for r in group {
             scratch.push(r.clone());
         }
 
@@ -140,52 +159,12 @@ pub fn ingest_bbo(
             conn,
             provider,
             market_type,
-            symbol,
-            res,
-            day,
+            instrument,
+            topic,
+            month,
             &scratch,
             data_root,
             zstd_level,
-        )?;
-        out_paths.push(p);
-    }
-    Ok(out_paths)
-}
-
-/// One-call ingestion for **order-book** snapshots.
-/// (This uses your DuckDB temp-table + COPY writer.)
-pub fn ingest_books(
-    conn: &duckdb::Connection,
-    provider: &ProviderKind,
-    market_type: MarketType,
-    symbol: &Instrument,
-    res: Resolution,
-    all_snaps: &[OrderBook],
-    data_root: &Path,
-) -> anyhow::Result<Vec<PathBuf>> {
-    // Bucket by UTC day using OrderBook.time
-    let mut buckets: BTreeMap<NaiveDate, Vec<&OrderBook>> = BTreeMap::new();
-    for ob in all_snaps {
-        buckets.entry(ob.time.date_naive()).or_default().push(ob);
-    }
-
-    let mut out_paths = Vec::with_capacity(buckets.len());
-    for (day, snaps) in buckets {
-        // persist_* expects &[OrderBook]; build a scratch Vec<OrderBook> (OrderBook is small)
-        let mut scratch: Vec<OrderBook> = Vec::with_capacity(snaps.len());
-        for s in snaps {
-            scratch.push(s.clone());
-        }
-
-        let p = persist_books_partition_duckdb(
-            conn,
-            provider,
-            market_type,
-            symbol,
-            res,
-            day,
-            &scratch,
-            data_root,
         )?;
         out_paths.push(p);
     }
