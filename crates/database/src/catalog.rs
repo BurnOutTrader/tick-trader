@@ -2,7 +2,7 @@
 //! and for ensuring dataset identities exist.
 
 use anyhow::anyhow;
-use duckdb::{params, Connection};
+use duckdb::{Connection, params};
 use tt_types::keys::Topic;
 use tt_types::providers::ProviderKind;
 use tt_types::securities::symbols::Instrument;
@@ -108,7 +108,12 @@ fn provider_string(provider: &ProviderKind) -> String {
     }
 }
 
-pub fn dataset_id(conn: &Connection, provider: &ProviderKind, instrument: &Instrument, topic: Topic) -> anyhow::Result<i64> {
+pub fn dataset_id(
+    conn: &Connection,
+    provider: &ProviderKind,
+    instrument: &Instrument,
+    topic: Topic,
+) -> anyhow::Result<i64> {
     let pid = get_or_create_provider_id(conn, &provider_string(provider))?;
     let sid = get_or_create_symbol_id(conn, pid, &instrument.to_lowercase())?;
     get_or_create_dataset_id(conn, pid, sid, topic)
@@ -168,7 +173,11 @@ fn ensure_provider_id(conn: &Connection, provider: &str) -> anyhow::Result<i64> 
     .map_err(|e| anyhow!("ensure_provider_id: {}", e))
 }
 
-fn ensure_symbol_id(conn: &Connection, provider_id: i64, instrument: &Instrument) -> anyhow::Result<i64> {
+fn ensure_symbol_id(
+    conn: &Connection,
+    provider_id: i64,
+    instrument: &Instrument,
+) -> anyhow::Result<i64> {
     let sym_txt = instrument.to_string();
     conn.execute(
         "INSERT INTO symbols(provider_id, symbol_text)
@@ -202,7 +211,14 @@ fn ensure_dataset_row(
              SELECT 1 FROM datasets
               WHERE provider_id = ? AND symbol_id = ? AND kind = ? AND resolution_key = ''
          )",
-        params![provider_id, instrument_id, &kind_s, provider_id, instrument_id, &kind_s],
+        params![
+            provider_id,
+            instrument_id,
+            &kind_s,
+            provider_id,
+            instrument_id,
+            &kind_s
+        ],
     )?;
 
     conn.query_row(

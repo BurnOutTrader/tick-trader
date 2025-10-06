@@ -1,13 +1,13 @@
 //! Authoritative filesystem layout helpers for the database.
-//! 
+//!
 //! Rules:
 //! - Exactly one Parquet file per instrument per topic per month.
 //! - Directory layout: provider/market_type/(root_symbol/)?instrument/topic/YYYY/
 //! - Deterministic file name: instrument.topic.monthly.YYYYMM.parquet
 
-use tt_types::keys::Topic;
 use chrono::{Datelike, Month, NaiveDate};
 use std::path::{Path, PathBuf};
+use tt_types::keys::Topic;
 use tt_types::providers::ProviderKind;
 use tt_types::securities::futures_helpers::extract_root;
 use tt_types::securities::symbols::{Instrument, MarketType};
@@ -22,7 +22,7 @@ pub fn topic_to_db_string(topic: Topic) -> String {
         Topic::Candles1m => "candles1m".to_string(),
         Topic::Candles1h => "candles1h".to_string(),
         Topic::Candles1d => "candles1d".to_string(),
-        _ => panic!("Invalid topic") //todo remove these types from topic
+        _ => panic!("Invalid topic"), //todo remove these types from topic
     }
 }
 
@@ -41,7 +41,7 @@ pub fn partition_dir(
     market_type: MarketType,
     instrument: &Instrument,
     topic: Topic,
-    year: u32
+    year: u32,
 ) -> PathBuf {
     let base = data_root
         .join(provider_kind_to_db_string(provider))
@@ -54,8 +54,7 @@ pub fn partition_dir(
         base.join(instrument.to_string())
     };
 
-    base
-        .join(topic_to_db_string(topic))
+    base.join(topic_to_db_string(topic))
         .join(format!("{:04}", year))
 }
 

@@ -2,7 +2,7 @@ use ahash::AHashMap;
 use async_trait::async_trait;
 use dotenvy::dotenv;
 use std::collections::HashMap;
-use std::sync::{mpsc, Arc};
+use std::sync::{Arc, mpsc};
 use std::time::Instant;
 use tt_types::base_data::{DateTime, Resolution, Utc};
 use tt_types::history::{HistoricalRequest, HistoryEvent, HistoryHandle};
@@ -184,11 +184,21 @@ pub trait MarketDataProvider: Send + Sync {
     async fn unsubscribe_md(&self, topic: Topic, key: &SymbolKey) -> anyhow::Result<()>;
     async fn active_md_subscriptions(&self) -> AHashMap<Topic, Vec<SymbolKey>>;
     /// Optional: list instruments available on this market data provider. Default empty.
-    async fn list_instruments(&self, _pattern: Option<String>) -> anyhow::Result<Vec<tt_types::securities::symbols::Instrument>> {
+    async fn list_instruments(
+        &self,
+        _pattern: Option<String>,
+    ) -> anyhow::Result<Vec<tt_types::securities::symbols::Instrument>> {
         Ok(Vec::new())
     }
     /// Optional: full instruments map (Instrument -> FuturesContract). Default empty.
-    async fn instruments_map(&self) -> anyhow::Result<ahash::AHashMap<tt_types::securities::symbols::Instrument, tt_types::securities::security::FuturesContract>> {
+    async fn instruments_map(
+        &self,
+    ) -> anyhow::Result<
+        ahash::AHashMap<
+            tt_types::securities::symbols::Instrument,
+            tt_types::securities::security::FuturesContract,
+        >,
+    > {
         Ok(ahash::AHashMap::new())
     }
     async fn auto_update(&self) -> anyhow::Result<()>;
@@ -217,7 +227,9 @@ pub trait ExecutionProvider: Send + Sync {
     async fn unsubscribe_positions(&self, account_key: &AccountKey) -> anyhow::Result<()>;
     async fn active_account_subscriptions(&self) -> Vec<AccountKey>;
     /// Optional: list accounts available on this execution provider. Default empty.
-    async fn list_accounts(&self) -> anyhow::Result<Vec<tt_types::accounts::account::AccountSnapShot>> {
+    async fn list_accounts(
+        &self,
+    ) -> anyhow::Result<Vec<tt_types::accounts::account::AccountSnapShot>> {
         Ok(Vec::new())
     }
 
@@ -231,7 +243,6 @@ pub trait ExecutionProvider: Send + Sync {
     async fn replace_order(&self, spec: tt_types::wire::ReplaceOrder) -> CommandAck;
     async fn auto_update(&self) -> anyhow::Result<()>;
 }
-
 
 /// Providers implement this to supply historical data.
 ///

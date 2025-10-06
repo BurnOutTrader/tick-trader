@@ -1,6 +1,9 @@
+use crate::duck::{
+    create_partitions_schema, prune_missing_partitions, quarantine_unreadable_partitions,
+};
 use duckdb::Connection;
+use std::path::Path;
 use std::sync::Arc;
-use crate::duck::{create_partitions_schema, prune_missing_partitions, quarantine_unreadable_partitions};
 
 pub fn connect(db_file: &std::path::Path) -> anyhow::Result<duckdb::Connection> {
     let conn = duckdb::Connection::open(db_file)?;
@@ -8,9 +11,8 @@ pub fn connect(db_file: &std::path::Path) -> anyhow::Result<duckdb::Connection> 
 }
 
 /// Initialize catalog.duckdb in the repo root
-pub fn init_db() -> duckdb::Result<Connection> {
-    let repo_root = std::env::current_dir().unwrap();
-    let storage = repo_root.join("../storage").join("market_data");
+pub fn init_db(path: &Path) -> duckdb::Result<Connection> {
+    let storage = path.join("market_data");
     std::fs::create_dir_all(&storage).unwrap();
     let db_path = storage.join("catalog.duckdb");
 

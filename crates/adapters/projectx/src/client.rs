@@ -1,30 +1,30 @@
 use crate::http::client::PxHttpClient;
 use crate::http::credentials::PxCredential;
 use crate::http::error::PxError;
+use crate::http::models;
+use crate::http::models::{RetrieveBarsReq, RetrieveBarsResponse};
 use crate::websocket::client::PxWebSocketClient;
 use ahash::AHashMap;
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use provider::traits::{
     CommandAck, ConnectionState, DisconnectReason, ExecutionProvider, MarketDataProvider,
     ProviderSessionSpec,
 };
+use rust_decimal::Decimal;
+use rust_decimal::prelude::FromPrimitive;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tt_bus::Router;
+use tt_types::base_data::{Candle, Resolution};
+use tt_types::history::HistoricalRequest;
 use tt_types::keys::{AccountKey, SymbolKey, Topic};
 use tt_types::providers::{ProjectXTenant, ProviderKind};
 use tt_types::securities::futures_helpers::{extract_month_year, extract_root};
-use tt_types::securities::symbols::Instrument;
-use tt_types::history::HistoricalRequest;
-use tt_types::base_data::{Candle, Resolution};
-use tt_types::securities::symbols::Exchange;
 use tt_types::securities::market_hours::hours_for_exchange;
-use crate::http::models::{RetrieveBarsReq, RetrieveBarsResponse};
-use chrono::{DateTime, Utc};
-use rust_decimal::Decimal;
-use rust_decimal::prelude::FromPrimitive;
-use crate::http::models;
+use tt_types::securities::symbols::Exchange;
+use tt_types::securities::symbols::Instrument;
 
 pub struct PXClient {
     pub provider_kind: ProviderKind,
@@ -211,13 +211,14 @@ impl PXClient {
 
             // Convert API bars to engine candles; parse RFC3339 with offset to UTC
             if !resp.bars.is_empty() {
-                let candles = match resp.to_engine_candles(req.instrument.clone(), resolution, exchange) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        log::error!("Error parsing ProjectX bars: {}", e);
-                        break 'main_loop
-                    }
-                };
+                let candles =
+                    match resp.to_engine_candles(req.instrument.clone(), resolution, exchange) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            log::error!("Error parsing ProjectX bars: {}", e);
+                            break 'main_loop;
+                        }
+                    };
                 // Determine next window start from the last candle's time_end when available
                 let last_end_opt = candles.last().map(|c| c.time_end);
                 all.extend(candles);
@@ -370,7 +371,10 @@ impl MarketDataProvider for PXClient {
         map
     }
 
-    async fn list_instruments(&self, pattern: Option<String>) -> anyhow::Result<Vec<tt_types::securities::symbols::Instrument>> {
+    async fn list_instruments(
+        &self,
+        pattern: Option<String>,
+    ) -> anyhow::Result<Vec<tt_types::securities::symbols::Instrument>> {
         // Use HTTP snapshot maintained by PxHttpClient; filter by optional pattern (case-insensitive contains)
         let map = self.instruments_map_snapshot().await;
         let mut v: Vec<_> = map.keys().cloned().collect();
@@ -381,7 +385,14 @@ impl MarketDataProvider for PXClient {
         Ok(v)
     }
 
-    async fn instruments_map(&self) -> anyhow::Result<ahash::AHashMap<tt_types::securities::symbols::Instrument, tt_types::securities::security::FuturesContract>> {
+    async fn instruments_map(
+        &self,
+    ) -> anyhow::Result<
+        ahash::AHashMap<
+            tt_types::securities::symbols::Instrument,
+            tt_types::securities::security::FuturesContract,
+        >,
+    > {
         Ok(self.instruments_map_snapshot().await)
     }
 

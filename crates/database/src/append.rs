@@ -1,8 +1,8 @@
-use tempfile::NamedTempFile;
 use anyhow::{Context, Result};
 use duckdb::Connection;
 use std::fs;
 use std::path::{Path, PathBuf};
+use tempfile::NamedTempFile;
 
 /// Atomic “append” that never loses existing data:
 /// 1) We read existing parquet and new batch parquet.
@@ -107,7 +107,11 @@ pub fn append_merge_parquet(
 
     // Write to temporary parquet with max compression.
     // We use ZSTD + small row groups to compress hard (tune ROW_GROUP_SIZE for your workload).
-    let tmp = NamedTempFile::new_in(existing_path.parent().unwrap_or_else(|| Path::new("../../../..")))?;
+    let tmp = NamedTempFile::new_in(
+        existing_path
+            .parent()
+            .unwrap_or_else(|| Path::new("../../../..")),
+    )?;
     let tmp_path: PathBuf = tmp.path().to_path_buf();
     drop(tmp); // DuckDB will create/overwrite; we just reserved a path on the same filesystem.
 

@@ -1,8 +1,8 @@
+use crate::paths::provider_kind_to_db_string;
 use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use tt_types::base_data::Candle;
 use tt_types::providers::ProviderKind;
-use crate::paths::provider_kind_to_db_string;
 
 // ---------- Disambiguation key for same-timestamp events ----------
 // Store time in microseconds to align with Parquet/Arrow, plus a tie-breaker.

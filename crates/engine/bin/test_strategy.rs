@@ -8,9 +8,8 @@ use tokio_util::codec::length_delimited::LengthDelimitedCodec;
 use tokio_util::codec::{FramedRead, FramedWrite};
 use tracing::{info, warn};
 use tt_bus::ClientMessageBus;
-use tt_database::init::init_db;
-use tt_engine::EngineRuntime;
-use tt_engine::Strategy;
+use tt_engine::engine::EngineRuntime;
+use tt_engine::engine::Strategy;
 use tt_types::base_data::OrderBook;
 use tt_types::keys::Topic;
 use tt_types::securities::symbols::Instrument;
@@ -47,10 +46,10 @@ impl Strategy for TestStrategy {
     async fn on_quote(&self, q: tt_types::base_data::Bbo) {
         println!("{:?}", q);
     }
+    async fn on_bar(&self, _b: tt_types::base_data::Candle) {}
     async fn on_depth(&self, d: OrderBook) {
         println!("{:?}", d);
     }
-    async fn on_bar(&self, _b: tt_types::base_data::Candle) {}
     async fn on_orders_batch(&self, b: wire::OrdersBatch) {
         println!("{:?}", b);
     }
@@ -71,7 +70,6 @@ impl Strategy for TestStrategy {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Load .env if available
-    let _ = dotenvy::dotenv();
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
@@ -150,27 +148,27 @@ async fn main() -> anyhow::Result<()> {
     // Send key-based subscribe and initial credits directly over the transport channel.
     let _ = req_tx
         .send(Request::SubscribeKey(tt_types::wire::SubscribeKey {
-            topic: Topic::Ticks,
+            topic: Topic::Quotes,
             key: key.clone(),
             latest_only: false,
             from_seq: 0,
         }))
         .await;
-    let _ = req_tx
-        .send(Request::SubscribeKey(tt_types::wire::SubscribeKey {
-            topic: Topic::Depth,
-            key: key.clone(),
-            latest_only: false,
-            from_seq: 0,
-        }))
-        .await;
+    /* let _ = req_tx
+    .send(Request::SubscribeKey(tt_types::wire::SubscribeKey {
+        topic: Topic::Depth,
+        key: key.clone(),
+        latest_only: false,
+        from_seq: 0,
+    }))
+    .await;*/
     info!(
         ?key,
         "sent SubscribeKey for MNQZ5 ticks + depth (server-managed backpressure; no credits)"
     );
 
     // Keep running for a bit to receive live data
-    sleep(Duration::from_secs(15)).await;
+    sleep(Duration::from_secs(60)).await;
 
     let _ = req_tx
         .send(Request::Kick(Kick {

@@ -2,32 +2,46 @@ use chrono::{Duration, TimeZone, Utc};
 use rust_decimal::Decimal;
 use tt_types::base_data::{Bbo, Candle, Resolution, Side, Tick};
 use tt_types::consolidators::{
-    BboToCandlesConsolidator, CandlesToCandlesConsolidator,
-    TicksToCandlesConsolidator, TicksToTickBarsConsolidator,
+    BboToCandlesConsolidator, CandlesToCandlesConsolidator, TicksToCandlesConsolidator,
+    TicksToTickBarsConsolidator,
 };
 use tt_types::securities::symbols::Instrument;
 
-fn d(v: i64) -> Decimal { Decimal::from_i128_with_scale(v as i128, 0) }
+fn d(v: i64) -> Decimal {
+    Decimal::from_i128_with_scale(v as i128, 0)
+}
 
 fn tick(sym: &str, t_ns: i64, px: i64, sz: i64, side: Side) -> Tick {
     let ts = chrono::DateTime::<Utc>::from_timestamp(
         t_ns.div_euclid(1_000_000_000),
         t_ns.rem_euclid(1_000_000_000) as u32,
-    ).unwrap();
+    )
+    .unwrap();
     let instrument = Instrument::try_from(sym).unwrap();
-    Tick { symbol: sym.to_string(), instrument, price: d(px), volume: d(sz), time: ts, side, venue_seq: None }
+    Tick {
+        symbol: sym.to_string(),
+        instrument,
+        price: d(px),
+        volume: d(sz),
+        time: ts,
+        side,
+        venue_seq: None,
+    }
 }
 
 fn bbo(sym: &str, t_ns: i64, bid: i64, ask: i64) -> Bbo {
     let ts = chrono::DateTime::<Utc>::from_timestamp(
         t_ns.div_euclid(1_000_000_000),
         t_ns.rem_euclid(1_000_000_000) as u32,
-    ).unwrap();
+    )
+    .unwrap();
     Bbo {
         symbol: sym.to_string(),
         instrument: Instrument::try_from(sym).unwrap(),
-        bid: d(bid), bid_size: d(1),
-        ask: d(ask), ask_size: d(1),
+        bid: d(bid),
+        bid_size: d(1),
+        ask: d(ask),
+        ask_size: d(1),
         time: ts,
         is_snapshot: Some(true),
         venue_seq: None,
@@ -51,8 +65,13 @@ fn candle(
         instrument: Instrument::try_from(sym).unwrap(),
         time_start: start,
         time_end: start + Duration::seconds(secs) - Duration::nanoseconds(1),
-        open: d(o), high: d(h), low: d(l), close: d(c),
-        volume: d(vol), ask_volume: d(0), bid_volume: d(0),
+        open: d(o),
+        high: d(h),
+        low: d(l),
+        close: d(c),
+        volume: d(vol),
+        ask_volume: d(0),
+        bid_volume: d(0),
         resolution: Resolution::Minutes(1),
     }
 }
@@ -67,11 +86,24 @@ fn ticks_to_m1_single_bar() {
         Instrument::try_from(symbol).unwrap(),
     );
 
-    let base = Utc.with_ymd_and_hms(2025, 9, 21, 10, 0, 0).unwrap().timestamp_nanos_opt().unwrap();
+    let base = Utc
+        .with_ymd_and_hms(2025, 9, 21, 10, 0, 0)
+        .unwrap()
+        .timestamp_nanos_opt()
+        .unwrap();
     // 3 ticks within the first minute bucket
-    assert!(cons.update_tick(&tick(symbol, base + 100_000_000, 10000, 1, Side::Buy)).is_none());
-    assert!(cons.update_tick(&tick(symbol, base + 200_000_000, 10005, 2, Side::Sell)).is_none());
-    assert!(cons.update_tick(&tick(symbol, base + 500_000_000, 10003, 3, Side::Buy)).is_none());
+    assert!(
+        cons.update_tick(&tick(symbol, base + 100_000_000, 10000, 1, Side::Buy))
+            .is_none()
+    );
+    assert!(
+        cons.update_tick(&tick(symbol, base + 200_000_000, 10005, 2, Side::Sell))
+            .is_none()
+    );
+    assert!(
+        cons.update_tick(&tick(symbol, base + 500_000_000, 10003, 3, Side::Buy))
+            .is_none()
+    );
 
     // A tick in the next minute should flush the first bar
     let bar = cons
@@ -111,7 +143,11 @@ fn ticks_to_tickbars_two_bars() {
         Instrument::try_from(symbol).unwrap(),
     );
 
-    let base = Utc.with_ymd_and_hms(2025, 9, 21, 10, 5, 0).unwrap().timestamp_nanos_opt().unwrap();
+    let base = Utc
+        .with_ymd_and_hms(2025, 9, 21, 10, 5, 0)
+        .unwrap()
+        .timestamp_nanos_opt()
+        .unwrap();
     // 6 ticks -> expect two bars of 3 each
     let mut outs = vec![];
     for i in 0..6 {
@@ -121,7 +157,9 @@ fn ticks_to_tickbars_two_bars() {
             10000 + i as i64,
             1,
             if i % 2 == 0 { Side::Buy } else { Side::Sell },
-        )) { outs.push(tb); }
+        )) {
+            outs.push(tb);
+        }
     }
 
     assert_eq!(outs.len(), 2, "expected two tick bars");
@@ -199,11 +237,21 @@ fn bbo_to_m1_two_bars_midprice() {
         Instrument::try_from(symbol).unwrap(),
     );
 
-    let base = Utc.with_ymd_and_hms(2025, 9, 21, 11, 0, 0).unwrap().timestamp_nanos_opt().unwrap();
+    let base = Utc
+        .with_ymd_and_hms(2025, 9, 21, 11, 0, 0)
+        .unwrap()
+        .timestamp_nanos_opt()
+        .unwrap();
 
     // First minute
-    assert!(cons.update_bbo(&bbo(symbol, base + 100_000_000, 10000, 10002)).is_none()); // mid 10001
-    assert!(cons.update_bbo(&bbo(symbol, base + 200_000_000, 10005, 10007)).is_none()); // mid 10006
+    assert!(
+        cons.update_bbo(&bbo(symbol, base + 100_000_000, 10000, 10002))
+            .is_none()
+    ); // mid 10001
+    assert!(
+        cons.update_bbo(&bbo(symbol, base + 200_000_000, 10005, 10007))
+            .is_none()
+    ); // mid 10006
     // Second minute -> triggers flush
     let out1 = cons
         .update_bbo(&bbo(symbol, base + 60_000_000_000 + 1_000_000, 9999, 10001))
@@ -255,7 +303,9 @@ fn candles_to_m5_no_feedback_duplicate() {
         7,
     );
 
-    let out = cons.update_candle(&c_next).expect("expected a single 5m bar");
+    let out = cons
+        .update_candle(&c_next)
+        .expect("expected a single 5m bar");
     assert_eq!(out.resolution, Resolution::Minutes(5));
     assert_eq!(out.time_start, start);
 

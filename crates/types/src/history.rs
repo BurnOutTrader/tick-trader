@@ -1,8 +1,8 @@
-use chrono::{DateTime, Utc};
-use uuid::Uuid;
 use crate::base_data::{Bbo, Candle, OrderBook, Tick};
 use crate::keys::Topic;
 use crate::securities::symbols::Instrument;
+use chrono::{DateTime, Utc};
+use uuid::Uuid;
 
 /// What a backtest wants to pull.
 #[derive(Clone, Debug)]

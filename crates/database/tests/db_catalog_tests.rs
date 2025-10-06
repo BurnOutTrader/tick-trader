@@ -1,7 +1,8 @@
 use chrono::{NaiveDate, TimeZone, Utc};
 use tt_database::duck::{
-    create_partitions_schema, earliest_available, latest_available, quarantine_unreadable_partitions,
-    upsert_dataset, upsert_provider, upsert_symbol, upsert_partition, prune_missing_partitions,
+    create_partitions_schema, earliest_available, latest_available, prune_missing_partitions,
+    quarantine_unreadable_partitions, upsert_dataset, upsert_partition, upsert_provider,
+    upsert_symbol,
 };
 use tt_database::init::create_identity_schema_if_needed;
 use tt_types::keys::Topic;
@@ -134,7 +135,11 @@ fn test_prune_missing_partitions_keeps_existing() {
     prune_missing_partitions(&conn).unwrap();
 
     let count_all: i64 = conn
-        .query_row("SELECT COUNT(*) FROM partitions WHERE dataset_id = ?", duckdb::params![dataset_id], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM partitions WHERE dataset_id = ?",
+            duckdb::params![dataset_id],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(count_all, 1);
 
@@ -190,7 +195,11 @@ fn test_quarantine_unreadable_partitions_removes_bad_files() {
     assert_eq!(removed, 1);
 
     let remaining: i64 = conn
-        .query_row("SELECT COUNT(*) FROM partitions WHERE dataset_id = ?", duckdb::params![dataset_id], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM partitions WHERE dataset_id = ?",
+            duckdb::params![dataset_id],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(remaining, 0);
 }

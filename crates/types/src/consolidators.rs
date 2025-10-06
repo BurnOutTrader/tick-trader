@@ -1,8 +1,8 @@
 use crate::base_data::{Bbo, Candle, Resolution, Side, Tick, TickBar};
-use crate::securities::market_hours::{next_session_after, session_bounds, MarketHours};
+use crate::securities::market_hours::{MarketHours, next_session_after, session_bounds};
 use crate::securities::symbols::Instrument;
 use chrono::{DateTime, Duration, TimeZone, Utc};
-use rust_decimal::{dec, Decimal};
+use rust_decimal::{Decimal, dec};
 use std::sync::Arc;
 
 // ===================== Helpers =====================
@@ -163,8 +163,15 @@ pub struct TicksToCandlesConsolidator {
 }
 
 enum Win {
-    Fixed { start: DateTime<Utc>, end: DateTime<Utc>, len: Duration },
-    Session { open: DateTime<Utc>, close: DateTime<Utc> },
+    Fixed {
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+        len: Duration,
+    },
+    Session {
+        open: DateTime<Utc>,
+        close: DateTime<Utc>,
+    },
 }
 
 impl TicksToCandlesConsolidator {
@@ -375,9 +382,43 @@ impl BboToCandlesConsolidator {
         }
     }
 
-    fn init_win(&self, t: DateTime<Utc>) -> Win { TicksToCandlesConsolidator { dst: self.dst.clone(), out_symbol: String::new(), hours: self.hours.clone(), instrument: self.instrument.clone(), o: None, h: None, l: None, c: None, vol: Decimal::ZERO, bid_vol: Decimal::ZERO, ask_vol: Decimal::ZERO, win: None }.init_win(t) }
-    fn inside(t: DateTime<Utc>, w: &Win) -> bool { TicksToCandlesConsolidator::inside(t, w) }
-    fn advance(&self, t_last: DateTime<Utc>, w: &Win) -> Win { TicksToCandlesConsolidator { dst: self.dst.clone(), out_symbol: String::new(), hours: self.hours.clone(), instrument: self.instrument.clone(), o: None, h: None, l: None, c: None, vol: Decimal::ZERO, bid_vol: Decimal::ZERO, ask_vol: Decimal::ZERO, win: None }.advance(t_last, w) }
+    fn init_win(&self, t: DateTime<Utc>) -> Win {
+        TicksToCandlesConsolidator {
+            dst: self.dst.clone(),
+            out_symbol: String::new(),
+            hours: self.hours.clone(),
+            instrument: self.instrument.clone(),
+            o: None,
+            h: None,
+            l: None,
+            c: None,
+            vol: Decimal::ZERO,
+            bid_vol: Decimal::ZERO,
+            ask_vol: Decimal::ZERO,
+            win: None,
+        }
+        .init_win(t)
+    }
+    fn inside(t: DateTime<Utc>, w: &Win) -> bool {
+        TicksToCandlesConsolidator::inside(t, w)
+    }
+    fn advance(&self, t_last: DateTime<Utc>, w: &Win) -> Win {
+        TicksToCandlesConsolidator {
+            dst: self.dst.clone(),
+            out_symbol: String::new(),
+            hours: self.hours.clone(),
+            instrument: self.instrument.clone(),
+            o: None,
+            h: None,
+            l: None,
+            c: None,
+            vol: Decimal::ZERO,
+            bid_vol: Decimal::ZERO,
+            ask_vol: Decimal::ZERO,
+            win: None,
+        }
+        .advance(t_last, w)
+    }
 
     fn flush(&mut self, start: DateTime<Utc>, end: DateTime<Utc>) -> Option<Candle> {
         if let (Some(oo), Some(hh), Some(ll), Some(cc)) = (self.o, self.h, self.l, self.c) {
@@ -395,7 +436,11 @@ impl BboToCandlesConsolidator {
                 bid_volume: dec!(0),
                 resolution: self.dst.clone(),
             };
-            self.o = None; self.h = None; self.l = None; self.c = None; self.v = Decimal::ZERO;
+            self.o = None;
+            self.h = None;
+            self.l = None;
+            self.c = None;
+            self.v = Decimal::ZERO;
             return Some(out);
         }
         None
@@ -403,16 +448,25 @@ impl BboToCandlesConsolidator {
 
     pub fn update_bbo(&mut self, bbo: &Bbo) -> Option<Candle> {
         let t = bbo.time;
-        if self.win.is_none() { self.win = Some(self.init_win(t)); }
+        if self.win.is_none() {
+            self.win = Some(self.init_win(t));
+        }
         while !Self::inside(t, self.win.as_ref().unwrap()) {
-            let (start, end) = match self.win.as_ref().unwrap() { Win::Fixed { start, end, .. } => (*start, *end), Win::Session { open, close } => (*open, *close) };
+            let (start, end) = match self.win.as_ref().unwrap() {
+                Win::Fixed { start, end, .. } => (*start, *end),
+                Win::Session { open, close } => (*open, *close),
+            };
             let flushed = self.flush(start, end);
             let cur = self.win.take().unwrap();
             self.win = Some(self.advance(t, &cur));
-            if flushed.is_some() { return flushed; }
+            if flushed.is_some() {
+                return flushed;
+            }
         }
         let mid = (bbo.bid + bbo.ask) / Decimal::from(2);
-        if self.o.is_none() { self.o = Some(mid); }
+        if self.o.is_none() {
+            self.o = Some(mid);
+        }
         self.h = Some(self.h.map_or(mid, |x| x.max(mid)));
         self.l = Some(self.l.map_or(mid, |x| x.min(mid)));
         self.c = Some(mid);
@@ -421,15 +475,29 @@ impl BboToCandlesConsolidator {
 
     pub fn update_time(&mut self, t_now: DateTime<Utc>) -> Option<Candle> {
         if let Some(w) = self.win.as_ref() {
-            let end = match w { Win::Fixed { end, .. } => *end, Win::Session { close, .. } => *close };
+            let end = match w {
+                Win::Fixed { end, .. } => *end,
+                Win::Session { close, .. } => *close,
+            };
             if t_now >= end {
-                let (start, _end) = match w { Win::Fixed { start, end, .. } => (*start, *end), Win::Session { open, close } => (*open, *close) };
+                let (start, _end) = match w {
+                    Win::Fixed { start, end, .. } => (*start, *end),
+                    Win::Session { open, close } => (*open, *close),
+                };
                 let flushed = self.flush(start, end);
                 let mut next_w = self.win.take().unwrap();
                 loop {
                     let next = self.advance(t_now, &next_w);
-                    let end_next = match &next { Win::Fixed { end, .. } => *end, Win::Session { close, .. } => *close };
-                    if t_now < end_next { next_w = next; break; } else { next_w = next; }
+                    let end_next = match &next {
+                        Win::Fixed { end, .. } => *end,
+                        Win::Session { close, .. } => *close,
+                    };
+                    if t_now < end_next {
+                        next_w = next;
+                        break;
+                    } else {
+                        next_w = next;
+                    }
                 }
                 self.win = Some(next_w);
                 return flushed;
@@ -495,7 +563,11 @@ impl CandlesToCandlesConsolidator {
             _ => {
                 let len = fixed_len(&self.dst);
                 let start = floor_to(&self.dst, t);
-                Win::Fixed { start, end: start + len, len }
+                Win::Fixed {
+                    start,
+                    end: start + len,
+                    len,
+                }
             }
         }
     }
@@ -511,13 +583,25 @@ impl CandlesToCandlesConsolidator {
         match w {
             Win::Fixed { end, len, .. } => {
                 let mut s = *end;
-                while t_last >= s { s += *len; }
-                Win::Fixed { start: s - *len, end: s, len: *len }
+                while t_last >= s {
+                    s += *len;
+                }
+                Win::Fixed {
+                    start: s - *len,
+                    end: s,
+                    len: *len,
+                }
             }
             Win::Session { close, .. } => {
-                let mh = self.hours.as_ref().expect("session advance needs MarketHours");
+                let mh = self
+                    .hours
+                    .as_ref()
+                    .expect("session advance needs MarketHours");
                 let (nopen, nclose) = next_session_after(mh, *close);
-                Win::Session { open: nopen, close: nclose }
+                Win::Session {
+                    open: nopen,
+                    close: nclose,
+                }
             }
         }
     }
@@ -540,33 +624,57 @@ impl CandlesToCandlesConsolidator {
                 bid_volume: self.bid_vol,
                 resolution: self.dst.clone(),
             };
-            self.b_start = None; self.b_end = None;
-            self.o = None; self.h = None; self.l = None; self.c = None;
-            self.vol = Decimal::ZERO; self.ask_vol = Decimal::ZERO; self.bid_vol = Decimal::ZERO;
+            self.b_start = None;
+            self.b_end = None;
+            self.o = None;
+            self.h = None;
+            self.l = None;
+            self.c = None;
+            self.vol = Decimal::ZERO;
+            self.ask_vol = Decimal::ZERO;
+            self.bid_vol = Decimal::ZERO;
             return Some(out);
         }
         None
     }
 
     pub fn update_candle(&mut self, bar: &Candle) -> Option<Candle> {
-        if bar.resolution == self.dst { return None; }
+        if bar.resolution == self.dst {
+            return None;
+        }
         let ts = bar.time_start;
-        if self.win.is_none() { self.win = Some(self.init_win(ts)); }
+        if self.win.is_none() {
+            self.win = Some(self.init_win(ts));
+        }
         while !Self::contains(ts, self.win.as_ref().unwrap()) {
-            let (start, end) = match self.win.as_ref().unwrap() { Win::Fixed { start, end, .. } => (*start, *end), Win::Session { open, close } => (*open, *close) };
+            let (start, end) = match self.win.as_ref().unwrap() {
+                Win::Fixed { start, end, .. } => (*start, *end),
+                Win::Session { open, close } => (*open, *close),
+            };
             let flushed = self.flush(start, end);
             let cur = self.win.take().unwrap();
             self.win = Some(self.advance(ts, &cur));
-            if flushed.is_some() { return flushed; }
+            if flushed.is_some() {
+                return flushed;
+            }
         }
-        let (w_start, w_end) = match self.win.as_ref().unwrap() { Win::Fixed { start, end, .. } => (*start, *end), Win::Session { open, close } => (*open, *close) };
-        if self.b_start.is_none() { self.b_start = Some(w_start); }
+        let (w_start, w_end) = match self.win.as_ref().unwrap() {
+            Win::Fixed { start, end, .. } => (*start, *end),
+            Win::Session { open, close } => (*open, *close),
+        };
+        if self.b_start.is_none() {
+            self.b_start = Some(w_start);
+        }
         self.b_end = Some(w_end.max(bar.time_end));
-        if self.o.is_none() { self.o = Some(bar.open); }
+        if self.o.is_none() {
+            self.o = Some(bar.open);
+        }
         self.h = Some(self.h.map_or(bar.high, |x| x.max(bar.high)));
         self.l = Some(self.l.map_or(bar.low, |x| x.min(bar.low)));
         self.c = Some(bar.close);
-        self.vol += bar.volume; self.ask_vol += bar.ask_volume; self.bid_vol += bar.bid_volume;
+        self.vol += bar.volume;
+        self.ask_vol += bar.ask_volume;
+        self.bid_vol += bar.bid_volume;
         None
     }
 }

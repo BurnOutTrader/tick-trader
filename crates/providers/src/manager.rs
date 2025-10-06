@@ -119,7 +119,10 @@ impl UpstreamManager for ProviderManager {
         Ok(())
     }
 
-    async fn get_account_info(&self, provider: ProviderKind) -> Result<tt_types::wire::AccountInfoResponse> {
+    async fn get_account_info(
+        &self,
+        provider: ProviderKind,
+    ) -> Result<tt_types::wire::AccountInfoResponse> {
         // Ensure provider exists; connect execution side if needed
         self.ensure_pair(provider).await?;
         let ex = self
@@ -137,10 +140,18 @@ impl UpstreamManager for ProviderManager {
                 provider,
             });
         }
-        Ok(tt_types::wire::AccountInfoResponse { provider, corr_id: 0, accounts })
+        Ok(tt_types::wire::AccountInfoResponse {
+            provider,
+            corr_id: 0,
+            accounts,
+        })
     }
 
-    async fn get_instruments(&self, provider: ProviderKind, pattern: Option<String>) -> Result<Vec<tt_types::securities::symbols::Instrument>> {
+    async fn get_instruments(
+        &self,
+        provider: ProviderKind,
+        pattern: Option<String>,
+    ) -> Result<Vec<tt_types::securities::symbols::Instrument>> {
         // Ensure provider exists and ask the MD side for instruments (if supported by the trait impl)
         self.ensure_pair(provider).await?;
         if let Some(md) = self.md.get(&provider) {
@@ -150,13 +161,24 @@ impl UpstreamManager for ProviderManager {
         Ok(Vec::new())
     }
 
-    async fn get_instruments_map(&self, provider: ProviderKind) -> Result<Vec<(tt_types::securities::symbols::Instrument, tt_types::wire::FuturesContractWire)>> {
+    async fn get_instruments_map(
+        &self,
+        provider: ProviderKind,
+    ) -> Result<
+        Vec<(
+            tt_types::securities::symbols::Instrument,
+            tt_types::wire::FuturesContractWire,
+        )>,
+    > {
         self.ensure_pair(provider).await?;
         if let Some(md) = self.md.get(&provider) {
             let map = md.instruments_map().await.unwrap_or_default();
             let mut out = Vec::with_capacity(map.len());
             for (inst, fc) in map.into_iter() {
-                out.push((inst.clone(), tt_types::wire::FuturesContractWire::from_contract(&fc)));
+                out.push((
+                    inst.clone(),
+                    tt_types::wire::FuturesContractWire::from_contract(&fc),
+                ));
             }
             return Ok(out);
         }

@@ -13,6 +13,7 @@ use crate::catalog::ensure_dataset;
 use crate::duck::upsert_partition;
 use crate::models::{BboRow, CandleRow, TickRow};
 use crate::parquet::{write_bbo_zstd, write_candles_zstd, write_ticks_zstd};
+use crate::paths::{data_file_name, partition_dir};
 use anyhow::{Result, anyhow};
 use chrono::{Datelike, Month, NaiveDate, Utc};
 use std::{
@@ -23,7 +24,6 @@ use tt_types::base_data::OrderBook;
 use tt_types::keys::Topic;
 use tt_types::providers::ProviderKind;
 use tt_types::securities::symbols::{Instrument, MarketType};
-use crate::paths::{data_file_name, partition_dir};
 // ------------------------------
 // Shared time utils
 // ------------------------------
@@ -58,14 +58,7 @@ pub fn persist_ticks_partition_zstd(
     let date = NaiveDate::from_ymd_opt(min_dt.year(), month.number_from_month(), 1)
         .ok_or_else(|| anyhow!("invalid year/month for ticks partition"))?;
 
-    let dir = partition_dir(
-        data_root,
-        *provider,
-        market_type,
-        instrument,
-        topic,
-        year,
-    );
+    let dir = partition_dir(data_root, *provider, market_type, instrument, topic, year);
     fs::create_dir_all(&dir)?;
 
     // Deterministic monthly target file
@@ -177,14 +170,7 @@ pub fn persist_candles_partition_zstd(
     let date = NaiveDate::from_ymd_opt(min_dt.year(), month.number_from_month(), 1)
         .ok_or_else(|| anyhow!("invalid year/month for candles partition"))?;
 
-    let dir = partition_dir(
-        data_root,
-        *provider,
-        market_type,
-        instrument,
-        topic,
-        year,
-    );
+    let dir = partition_dir(data_root, *provider, market_type, instrument, topic, year);
     fs::create_dir_all(&dir)?;
 
     // Deterministic monthly target file
@@ -281,14 +267,7 @@ pub fn persist_bbo_partition_zstd(
     let date = NaiveDate::from_ymd_opt(min_dt.year(), month.number_from_month(), 1)
         .ok_or_else(|| anyhow!("invalid year/month for bbo partition"))?;
 
-    let dir = partition_dir(
-        data_root,
-        *provider,
-        market_type,
-        instrument,
-        topic,
-        year,
-    );
+    let dir = partition_dir(data_root, *provider, market_type, instrument, topic, year);
     fs::create_dir_all(&dir)?;
 
     // Deterministic monthly target file

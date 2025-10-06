@@ -1,6 +1,7 @@
 use crate::duck::{latest_available, resolve_dataset_id};
 use crate::layout::Layout;
 use crate::models::SeqBound;
+use crate::paths::provider_kind_to_db_string;
 use ahash::AHashMap;
 use anyhow::{Context, anyhow};
 use chrono::{DateTime, Utc};
@@ -9,12 +10,11 @@ use rust_decimal::Decimal;
 use serde_json::Value as JsonValue;
 use std::str::FromStr;
 use std::sync::Arc;
+use tt_types::base_data::{Bbo, Candle, OrderBook, Side, Tick};
 use tt_types::base_data::{Feed, Resolution};
 use tt_types::keys::Topic;
-use tt_types::securities::symbols::{Exchange, Instrument, MarketType};
-use tt_types::base_data::{Bbo, Tick, Candle, OrderBook, Side};
 use tt_types::providers::ProviderKind;
-use crate::paths::provider_kind_to_db_string;
+use tt_types::securities::symbols::{Exchange, Instrument, MarketType};
 
 #[inline]
 fn dt_to_us(dt: DateTime<Utc>) -> i64 {
@@ -45,7 +45,9 @@ pub fn earliest_event_ts(
     let (time_col, is_bigint) = match topic {
         Topic::Ticks => ("key_ts_utc_us", true),
         Topic::Quotes => ("key_ts_utc_us", true), // you keep both key_ts_utc_us and time_us; choose key*
-        Topic::Candles1s | Topic::Candles1m | Topic::Candles1h | Topic::Candles1d => ("time_start_us", true),
+        Topic::Candles1s | Topic::Candles1m | Topic::Candles1h | Topic::Candles1d => {
+            ("time_start_us", true)
+        }
         Topic::Depth => ("time", false), // still TIMESTAMP in your writer
         _ => ("key_ts_utc_us", true),
     };
@@ -70,7 +72,13 @@ pub fn earliest_event_ts(
     );
 
     let mut stmt = conn.prepare(&sql)?;
-    let mut rows = stmt.query(params![glob, provider_kind_to_db_string(provider), kind_s, instrument.to_string(), exchange.to_string()])?;
+    let mut rows = stmt.query(params![
+        glob,
+        provider_kind_to_db_string(provider),
+        kind_s,
+        instrument.to_string(),
+        exchange.to_string()
+    ])?;
 
     if let Some(row) = rows.next()? {
         if is_bigint {
@@ -120,7 +128,9 @@ pub fn earliest_any(
     // union all with parameterized table functions is awkward; simplest path:
     let mut best: Option<DateTime<Utc>> = None;
     for s in instruments {
-        if let Some(ts) = earliest_event_ts(conn, layout, provider, topic, s, exchange, market_type)? {
+        if let Some(ts) =
+            earliest_event_ts(conn, layout, provider, topic, s, exchange, market_type)?
+        {
             best = match best {
                 None => Some(ts),
                 Some(b) if ts < b => Some(ts),
@@ -142,12 +152,8 @@ pub fn latest_data_time(
     instrument: &Instrument,
     topic: Topic,
 ) -> anyhow::Result<Option<DateTime<Utc>>> {
-    let v: Option<SeqBound> = latest_available(
-        conn,
-        &provider.to_string(),
-        instrument.to_string(),
-        topic,
-    )?;
+    let v: Option<SeqBound> =
+        latest_available(conn, &provider.to_string(), instrument.to_string(), topic)?;
     Ok(v.map(|b| b.ts))
 }
 
@@ -434,7 +440,9 @@ pub fn get_candles_in_range(
         Resolution::Daily => Some(Topic::Candles1d),
         _ => None,
     };
-    let Some(topic) = topic else { return Ok(Vec::new()); };
+    let Some(topic) = topic else {
+        return Ok(Vec::new());
+    };
     let Some(dataset_id) = resolve_dataset_id(conn, provider, symbol, topic)? else {
         return Ok(Vec::new());
     };
@@ -696,7 +704,7 @@ pub fn earliest_book_available(
         "select min(min_ts_ns) as ts_ns
             from partitions
            where dataset_id = ?",
-     )?;
+    )?;
     let ts_ns: Option<i64> = q
         .query_row(duckdb::params![dataset_id], |r| r.get(0))
         .optional()?;
@@ -720,7 +728,7 @@ pub fn latest_book_available(
         "select max(max_ts_ns) as ts_ns
             from partitions
            where dataset_id = ?",
-     )?;
+    )?;
     let ts_ns: Option<i64> = q
         .query_row(duckdb::params![dataset_id], |r| r.get(0))
         .optional()?;

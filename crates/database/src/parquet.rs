@@ -294,11 +294,7 @@ pub fn write_candles_zstd(
     Ok(())
 }
 
-pub fn write_bbo_zstd(
-    path: &Path,
-    rows: &[BboRow],
-    zstd_level: i32,
-) -> Result<(), ParquetError> {
+pub fn write_bbo_zstd(path: &Path, rows: &[BboRow], zstd_level: i32) -> Result<(), ParquetError> {
     if rows.is_empty() {
         return Ok(());
     }

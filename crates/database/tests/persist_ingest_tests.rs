@@ -1,8 +1,6 @@
 #![cfg(feature = "queries")]
 use chrono::{Datelike, NaiveDate, TimeZone, Utc};
-use database::paths::{
-    daily_file_name, monthly_file_name, weekly_file_name,
-};
+use database::paths::{daily_file_name, monthly_file_name, weekly_file_name};
 use standard_lib::database;
 use standard_lib::database::duck::create_partitions_schema;
 use standard_lib::database::ingest::{ingest_bbo, ingest_candles, ingest_ticks};

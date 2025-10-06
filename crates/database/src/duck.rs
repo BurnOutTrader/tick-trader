@@ -1,5 +1,5 @@
 //! DuckDB catalog and query helpers.
-//! 
+//!
 //! This module owns the in-DB catalog schema (datasets, partitions) and provides helpers to:
 //! - Upsert providers/symbols/datasets and monthly partitions with stats.
 //! - Discover earliest/latest availability across partitions without reading payloads.
@@ -7,6 +7,7 @@
 //! - Resolve dataset IDs from human-friendly keys and bridge Topic -> resolution keys.
 
 use crate::models::SeqBound;
+use crate::paths::topic_to_db_string;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use duckdb::{Connection, Error, OptionalExt, params};
@@ -15,7 +16,6 @@ use thiserror::Error;
 use tracing::error;
 use tt_types::base_data::Resolution;
 use tt_types::keys::Topic;
-use crate::paths::topic_to_db_string;
 
 // --- Helpers bridging legacy dataset keys to new Topic layout ---
 fn topic_to_kind_key(topic: Topic) -> String {
@@ -34,7 +34,8 @@ fn topic_to_resolution(topic: Topic) -> Option<Resolution> {
 }
 
 fn resolution_key(res: Option<Resolution>) -> String {
-    res.map(|r| r.to_os_string()).unwrap_or_else(|| "none".to_string())
+    res.map(|r| r.to_os_string())
+        .unwrap_or_else(|| "none".to_string())
 }
 
 /// Create or reuse a DuckDB connection (file-backed or in-memory).
@@ -131,11 +132,7 @@ impl Duck {
         Ok(())
     }
 
-    pub fn create_view(
-        &self,
-        view_name: &str,
-        _topic: Topic,
-    ) -> Result<(), DuckError> {
+    pub fn create_view(&self, view_name: &str, _topic: Topic) -> Result<(), DuckError> {
         // Legacy helper: we no longer construct filesystem-glob views here.
         // Create an empty view placeholder to keep API compatibility.
         self.conn.execute_batch(&format!(

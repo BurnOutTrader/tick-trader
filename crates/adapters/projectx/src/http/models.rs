@@ -7,7 +7,7 @@ use tokio::{sync::watch, task::JoinHandle};
 use tt_types::base_data::{Candle, Exchange, Resolution};
 use tt_types::securities::futures_helpers::extract_root;
 use tt_types::securities::market_hours;
-use tt_types::securities::market_hours::{hours_for_exchange, MarketHours};
+use tt_types::securities::market_hours::{MarketHours, hours_for_exchange};
 use tt_types::securities::symbols::Instrument;
 
 #[allow(unused)]
@@ -145,9 +145,7 @@ impl RetrieveBarsResponse {
         let time_start = chrono::DateTime::parse_from_rfc3339(&bar.t)
             .map(|dt| dt.with_timezone(&Utc))
             .map_err(|e| anyhow::anyhow!("parse bar time failed: {}", e))?;
-        let time_end = {
-            market_hours.next_bar_end(time_start, resolution)
-        };
+        let time_end = { market_hours.next_bar_end(time_start, resolution) };
         let root = extract_root(&instrument);
         let candle = Candle {
             symbol: root,
