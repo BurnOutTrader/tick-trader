@@ -129,6 +129,10 @@ impl Instrument {
         }
         Ok(Self(name.to_string()))
     }
+    pub fn to_path_name(&self) -> String {
+        self.to_string().to_lowercase()
+    }
+    
 }
 impl FromStr for Instrument {
     type Err = ();

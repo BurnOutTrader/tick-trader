@@ -16,10 +16,10 @@ pub enum Topic {
     Ticks = 1,
     Quotes = 2,
     Depth = 3,
-    Bars1s = 4,
-    Bars1m = 5,
-    Bars1h = 6,
-    Bars1d = 7,
+    Candles1s = 4,
+    Candles1m = 5,
+    Candles1h = 6,
+    Candles1d = 7,
     AccountEvt = 8,
     Positions = 9,
     Orders = 10,
@@ -29,17 +29,17 @@ pub enum Topic {
 impl Topic {
     pub fn id(self) -> TopicId {
         use crate::keys::Topic::{
-            AccountEvt, Bars1d, Bars1h, Bars1m, Bars1s, Depth, Fills, Orders, Positions, Quotes,
+            AccountEvt, Candles1d, Candles1h, Candles1m, Candles1s, Depth, Fills, Orders, Positions, Quotes,
             Ticks,
         };
         let id = match self {
             Ticks => 1,
             Quotes => 2,
             Depth => 3,
-            Bars1s => 4,
-            Bars1m => 5,
-            Bars1h => 6,
-            Bars1d => 7,
+            Candles1s => 4,
+            Candles1m => 5,
+            Candles1h => 6,
+            Candles1d => 7,
             AccountEvt => 8,
             Positions => 9,
             Orders => 10,

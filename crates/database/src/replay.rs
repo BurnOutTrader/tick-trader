@@ -82,7 +82,7 @@ impl SymbolKindReplayer {
         rows.sort_by_key(|b| ts_ns(&b.time));
         Self {
             tag,
-            kind: DataKind::BookL2,
+            kind: DataKind::Depth,
             ticks: [].into(),
             candles: [].into(),
             bbo: [].into(),
@@ -110,7 +110,7 @@ impl ReplaySource for SymbolKindReplayer {
         match self.kind {
             DataKind::Tick => self.ticks.front().map(|t| t.time),
             DataKind::Candle => self.candles.front().map(|c| c.time_end),
-            DataKind::BookL2 => self.books.front().map(|b| b.time),
+            DataKind::Depth => self.books.front().map(|b| b.time),
             DataKind::Bbo => self.bbo.front().map(|q| q.time),
         }
     }
@@ -135,7 +135,7 @@ impl ReplaySource for SymbolKindReplayer {
                     hub.broadcast_candles(v);
                 }
             }
-            DataKind::BookL2 => {
+            DataKind::Depth => {
                 let mut batch = Vec::with_capacity(4);
                 Self::drain_eq_ts(&mut self.books, next_ts, |b| b.time, &mut batch);
                 for v in batch {

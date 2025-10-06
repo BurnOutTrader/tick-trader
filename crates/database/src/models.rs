@@ -4,19 +4,6 @@ use strum_macros::Display;
 use tt_types::base_data::Candle;
 use tt_types::providers::ProviderKind;
 
-/// What’s stored (determines folder layout + schema columns)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display)]
-pub enum DataKind {
-    /// Executed trades (ticks). One file per **day**.
-    Tick,
-    /// Best bid/offer (BBO quotes). One file per **day**.
-    Bbo,
-    /// Aggregated bars/candles. Daily=per year, Weekly=one file, intraday=per day.
-    Candle,
-
-    BookL2,
-}
-
 // ---------- Disambiguation key for same-timestamp events ----------
 // Store time in microseconds to align with Parquet/Arrow, plus a tie-breaker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

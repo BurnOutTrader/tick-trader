@@ -1,10 +1,8 @@
 use crate::append::append_merge_parquet;
 use crate::catalog::ensure_dataset;
 use crate::duck::upsert_partition;
-use crate::models::{BboRow, CandleRow, DataKind, TickRow};
+use crate::models::{BboRow, CandleRow, TickRow};
 use crate::parquet::{write_bbo_zstd, write_candles_zstd, write_ticks_zstd};
-use crate::paths::get_partion;
-use crate::paths::{daily_file_name, intraday_file_name, monthly_file_name, weekly_file_name};
 use anyhow::{Result, anyhow};
 use chrono::Datelike;
 use chrono::{NaiveDate, Utc};
@@ -15,6 +13,7 @@ use std::{
 use tt_types::base_data::{OrderBook, Resolution};
 use tt_types::providers::ProviderKind;
 use tt_types::securities::symbols::{Instrument, MarketType};
+use crate::paths::partition_dir;
 // ------------------------------
 // Shared time utils
 // ------------------------------
@@ -37,9 +36,9 @@ pub fn persist_ticks_partition_zstd(
         return Err(anyhow!("persist_ticks_partition_zstd: empty batch"));
     }
 
-    let dataset_id = ensure_dataset(conn, provider, symbol, DataKind::Tick, None)?;
+    let dataset_id = ensure_dataset(conn, provider, symbol)?;
 
-    let dir = get_partion(
+    let dir = partition_dir(
         data_root,
         provider,
         market_type,
@@ -354,7 +353,7 @@ pub fn persist_books_partition_duckdb(
     }
 
     // 1) dataset
-    let dataset_id = ensure_dataset(conn, provider, symbol, DataKind::BookL2, Some(resolution))?;
+    let dataset_id = ensure_dataset(conn, provider, symbol, DataKind::Depth, Some(resolution))?;
 
     // 2) target directory (deterministic per-day file like other intraday data)
     let dir = get_partion(
@@ -362,7 +361,7 @@ pub fn persist_books_partition_duckdb(
         provider,
         market_type,
         symbol,
-        DataKind::BookL2,
+        DataKind::Depth,
         resolution,
         date,
     );
@@ -443,7 +442,7 @@ pub fn persist_books_partition_duckdb(
     ))?;
 
     // Deterministic target file (per day)
-    let target_name = intraday_file_name(symbol, DataKind::BookL2, resolution, date);
+    let target_name = intraday_file_name(symbol, DataKind::Depth, resolution, date);
     let target_path = dir.join(target_name);
 
     // Merge/replace (dedup by time + identifiers)

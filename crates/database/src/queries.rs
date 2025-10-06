@@ -1,6 +1,6 @@
 use crate::duck::{latest_available, resolve_dataset_id};
 use crate::layout::Layout;
-use crate::models::{DataKind, SeqBound};
+use crate::models::SeqBound;
 use ahash::AHashMap;
 use anyhow::{Context, anyhow};
 use chrono::{DateTime, Utc};
@@ -9,8 +9,10 @@ use rust_decimal::Decimal;
 use serde_json::Value as JsonValue;
 use std::str::FromStr;
 use std::sync::Arc;
-use tt_types::base_data::Resolution;
-use tt_types::providers::ProviderKind;
+use tt_types::base_data::{Feed, Resolution};
+use tt_types::keys::Topic;
+use tt_types::securities::symbols::Exchange;
+use tt_types::base_data::{Bbo, Tick, Candle, OrderBook, Side};
 
 #[inline]
 fn dt_to_us(dt: DateTime<Utc>) -> i64 {
@@ -26,28 +28,69 @@ fn us_to_dt(us: i64) -> DateTime<Utc> {
     DateTime::from_timestamp(secs, micros * 1_000).expect("valid micros ts")
 }
 
+#[inline]
+fn topic_kind_str(topic: Topic) -> &'static str {
+    match topic {
+        Topic::Ticks => "Tick",
+        Topic::Quotes => "Bbo",
+        Topic::Depth => "Depth",
+        Topic::Candles1s | Topic::Candles1m | Topic::Candles1h | Topic::Candles1d => "Candle",
+        _ => "Unknown",
+    }
+}
+
+#[inline]
+fn res_for_topic(topic: Topic) -> Option<Resolution> {
+    match topic {
+        Topic::Candles1s => Some(Resolution::Seconds(1)),
+        Topic::Candles1m => Some(Resolution::Minutes(1)),
+        Topic::Candles1h => Some(Resolution::Hours(1)),
+        Topic::Candles1d => Some(Resolution::Daily),
+        _ => None,
+    }
+}
+
+#[inline]
+fn feed_to_topic(feed: &Feed) -> Option<Topic> {
+    match feed {
+        Feed::Ticks { .. } => Some(Topic::Ticks),
+        Feed::Bbo { .. } => Some(Topic::Quotes),
+        Feed::OrderBookL2 { .. } => Some(Topic::Depth),
+        Feed::OrderBookL3 { .. } => Some(Topic::Depth), // treat L3 as depth for catalog presence
+        Feed::Candles { resolution, .. } => match resolution {
+            Resolution::Seconds(1) => Some(Topic::Candles1s),
+            Resolution::Minutes(1) => Some(Topic::Candles1m),
+            Resolution::Hours(1) => Some(Topic::Candles1h),
+            Resolution::Daily => Some(Topic::Candles1d),
+            _ => None,
+        },
+        Feed::TickBars { .. } => None,
+    }
+}
+
 /// Return earliest timestamp available for a single (provider, kind, symbol, exchange, res).
 /// Uses partition pruning + Parquet stats; reads no payloads when min/max suffice.
 pub fn earliest_event_ts(
     conn: &Connection,
     layout: &Layout,
     provider: &str,
-    kind: DataKind,
+    topic: Topic,
     symbol: &str,
     exchange: &str,
     res: Resolution,
 ) -> anyhow::Result<Option<DateTime<Utc>>> {
     // choose the “min” column per kind
-    let (time_col, is_bigint) = match kind {
-        DataKind::Tick => ("key_ts_utc_us", true),
-        DataKind::Bbo => ("key_ts_utc_us", true), // you keep both key_ts_utc_us and time_us; choose key*
-        DataKind::Candle => ("time_start_us", true), // earliest by start (max by end elsewhere)
-        DataKind::BookL2 => ("time", false),      // still TIMESTAMP in your writer
+    let (time_col, is_bigint) = match topic {
+        Topic::Ticks => ("key_ts_utc_us", true),
+        Topic::Quotes => ("key_ts_utc_us", true), // you keep both key_ts_utc_us and time_us; choose key*
+        Topic::Candles1s | Topic::Candles1m | Topic::Candles1h | Topic::Candles1d => ("time_start_us", true),
+        Topic::Depth => ("time", false), // still TIMESTAMP in your writer
+        _ => ("key_ts_utc_us", true),
     };
 
-    let glob = layout.glob_for(provider, kind, symbol, &exchange, res);
+    let glob = layout.glob_for(provider, topic, symbol, &exchange, res);
     let res_s = format!("{res:?}");
-    let kind_s = format!("{kind:?}");
+    let kind_s = topic_kind_str(topic);
 
     let sql = format!(
         r#"
@@ -90,14 +133,14 @@ pub fn earliest_per_symbol(
     conn: &Connection,
     layout: &Layout,
     provider: &str,
-    kind: DataKind,
+    topic: Topic,
     symbols: &[String],
     exchange: &str,
     res: Resolution,
 ) -> anyhow::Result<AHashMap<String, Option<DateTime<Utc>>>> {
     let mut out = AHashMap::with_capacity(symbols.len());
     for s in symbols {
-        let v = earliest_event_ts(conn, layout, provider, kind, s, exchange, res)?;
+        let v = earliest_event_ts(conn, layout, provider, topic, s, exchange, res)?;
         out.insert(s.clone(), v);
     }
     Ok(out)
@@ -108,7 +151,7 @@ pub fn earliest_any(
     conn: &Connection,
     layout: &Layout,
     provider: &str,
-    kind: DataKind,
+    topic: Topic,
     symbols: &[String],
     exchange: &str,
     res: Resolution,
@@ -116,7 +159,7 @@ pub fn earliest_any(
     // union all with parameterized table functions is awkward; simplest path:
     let mut best: Option<DateTime<Utc>> = None;
     for s in symbols {
-        if let Some(ts) = earliest_event_ts(conn, layout, provider, kind, s, exchange, res)? {
+        if let Some(ts) = earliest_event_ts(conn, layout, provider, topic, s, exchange, res)? {
             best = match best {
                 None => Some(ts),
                 Some(b) if ts < b => Some(ts),
@@ -137,15 +180,15 @@ pub fn latest_data_time(
     provider: ProviderKind,
     feed: Feed,
 ) -> anyhow::Result<Option<DateTime<Utc>>> {
-    let kind = match feed {
-        Feed::Bbo { .. } => DataKind::Bbo,
-        Feed::Ticks { .. } => DataKind::Tick,
-        Feed::Candles { .. } => DataKind::Candle,
-        Feed::OrderBookL2 { .. } => DataKind::BookL2,
-        Feed::OrderBookL3 { .. } => todo!(),
+    let Some(topic) = feed_to_topic(&feed) else {
+        return Ok(None);
     };
-    let v: Option<SeqBound> =
-        latest_available(conn, provider, feed.symbol_str(), kind, feed.resolution())?;
+    let v: Option<SeqBound> = latest_available(
+        conn,
+        &provider.to_string(),
+        &feed.instrument().to_string(),
+        topic,
+    )?;
     Ok(v.map(|b| b.ts))
 }
 
@@ -220,7 +263,7 @@ pub fn get_bbo_in_range(
         return Ok(Vec::new());
     }
 
-    let Some(dataset_id) = resolve_dataset_id(conn, provider, symbol, DataKind::Bbo, None)? else {
+    let Some(dataset_id) = resolve_dataset_id(conn, provider, symbol, Topic::Quotes)? else {
         return Ok(Vec::new());
     };
 
@@ -302,7 +345,7 @@ pub fn get_ticks_in_range(
         return Ok(Vec::new());
     }
 
-    let Some(dataset_id) = resolve_dataset_id(conn, provider, symbol, DataKind::Tick, None)? else {
+    let Some(dataset_id) = resolve_dataset_id(conn, provider, symbol, Topic::Ticks)? else {
         return Ok(Vec::new());
     };
 
@@ -425,9 +468,15 @@ pub fn get_candles_in_range(
         return Ok(Vec::new());
     }
 
-    let Some(dataset_id) =
-        resolve_dataset_id(conn, provider, symbol, DataKind::Candle, Some(resolution))?
-    else {
+    let topic = match resolution {
+        Resolution::Seconds(1) => Some(Topic::Candles1s),
+        Resolution::Minutes(1) => Some(Topic::Candles1m),
+        Resolution::Hours(1) => Some(Topic::Candles1h),
+        Resolution::Daily => Some(Topic::Candles1d),
+        _ => None,
+    };
+    let Some(topic) = topic else { return Ok(Vec::new()); };
+    let Some(dataset_id) = resolve_dataset_id(conn, provider, symbol, topic)? else {
         return Ok(Vec::new());
     };
 
@@ -532,8 +581,7 @@ pub fn get_books_in_range(
         return Ok(Vec::new());
     }
 
-    let Some(dataset_id) = resolve_dataset_id(conn, provider, symbol, DataKind::BookL2, None)?
-    else {
+    let Some(dataset_id) = resolve_dataset_id(conn, provider, symbol, Topic::Depth)? else {
         return Ok(Vec::new());
     };
 
@@ -607,8 +655,7 @@ pub fn get_latest_book(
     hint_from: Option<DateTime<Utc>>,
     depth: Option<usize>,
 ) -> anyhow::Result<Option<OrderBook>> {
-    let Some(dataset_id) = resolve_dataset_id(conn, provider, symbol, DataKind::BookL2, None)?
-    else {
+    let Some(dataset_id) = resolve_dataset_id(conn, provider, symbol, Topic::Depth)? else {
         return Ok(None);
     };
 
@@ -682,24 +729,28 @@ pub fn earliest_book_available(
     // If your generic earliest_available(kind) already exists, you can just:
     // return earliest_available(conn, provider, symbol, DataKind::Book, None).map(|o| o.map(|b| b.ts));
 
-    let Some(dataset_id) = resolve_dataset_id(conn, provider, symbol, DataKind::BookL2, None)?
-    else {
+    let Some(dataset_id) = resolve_dataset_id(conn, provider, symbol, Topic::Depth)? else {
         return Ok(None);
     };
 
     let mut q = conn.prepare(
-        "select min(min_ts) as ts
-           from partitions
-          where dataset_id = ?",
-    )?;
-    let ts_str: Option<String> = q
-        .query_row(duckdb::params![dataset_id], |r| r.get(0))
-        .optional()?;
-    let ts = match ts_str {
-        Some(s) => Some(DateTime::parse_from_rfc3339(&s)?.with_timezone(&Utc)),
-        None => None,
-    };
-    Ok(ts)
+-        "select min(min_ts) as ts
++        "select min(min_ts_ns) as ts_ns
+            from partitions
+           where dataset_id = ?",
+     )?;
+-    let ts_str: Option<String> = q
+-        .query_row(duckdb::params![dataset_id], |r| r.get(0))
+-        .optional()?;
+-    let ts = match ts_str {
+-        Some(s) => Some(DateTime::parse_from_rfc3339(&s)?.with_timezone(&Utc)),
+-        None => None,
+-    };
+-    Ok(ts)
++    let ts_ns: Option<i64> = q
++        .query_row(duckdb::params![dataset_id], |r| r.get(0))
++        .optional()?;
++    Ok(ts_ns.map(epoch_ns_to_dt))
 }
 
 /// Latest available order-book snapshot (ts only).
@@ -711,24 +762,28 @@ pub fn latest_book_available(
     // If your generic latest_available(kind) already exists, you can just:
     // return latest_available(conn, provider, symbol, DataKind::Book, None).map(|o| o.map(|b| b.ts));
 
-    let Some(dataset_id) = resolve_dataset_id(conn, provider, symbol, DataKind::BookL2, None)?
-    else {
+    let Some(dataset_id) = resolve_dataset_id(conn, provider, symbol, Topic::Depth)? else {
         return Ok(None);
     };
 
     let mut q = conn.prepare(
-        "select max(max_ts) as ts
-           from partitions
-          where dataset_id = ?",
-    )?;
-    let ts_str: Option<String> = q
-        .query_row(duckdb::params![dataset_id], |r| r.get(0))
-        .optional()?;
-    let ts = match ts_str {
-        Some(s) => Some(DateTime::parse_from_rfc3339(&s)?.with_timezone(&Utc)),
-        None => None,
-    };
-    Ok(ts)
+-        "select max(max_ts) as ts
++        "select max(max_ts_ns) as ts_ns
+            from partitions
+           where dataset_id = ?",
+     )?;
+-    let ts_str: Option<String> = q
+-        .query_row(duckdb::params![dataset_id], |r| r.get(0))
+-        .optional()?;
+-    let ts = match ts_str {
+-        Some(s) => Some(DateTime::parse_from_rfc3339(&s)?.with_timezone(&Utc)),
+-        None => None,
+-    };
+-    Ok(ts)
++    let ts_ns: Option<i64> = q
++        .query_row(duckdb::params![dataset_id], |r| r.get(0))
++        .optional()?;
++    Ok(ts_ns.map(epoch_ns_to_dt))
 }
 
 /// Parse a compact JSON [[price, size], ...] into Vec<(Decimal, Decimal)>.
@@ -778,19 +833,10 @@ fn parse_ladder_json(txt: &str) -> anyhow::Result<Vec<(Decimal, Decimal)>> {
 /// It looks up the corresponding dataset (by provider, symbol, kind, and optional resolution)
 /// and then checks the catalog for any latest availability.
 pub fn has_data(conn: &duckdb::Connection, provider: &str, feed: Feed) -> anyhow::Result<bool> {
-    let kind = match feed {
-        Feed::Bbo { .. } => DataKind::Bbo,
-        Feed::Ticks { .. } => DataKind::Tick,
-        Feed::Candles { .. } => DataKind::Candle,
-        Feed::OrderBookL2 { .. } => DataKind::BookL2,
-        Feed::OrderBookL3 { .. } => {
-            // Not yet supported in the DB layer
-            return Ok(false);
-        }
+    let Some(topic) = feed_to_topic(&feed) else {
+        return Ok(false);
     };
-
-    let sym = feed.symbol_str();
-    let res = feed.resolution();
-    let v = latest_available(conn, provider, sym, kind, res)?;
+    let sym = feed.instrument().to_string();
+    let v = latest_available(conn, provider, &sym, topic)?;
     Ok(v.is_some())
 }

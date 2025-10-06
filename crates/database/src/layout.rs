@@ -4,7 +4,9 @@
 use chrono::{DateTime, Datelike, Utc};
 use std::path::{Path, PathBuf};
 use tt_types::base_data::Resolution;
-use crate::models::DataKind;
+use tt_types::keys::Topic;
+use tt_types::securities::futures_helpers::extract_root;
+use tt_types::securities::symbols::Instrument;
 
 /// Filesystem layout with resolution-aware partitioning.
 /// Examples:
@@ -68,7 +70,7 @@ impl LakeLayout {
                     .join("candles")
                     .join(provider)
                     .join(symbol_id)
-                    .join(Self::res_dir(DataKind::Candle, Some(res.clone())))
+                    .join(Self::res_dir(res))
                     .join(format!("{:04}", ts.year()))
                     .join(format!("{:02}", ts.month()))
                     .join(format!("{:02}.zstd.parquet", ts.day()))
@@ -92,17 +94,15 @@ impl LakeLayout {
             .join(format!("{:02}.zstd.parquet", ts.day()))
     }
 
-    pub fn res_dir(kind: DataKind, res: Option<Resolution>) -> String {
-        if let Some(res) = res {
-            return match res {
-                Resolution::Seconds(n) => format!("S{}", n),
-                Resolution::Minutes(n) => format!("M{}", n),
-                Resolution::Hours(n) => format!("H{}", n),
-                Resolution::Daily => "D".into(),
-                Resolution::Weekly => "W".into(),
-            }
+    /// Directory token for a given resolution (S{n}, M{n}, H{n}, D, W)
+    pub fn res_dir(res: &Resolution) -> String {
+        match res {
+            Resolution::Seconds(n) => format!("S{}", n),
+            Resolution::Minutes(n) => format!("M{}", n),
+            Resolution::Hours(n) => format!("H{}", n),
+            Resolution::Daily => "D".into(),
+            Resolution::Weekly => "W".into(),
         }
-        kind.to_string()
     }
 }
 
@@ -124,7 +124,6 @@ impl LakeLayout {
 fn res_str(res: &Resolution) -> String {
     use Resolution::*;
     match *res {
-        Ticks => "Ticks".into(),
         Seconds(n) => format!("Seconds{n}"),
         Minutes(n) => format!("Minutes{n}"),
         Hours(n) => format!("Hours{n}"),
@@ -147,26 +146,34 @@ impl<'a> Layout<'a> {
     pub fn glob_for(
         &self,
         provider: &str,
-        kind: DataKind,
-        symbol: &str,
+        topic: Topic,
+        instrument: &Instrument,
         exchange: &str,
         res: Resolution,
     ) -> String {
-        use DataKind::*;
+        let root_symbol = extract_root(&instrument);
         let mut p = PathBuf::from(self.root);
         p.push(format!("provider={provider}"));
+        let kind = match topic {
+            Topic::Ticks => "Tick",
+            Topic::Quotes => "Bbo",
+            Topic::Depth => "Depth",
+            Topic::Candles1s | Topic::Candles1m | Topic::Candles1h | Topic::Candles1d => "Candle",
+            _ => "Unknown",
+        };
         p.push(format!("kind={kind}"));
-        p.push(format!("symbol={symbol}"));
+        p.push(format!("symbol={root_symbol}"));
+        p.push(format!("symbol={instrument}"));
         p.push(format!("exchange={exchange}"));
         p.push(format!("res={}", res_str(&res)));
 
-        match (kind, res) {
-            (Candle, Resolution::Daily) => {
+        match (topic, res) {
+            (Topic::Candles1d, Resolution::Daily) => {
                 // per-year
                 p.push("year=*");
                 p.push("*.parquet");
             }
-            (Candle, Resolution::Weekly) => {
+            (Topic::Candles1d, Resolution::Weekly) => {
                 // single file (keep it flexible with a glob)
                 p.push("*.parquet");
             }

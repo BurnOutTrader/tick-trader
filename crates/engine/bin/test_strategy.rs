@@ -28,7 +28,7 @@ impl Strategy for TestStrategy {
         s.insert(Topic::Ticks);
         s.insert(Topic::Quotes);
         s.insert(Topic::Depth);
-        s.insert(Topic::Bars1s);
+        s.insert(Topic::Candles1s);
         s.insert(Topic::Orders);
         s.insert(Topic::Positions);
         s.insert(Topic::AccountEvt);

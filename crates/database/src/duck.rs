@@ -1,10 +1,12 @@
-use crate::models::{DataKind, SeqBound};
+use crate::models::SeqBound;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use duckdb::{Connection, Error, OptionalExt, params};
 use std::path::Path;
 use thiserror::Error;
 use tracing::error;
+use tt_types::base_data::Resolution;
+use tt_types::keys::Topic;
 
 /// Create or reuse a DuckDB connection (file-backed or in-memory).
 pub fn connect(db_file: Option<&Path>) -> anyhow::Result<Connection> {
@@ -40,7 +42,7 @@ impl Duck {
         // Align Duck::init with the canonical schema initializers used elsewhere in the crate.
         // We intentionally delegate to init.rs and to create_partitions_schema here to avoid
         // schema drift between different entrypoints.
-        crate::database::init::create_identity_schema_if_needed(&self.conn)?;
+        crate::init::create_identity_schema_if_needed(&self.conn)?;
         create_partitions_schema(&self.conn)?;
         Ok(())
     }
@@ -107,7 +109,12 @@ impl Duck {
         res: &Resolution,
     ) -> Result<(), DuckError> {
         let root = candles_root.to_string_lossy();
-        let rdir = crate::database::layout::LakeLayout::res_dir(res);
+        let rdir = crate::database::layout::LakeLayout::res_dir(
+            // Legacy view helper: keep path segment matching legacy layout
+            // We map Resolution to directory token directly here
+            // Seconds(n) => "S{n}", Minutes(n) => "M{n}", Hours(n) => "H{n}", Daily => "D", Weekly => "W"
+            res,
+        );
         self.conn.execute_batch(&format!(
             r#"
             CREATE OR REPLACE VIEW {view} AS
@@ -118,6 +125,42 @@ impl Duck {
             rdir = rdir
         ))?;
         Ok(())
+    }
+}
+
+/// ---------------- Topic ↔ dataset mapping helpers ----------------
+
+#[inline]
+fn topic_to_kind_key(topic: Topic) -> &'static str {
+    match topic {
+        Topic::Ticks => "tick",
+        Topic::Quotes => "bbo",
+        Topic::Depth => "orderbook",
+        Topic::Candles1s | Topic::Candles1m | Topic::Candles1h | Topic::Candles1d => "candle",
+        _ => "unknown",
+    }
+}
+
+#[inline]
+fn topic_to_resolution(topic: Topic) -> Option<Resolution> {
+    match topic {
+        Topic::Candles1s => Some(Resolution::Seconds(1)),
+        Topic::Candles1m => Some(Resolution::Minutes(1)),
+        Topic::Candles1h => Some(Resolution::Hours(1)),
+        Topic::Candles1d => Some(Resolution::Daily),
+        _ => None,
+    }
+}
+
+#[inline]
+fn resolution_key(res: Option<Resolution>) -> String {
+    match res {
+        Some(Resolution::Seconds(n)) => format!("sec{}", n),
+        Some(Resolution::Minutes(n)) => format!("min{}", n),
+        Some(Resolution::Hours(n)) => format!("hr{}", n),
+        Some(Resolution::Daily) => "daily".to_string(),
+        Some(Resolution::Weekly) => "weekly".to_string(),
+        None => String::new(),
     }
 }
 
@@ -144,22 +187,18 @@ pub fn upsert_symbol(conn: &Connection, provider_id: i64, symbol: &str) -> Resul
     Ok(id)
 }
 
-/// Resolve or create dataset_id for (provider, symbol, kind, resolution_key)
+/// Resolve or create dataset_id for (provider, symbol, topic, optional resolution override)
 pub fn upsert_dataset(
     conn: &duckdb::Connection,
     provider_id: i64,
     symbol_id: i64,
-    kind: DataKind,
-    resolution: Option<Resolution>,
+    topic: Topic,
+    res_override: Option<Resolution>,
 ) -> anyhow::Result<i64> {
-    let kind_key = match kind {
-        DataKind::Tick => "tick",
-        DataKind::Bbo => "bbo",
-        DataKind::Candle => "candle",
-        DataKind::BookL2 => "orderbook",
-    };
-    let res_txt: Option<String> = resolution.map(|r| r.as_key().unwrap_or("").to_string());
-    let res_key: String = res_txt.clone().unwrap_or_default();
+    let kind_key = topic_to_kind_key(topic);
+    let res_opt = res_override.or(topic_to_resolution(topic));
+    let res_txt: Option<String> = res_opt.as_ref().map(|r| r.to_os_string());
+    let res_key: String = resolution_key(res_opt);
 
     conn.execute(
         "INSERT INTO datasets (provider_id, symbol_id, kind, resolution, resolution_key)
@@ -342,19 +381,11 @@ pub fn resolve_dataset_id(
     conn: &duckdb::Connection,
     provider: &str,
     symbol: &str,
-    kind: DataKind,
-    resolution: Option<Resolution>,
+    topic: Topic,
+    res_override: Option<Resolution>,
 ) -> anyhow::Result<Option<i64>> {
-    let kind_key = match kind {
-        DataKind::Tick => "tick",
-        DataKind::Bbo => "bbo",
-        DataKind::Candle => "candle",
-        DataKind::BookL2 => "orderbook",
-    };
-    let res_key = resolution
-        .and_then(|r| r.as_key())
-        .unwrap_or("")
-        .to_string();
+    let kind_key = topic_to_kind_key(topic);
+    let res_key = resolution_key(res_override.or(topic_to_resolution(topic)));
 
     let mut stmt = conn.prepare(
         r#"
@@ -398,10 +429,10 @@ pub fn earliest_available(
     conn: &Connection,
     provider: &str,
     symbol: &str,
-    kind: DataKind,
-    resolution: Option<Resolution>,
+    topic: Topic,
+    res_override: Option<Resolution>,
 ) -> Result<Option<SeqBound>> {
-    let Some(dataset_id) = resolve_dataset_id(conn, provider, symbol, kind, resolution)? else {
+    let Some(dataset_id) = resolve_dataset_id(conn, provider, symbol, topic, res_override)? else {
         return Ok(None);
     };
 
@@ -430,10 +461,10 @@ pub fn latest_available(
     conn: &Connection,
     provider: &str,
     symbol: &str,
-    kind: DataKind,
-    resolution: Option<Resolution>,
+    topic: Topic,
+    res_override: Option<Resolution>,
 ) -> Result<Option<SeqBound>> {
-    let Some(dataset_id) = resolve_dataset_id(conn, provider, symbol, kind, resolution)? else {
+    let Some(dataset_id) = resolve_dataset_id(conn, provider, symbol, topic, res_override)? else {
         return Ok(None);
     };
 
@@ -463,12 +494,12 @@ pub fn earliest_for_many(
     conn: &Connection,
     provider: &str,
     symbols: &[&str],
-    kind: DataKind,
-    resolution: Option<Resolution>,
+    topic: Topic,
+    res_override: Option<Resolution>,
 ) -> Result<Vec<(String, Option<SeqBound>)>> {
     let mut out = Vec::with_capacity(symbols.len());
     for sym in symbols {
-        let v = earliest_available(conn, provider, sym, kind, resolution)?;
+        let v = earliest_available(conn, provider, sym, topic, res_override)?;
         out.push(((*sym).to_string(), v));
     }
     Ok(out)
@@ -479,12 +510,12 @@ pub fn latest_for_many(
     conn: &Connection,
     provider: &str,
     symbols: &[&str],
-    kind: DataKind,
-    resolution: Option<Resolution>,
+    topic: Topic,
+    res_override: Option<Resolution>,
 ) -> Result<Vec<(String, Option<SeqBound>)>> {
     let mut out = Vec::with_capacity(symbols.len());
     for sym in symbols {
-        let v = latest_available(conn, provider, sym, kind, resolution)?;
+        let v = latest_available(conn, provider, sym, topic, res_override)?;
         out.push(((*sym).to_string(), v));
     }
     Ok(out)

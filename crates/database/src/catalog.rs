@@ -4,7 +4,9 @@ use tt_types::base_data::Resolution;
 use tt_types::providers::ProviderKind;
 use tt_types::securities::symbols::Instrument;
 use crate::duck::{Duck, DuckError};
-use crate::models::{DataKind, Provider, SymbolMeta, UniverseMember};
+use crate::models::{Provider, SymbolMeta, UniverseMember};
+use tt_types::keys::Topic;
+use tt_types::securities::futures_helpers::extract_root;
 
 impl Duck {
     pub fn list_providers(&self) -> Result<Vec<Provider>, DuckError> {
@@ -34,7 +36,7 @@ impl Duck {
         Ok(rows.filter_map(Result::ok).collect())
     }
 
-    pub fn get_symbol(&self, symbol_id: &str) -> Result<Option<SymbolMeta>, DuckError> {
+    pub fn get_symbol(&self, instrument: &Instrument) -> Result<Option<SymbolMeta>, DuckError> {
         let mut stmt = self.conn().prepare(
             "SELECT symbol_id, security, exchange, currency, root, continuous_of FROM symbols WHERE symbol_id=?",
         )?;
@@ -62,6 +64,28 @@ impl Duck {
 fn resolution_key(res: Option<Resolution>) -> String {
     res.and_then(|r| r.as_key().map(|s| s.to_string()))
         .unwrap_or_default()
+}
+
+#[inline]
+fn topic_kind(topic: Topic) -> &'static str {
+    match topic {
+        Topic::Ticks => "tick",
+        Topic::Quotes => "bbo",
+        Topic::Depth => "orderbook",
+        Topic::Candles1s | Topic::Candles1m | Topic::Candles1h | Topic::Candles1d => "candle",
+        _ => "unknown",
+    }
+}
+
+#[inline]
+fn topic_resolution(topic: Topic) -> Option<Resolution> {
+    match topic {
+        Topic::Candles1s => Some(Resolution::Seconds(1)),
+        Topic::Candles1m => Some(Resolution::Minutes(1)),
+        Topic::Candles1h => Some(Resolution::Hours(1)),
+        Topic::Candles1d => Some(Resolution::Daily),
+        _ => None,
+    }
 }
 
 /// Insert-if-missing, then return `provider_id`.
@@ -103,15 +127,12 @@ pub fn get_or_create_dataset_id(
     conn: &Connection,
     provider_id: i64,
     symbol_id: i64,
-    kind: DataKind,
-    res: Option<Resolution>,
+    topic: Topic,
+    res_override: Option<Resolution>,
 ) -> anyhow::Result<i64> {
-    let kind_s = kind_key(kind);
-    let res_txt: Option<String> = if res.is_some() {
-        Some(resolution_key(res))
-    } else {
-        None
-    };
+    let kind_s = topic_kind(topic);
+    let res = res_override.or(topic_resolution(topic));
+    let res_txt: Option<String> = res.as_ref().map(|r| r.to_os_string());
     let res_key: String = resolution_key(res);
     conn.execute(
         "insert into datasets(provider_id, symbol_id, kind, resolution, resolution_key)
@@ -134,12 +155,11 @@ pub fn ensure_dataset(
     conn: &Connection,
     provider: &ProviderKind,
     symbol: &Instrument,
-    kind: DataKind,
-    resolution: Option<Resolution>,
+    topic: Topic,
 ) -> anyhow::Result<i64> {
     let provider_id = ensure_provider_id(conn, provider.to_string().as_str())?;
     let symbol_id = ensure_symbol_id(conn, provider_id, symbol)?;
-    ensure_dataset_row(conn, provider_id, symbol_id, kind, resolution)
+    ensure_dataset_row(conn, provider_id, symbol_id, topic)
 }
 
 // ---------- internal pieces ----------
@@ -158,19 +178,20 @@ fn ensure_provider_id(conn: &Connection, provider: &str) -> anyhow::Result<i64> 
     .map_err(|e| anyhow!("ensure_provider_id: {}", e))
 }
 
-fn ensure_symbol_id(conn: &Connection, provider_id: i64, symbol: &str) -> anyhow::Result<i64> {
+fn ensure_symbol_id(conn: &Connection, provider_id: i64, instrument: &Instrument) -> anyhow::Result<i64> {
+    let root_symbol = extract_root(instrument);
     conn.execute(
         "INSERT INTO symbols(provider_id, symbol_text)
          SELECT ?, ?
          WHERE NOT EXISTS (
              SELECT 1 FROM symbols WHERE provider_id = ? AND symbol_text = ?
          )",
-        params![provider_id, symbol, provider_id, symbol],
+        params![provider_id, instrument, provider_id, root_symbol, instrument],
     )?;
 
     conn.query_row(
         "SELECT symbol_id FROM symbols WHERE provider_id = ? AND symbol_text = ?",
-        params![provider_id, symbol],
+        params![provider_id, instrument],
         |r| r.get::<_, i64>(0),
     )
     .map_err(|e| anyhow!("ensure_symbol_id: {}", e))
@@ -180,16 +201,13 @@ fn ensure_dataset_row(
     conn: &Connection,
     provider_id: i64,
     symbol_id: i64,
-    kind: DataKind,
-    resolution: Option<Resolution>,
+    topic: Topic,
+    res_override: Option<Resolution>,
 ) -> anyhow::Result<i64> {
-    let kind_s = kind_key(kind);
-    let res_txt: Option<String> = if resolution.is_some() {
-        Some(resolution_key(resolution))
-    } else {
-        None
-    };
-    let res_key: String = resolution_key(resolution);
+    let kind_s = topic_kind(topic);
+    let res = res_override.or(topic_resolution(topic));
+    let res_txt: Option<String> = res.as_ref().map(|r| r.to_os_string());
+    let res_key: String = resolution_key(res);
 
     conn.execute(
         "INSERT INTO datasets(provider_id, symbol_id, kind, resolution, resolution_key)
@@ -229,7 +247,7 @@ fn kind_key(k: DataKind) -> String {
         DataKind::Tick => "tick",
         DataKind::Bbo => "bbo",
         DataKind::Candle => "candle",
-        DataKind::BookL2 => "orderbook",
+        DataKind::Depth => "orderbook",
     }
     .to_string()
 }

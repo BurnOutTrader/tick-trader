@@ -132,17 +132,9 @@ async fn run_download(
     let symbol = feed.instrument();
     let exchange = feed.exchange();
     if cursor >= now {
-        tracing::info!(%symbol, %provider_code, %exchange, "up to date");
+        tracing::info!(%symbol, ?provider_code, %exchange, "up to date");
         return Ok(());
     }
-
-    let kind = match feed {
-        Feed::Bbo { .. } => DataKind::Bbo,
-        Feed::Ticks { .. } => DataKind::Tick,
-        Feed::Candles { .. } => DataKind::Candle,
-        Feed::OrderBookL2 { .. } => DataKind::BookL2,
-        Feed::OrderBookL3 { .. } => todo!(),
-    };
 
     let wants_intraday = wants_intraday(kind, feed);
     // If we're on a fully-closed calendar day for intraday-ish kinds, jump to next open.
@@ -232,7 +224,7 @@ async fn run_download(
                     }
                 }
                 HistoryEvent::OrderBookL2(ob) => {
-                    if matches!(kind, DataKind::BookL2) {
+                    if matches!(kind, DataKind::Depth) {
                         let ts = ob.time;
                         max_ts = Some(max_ts.map_or(ts, |m| m.max(ts)));
                         books.push(ob);
@@ -297,7 +289,7 @@ async fn run_download(
                     tracing::debug!(start=%cursor, end=%end, "no candles returned");
                 }
             }
-            DataKind::BookL2 => {
+            DataKind::Depth => {
                 if !books.is_empty() {
                     let res = feed
                         .resolution()
@@ -387,7 +379,7 @@ fn choose_span(kind: DataKind, res: Option<Resolution>) -> chrono::Duration {
             Resolution::Seconds(_) => chrono::Duration::days(2),
             _ => chrono::Duration::days(2),
         },
-        DataKind::BookL2 => match res.expect("OrderBook requires resolution") {
+        DataKind::Depth => match res.expect("OrderBook requires resolution") {
             Resolution::Minutes(m) if m >= 1 => chrono::Duration::days(2),
             _ => chrono::Duration::days(1),
         },
@@ -401,7 +393,7 @@ fn is_daily_or_weekly(res: Option<Resolution>) -> bool {
 
 fn wants_intraday(kind: DataKind, res: Option<Resolution>) -> bool {
     match kind {
-        DataKind::Tick | DataKind::Bbo | DataKind::BookL2 => true,
+        DataKind::Tick | DataKind::Bbo | DataKind::Depth => true,
         DataKind::Candle => !is_daily_or_weekly(res),
     }
 }
