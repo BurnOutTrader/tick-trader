@@ -19,7 +19,7 @@ pub enum HistoryEvent {
     Candle(Candle),
     // Optional future:
     Bbo(Bbo),
-    OrderBookL2(OrderBook),
+    OrderBook(OrderBook),
     EndOfStream,          // provider finished successfully
     Error(anyhow::Error), // provider aborted
 }

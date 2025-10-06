@@ -6,19 +6,17 @@ use crate::http::models::{RetrieveBarsReq, RetrieveBarsResponse};
 use crate::websocket::client::PxWebSocketClient;
 use ahash::AHashMap;
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
-use provider::traits::{
-    CommandAck, ConnectionState, DisconnectReason, ExecutionProvider, MarketDataProvider,
-    ProviderSessionSpec,
-};
+use chrono::{DateTime, NaiveDateTime, ParseResult, Utc};
+use provider::traits::{CommandAck, ConnectionState, DisconnectReason, ExecutionProvider, HistoricalDataProvider, MarketDataProvider, ProviderSessionSpec};
 use rust_decimal::Decimal;
 use rust_decimal::prelude::FromPrimitive;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::mpsc::Receiver;
 use tokio::sync::RwLock;
 use tt_bus::Router;
 use tt_types::base_data::{Candle, Resolution};
-use tt_types::history::HistoricalRequest;
+use tt_types::history::{HistoricalRequest, HistoryEvent, HistoryHandle};
 use tt_types::keys::{AccountKey, SymbolKey, Topic};
 use tt_types::providers::{ProjectXTenant, ProviderKind};
 use tt_types::securities::futures_helpers::{extract_month_year, extract_root};
@@ -138,7 +136,7 @@ impl PXClient {
 
     /// Retrieve historical bars for a given instrument and topic over [start, end).
     /// Paginates using the ProjectX 20,000-bars limit and normalizes timestamps to UTC.
-    pub async fn retrieve_bars(&self, req: &HistoricalRequest) -> anyhow::Result<Vec<Candle>> {
+    pub async fn retrieve_bars(&self, req: &HistoricalRequest) -> anyhow::Result<Vec<HistoryEvent>> {
         // Map Topic -> Resolution and PX unit fields
         let (resolution, unit, unit_number) = match req.topic {
             Topic::Candles1s => (Resolution::Seconds(1), 1, 1),
@@ -242,7 +240,12 @@ impl PXClient {
         all.sort_by_key(|c| c.time_start);
         all.dedup_by_key(|c| c.time_start);
         all.retain(|c| c.time_start >= req.start && c.time_start < req.end);
-        Ok(all)
+
+        let mut events = vec![];
+        for c in all {
+            events.push(HistoryEvent::Candle(c))
+        }
+        Ok(events)
     }
 }
 
@@ -619,5 +622,52 @@ impl ExecutionProvider for PXClient {
 
     async fn auto_update(&self) -> anyhow::Result<()> {
         self.http.auto_update().await
+    }
+}
+#[async_trait::async_trait]
+impl HistoricalDataProvider for PXClient {
+    fn name(&self) -> ProviderKind {
+        self.provider_kind
+    }
+
+    async fn ensure_connected(&self) -> anyhow::Result<()> {
+        let mut conn_state = self.http_connection_state.write().await;
+        if *conn_state == ConnectionState::Disconnected {
+            *conn_state = ConnectionState::Connecting;
+
+            match self.http.start().await {
+                Ok(_) => {
+                    *conn_state = ConnectionState::Connected;
+                }
+                Err(PxError::Other(e)) => {
+                    *conn_state = ConnectionState::Disconnected;
+                    return Err(e);
+                }
+                Err(e) => {
+                    log::error!("Error starting HTTP client: {:?}", e);
+                    *conn_state = ConnectionState::Disconnected;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn fetch(&self, req: HistoricalRequest) -> anyhow::Result<(Vec<HistoryEvent>)> {
+        self.retrieve_bars(&req).await
+    }
+
+    fn supports(&self, topic: Topic) -> bool {
+        if matches!(topic,
+        Topic::Candles1d | Topic::Candles1s | Topic::Candles1h | Topic::Candles1m) {
+            return true;
+        }
+        false
+    }
+
+    fn earliest_available(&self, instrument: Instrument, topic: Topic) -> DateTime<Utc> {
+        // Try to parse, fall back to a default if it fails
+        DateTime::parse_from_rfc3339("2022-12-01T00:00:00Z")
+            .map(|dt| dt.with_timezone(&Utc))
+            .unwrap_or_else(|_| DateTime::<Utc>::from_timestamp(1672444800, 0).unwrap()) // fallback: 2022-12-31T00:00:00Z
     }
 }

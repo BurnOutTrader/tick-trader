@@ -224,7 +224,7 @@ async fn run_download(
                         });
                     }
                 }
-                HistoryEvent::OrderBookL2(ob) => {
+                HistoryEvent::OrderBook(ob) => {
                     if matches!(kind, DataKind::Depth) {
                         let ts = ob.time;
                         max_ts = Some(max_ts.map_or(ts, |m| m.max(ts)));

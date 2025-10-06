@@ -255,20 +255,17 @@ pub trait HistoricalDataProvider: Send + Sync {
     fn name(&self) -> ProviderKind;
 
     /// Optional: connect/login; should be idempotent.
-    async fn ensure_connected(self: Arc<Self>) -> anyhow::Result<()>;
+    async fn ensure_connected(&self) -> anyhow::Result<()>;
 
     /// The job of this function is to return any data within the period, for the specifications,
     /// how your function does that doesnt matter, as long as you return all data available for the period
     async fn fetch(
-        self: Arc<Self>,
+        &self,
         req: HistoricalRequest,
-    ) -> anyhow::Result<(Arc<dyn HistoryHandle>, mpsc::Receiver<HistoryEvent>)>;
+    ) -> anyhow::Result<(Vec<HistoryEvent>)>;
 
     /// Feature flags help the router pick/shape requests.
     fn supports(&self, topic: Topic) -> bool {
-        true
-    }
-    fn supports_resolution(&self, _res: &Option<Resolution>) -> bool {
         true
     }
 
