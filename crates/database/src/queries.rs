@@ -1,7 +1,7 @@
 use crate::duck::{latest_available, resolve_dataset_id};
 use crate::layout::Layout;
-use crate::models::SeqBound;
-use crate::paths::provider_kind_to_db_string;
+use crate::models::{Provider, SeqBound};
+use crate::paths::{provider_kind_to_db_string, topic_to_db_string};
 use ahash::AHashMap;
 use anyhow::{Context, anyhow};
 use chrono::{DateTime, Utc};
@@ -10,8 +10,8 @@ use rust_decimal::Decimal;
 use serde_json::Value as JsonValue;
 use std::str::FromStr;
 use std::sync::Arc;
-use tt_types::base_data::{Bbo, Candle, OrderBook, Side, Tick};
-use tt_types::base_data::{Feed, Resolution};
+use tt_types::base_data::{Bbo, Candle, OrderBook, Side, Tick, BookLevel};
+use tt_types::base_data::{Resolution};
 use tt_types::keys::Topic;
 use tt_types::providers::ProviderKind;
 use tt_types::securities::symbols::{Exchange, Instrument, MarketType};
@@ -46,14 +46,14 @@ pub fn earliest_event_ts(
         Topic::Ticks => ("key_ts_utc_us", true),
         Topic::Quotes => ("key_ts_utc_us", true), // you keep both key_ts_utc_us and time_us; choose key*
         Topic::Candles1s | Topic::Candles1m | Topic::Candles1h | Topic::Candles1d => {
-            ("time_start_us", true)
+            ("time_end_us", true)
         }
         Topic::Depth => ("time", false), // still TIMESTAMP in your writer
         _ => ("key_ts_utc_us", true),
     };
 
     let glob = layout.glob_for(provider, topic, instrument, market_type, exchange);
-    let kind_s = topic_kind_str(topic);
+    let kind_s = topic_to_db_string(topic);
 
     let sql = format!(
         r#"
@@ -153,7 +153,7 @@ pub fn latest_data_time(
     topic: Topic,
 ) -> anyhow::Result<Option<DateTime<Utc>>> {
     let v: Option<SeqBound> =
-        latest_available(conn, &provider.to_string(), instrument.to_string(), topic)?;
+        latest_available(conn, &provider_kind_to_db_string(provider), &instrument.to_string(), topic)?;
     Ok(v.map(|b| b.ts))
 }
 
@@ -279,8 +279,8 @@ pub fn get_bbo_in_range(
         let exchange =
             Exchange::from_str(&exch).ok_or_else(|| anyhow!("unknown exchange '{exch}'"))?;
         out.push(Bbo {
-            symbol: sym,
-            exchange,
+            symbol: sym.clone(),
+            instrument: Instrument::from_str(&sym).map_err(|_| anyhow!("invalid instrument '{}" , sym))? ,
             bid: Decimal::from_str(&bid_s)?,
             bid_size: Decimal::from_str(&bid_sz_s)?,
             ask: Decimal::from_str(&ask_s)?,
@@ -301,8 +301,8 @@ pub fn get_bbo_in_range(
 /// Dedupe rule is conservative: first row per (time_ns, exec_id, maker_order_id, taker_order_id).
 pub fn get_ticks_in_range(
     conn: &Connection,
-    provider: &str,
-    symbol: &str,
+    provider: ProviderKind,
+    instrument: &Instrument,
     start: DateTime<Utc>,
     end: DateTime<Utc>,
 ) -> anyhow::Result<Vec<Tick>> {
@@ -310,7 +310,7 @@ pub fn get_ticks_in_range(
         return Ok(Vec::new());
     }
 
-    let Some(dataset_id) = resolve_dataset_id(conn, provider, symbol, Topic::Ticks)? else {
+    let Some(dataset_id) = resolve_dataset_id(conn, &provider_kind_to_db_string(provider), &instrument.to_string(), Topic::Ticks)? else {
         return Ok(Vec::new());
     };
 
@@ -358,7 +358,7 @@ pub fn get_ticks_in_range(
     );
 
     let mut stmt = conn.prepare(&sql)?;
-    let mut rows = stmt.query(params![symbol, start_us, end_us])?;
+    let mut rows = stmt.query(params![instrument.to_string(), start_us, end_us])?;
 
     let mut out = Vec::new();
     while let Some(r) = rows.next()? {
@@ -367,11 +367,8 @@ pub fn get_ticks_in_range(
         let price_s: String = r.get(2)?;
         let size_s: String = r.get(3)?;
         let side_str: Option<String> = r.get(4)?;
-        let exec_id: Option<String> = r.get(5)?;
         let venue_seq: Option<i32> = r.get(6)?;
         let t_us: i64 = r.get(7)?;
-        let t_event_us: Option<i64> = r.get(8)?;
-        let t_recv_us: Option<i64> = r.get(9)?;
 
         let price = Decimal::from_str(&price_s)?;
         let size = Decimal::from_str(&size_s)?;
@@ -385,17 +382,12 @@ pub fn get_ticks_in_range(
 
         out.push(Tick {
             symbol: sym,
-            exchange,
+            instrument: instrument.clone(),
             price,
             volume: size,
             side,
             time: us_to_dt(t_us),
-            exec_id,
-            maker_order_id: None,
-            taker_order_id: None,
             venue_seq: venue_seq.map(|v| v as u32),
-            ts_event: t_event_us.map(us_to_dt),
-            ts_recv: t_recv_us.map(us_to_dt),
         });
     }
     Ok(out)
@@ -404,16 +396,16 @@ pub fn get_ticks_in_range(
 /// Convenience: from `start` to latest available.
 pub fn get_ticks_from_date_to_latest(
     conn: &Connection,
-    provider: &str,
-    symbol: &str,
+    provider: ProviderKind,
+    instrument: &Instrument,
     start: DateTime<Utc>,
 ) -> anyhow::Result<Vec<Tick>> {
     let Some(SeqBound { ts: latest_ts, .. }) =
-        latest_available(conn, provider, symbol, DataKind::Tick, None)?
+        latest_available(conn, &provider_kind_to_db_string(provider), &instrument.to_string(), Topic::Ticks)?
     else {
         return Ok(Vec::new());
     };
-    get_ticks_in_range(conn, provider, symbol, start, latest_ts)
+    get_ticks_in_range(conn, provider, instrument, start, latest_ts)
 }
 
 // ---------- Candles ----------
@@ -424,7 +416,7 @@ pub fn get_ticks_from_date_to_latest(
 pub fn get_candles_in_range(
     conn: &Connection,
     provider: &str,
-    symbol: &str,
+    instrument: &Instrument,
     resolution: Resolution,
     start: DateTime<Utc>,
     end: DateTime<Utc>,
@@ -443,7 +435,7 @@ pub fn get_candles_in_range(
     let Some(topic) = topic else {
         return Ok(Vec::new());
     };
-    let Some(dataset_id) = resolve_dataset_id(conn, provider, symbol, topic)? else {
+    let Some(dataset_id) = resolve_dataset_id(conn, provider, &instrument.to_string(), topic)? else {
         return Ok(Vec::new());
     };
 
@@ -477,7 +469,7 @@ pub fn get_candles_in_range(
     );
 
     let mut stmt = conn.prepare(&sql)?;
-    let mut rows = stmt.query(params![symbol, start_us, end_us])?;
+    let mut rows = stmt.query(params![instrument.to_string(), start_us, end_us])?;
 
     let mut out = Vec::new();
     while let Some(r) = rows.next()? {
@@ -499,9 +491,9 @@ pub fn get_candles_in_range(
             Exchange::from_str(&exch).ok_or_else(|| anyhow!("unknown exchange '{exch}'"))?;
         out.push(Candle {
             symbol: sym,
-            exchange,
+            instrument: instrument.clone(),
             time_start: us_to_dt(ts_start_us),
-            time_end: us_to_dt(ts_end_us), // you said we key candles by end elsewhere; here we keep both
+            time_end: us_to_dt(ts_end_us),
             open: Decimal::from_str(&open_s)?,
             high: Decimal::from_str(&high_s)?,
             low: Decimal::from_str(&low_s)?,
@@ -509,7 +501,6 @@ pub fn get_candles_in_range(
             volume: Decimal::from_str(&volume_s)?,
             ask_volume: Decimal::from_str(&ask_volume_s)?,
             bid_volume: Decimal::from_str(&bid_volume_s)?,
-            num_of_trades: Decimal::from_str(&num_trades_s)?,
             resolution,
         });
     }
@@ -520,16 +511,23 @@ pub fn get_candles_in_range(
 pub fn get_candles_from_date_to_latest(
     conn: &Connection,
     provider: &str,
-    symbol: &str,
+    instrument: &Instrument,
     resolution: Resolution,
     start: DateTime<Utc>,
 ) -> anyhow::Result<Vec<Candle>> {
+    let topic = match resolution {
+        Resolution::Seconds(1) => Topic::Candles1s,
+        Resolution::Minutes(1) => Topic::Candles1m,
+        Resolution::Hours(1) => Topic::Candles1h,
+        Resolution::Daily => Topic::Candles1d,
+        _ => return Ok(Vec::new()),
+    };
     let Some(SeqBound { ts: latest_ts, .. }) =
-        latest_available(conn, provider, symbol, DataKind::Candle, Some(resolution))?
+        latest_available(conn, provider, &instrument.to_string(), topic)?
     else {
         return Ok(Vec::new());
     };
-    get_candles_in_range(conn, provider, symbol, resolution, start, latest_ts)
+    get_candles_in_range(conn, provider, instrument, resolution, start, latest_ts)
 }
 
 /// Get order-book snapshots for [start, end) using DuckDB over the *overlapping* parquet partitions.
@@ -603,10 +601,10 @@ pub fn get_books_in_range(
         }
 
         out.push(OrderBook {
-            symbol: sym,
-            exchange,
-            bids,
-            asks,
+            symbol: sym.clone(),
+            instrument: Instrument::from_str(&sym).map_err(|_| anyhow!("invalid instrument '{}" , sym))? ,
+            bids: bids.into_iter().map(|(p,v)| BookLevel{price:p, volume:v, level:0}).collect(),
+            asks: asks.into_iter().map(|(p,v)| BookLevel{price:p, volume:v, level:0}).collect(),
             time: epoch_ns_to_dt(t_ns),
         });
     }
@@ -676,10 +674,10 @@ pub fn get_latest_book(
         }
 
         return Ok(Some(OrderBook {
-            symbol: sym,
-            exchange,
-            bids,
-            asks,
+            symbol: sym.clone(),
+            instrument: Instrument::from_str(&sym).map_err(|_| anyhow!("invalid instrument '{}" , sym))? ,
+            bids: bids.into_iter().map(|(p,v)| BookLevel{price:p, volume:v, level:0}).collect(),
+            asks: asks.into_iter().map(|(p,v)| BookLevel{price:p, volume:v, level:0}).collect(),
             time: epoch_ns_to_dt(t_ns),
         }));
     }
@@ -777,15 +775,3 @@ fn parse_ladder_json(txt: &str) -> anyhow::Result<Vec<(Decimal, Decimal)>> {
     Ok(out)
 }
 
-// ---------- Has data check ----------
-/// Returns true if there is any historical data persisted for the given provider/feed.
-/// It looks up the corresponding dataset (by provider, symbol, kind, and optional resolution)
-/// and then checks the catalog for any latest availability.
-pub fn has_data(conn: &duckdb::Connection, provider: &str, feed: Feed) -> anyhow::Result<bool> {
-    let Some(topic) = feed_to_topic(&feed) else {
-        return Ok(false);
-    };
-    let sym = feed.instrument().to_string();
-    let v = latest_available(conn, provider, &sym, topic)?;
-    Ok(v.is_some())
-}

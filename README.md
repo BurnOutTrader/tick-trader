@@ -112,7 +112,7 @@ All messages are archived with rkyv and sent as length-delimited frames (tokio-u
 
 - The server and providers load .env automatically. ProviderSessionSpec::from_env scans all environment variables to construct credentials for multiple providers.
 - ProjectX keys use the PX_ prefix:
-  - PX_{TENANT}_USERNAME, PX_{TENANT}_APIKEY, optional PX_{TENANT}_FIRM
+  - `PX_{TENANT}_USERNAME, PX_{TENANT}_APIKEY, optional PX_{TENANT}_FIRM`
   - Example:
     - PX_TOPSTEP_USERNAME=alice
     - PX_TOPSTEP_APIKEY=xxxx
@@ -121,6 +121,11 @@ All messages are archived with rkyv and sent as length-delimited frames (tokio-u
   - RITHMIC_{SYSTEM}_{USERNAME|APIKEY|PASSWORD|FCM_ID|IB_ID|USER_TYPE}
 - Server address:
   - TT_BUS_ADDR defaults to /tmp/tick-trader.sock (macOS) or @tick-trader.sock (Linux abstract). Override in .env or env.
+- Engine database path:
+  - DB_PATH sets the directory for local database storage used by both the server and strategies (tt-engine). Both must use the same DB_PATH to ensure consistent access to the DuckDB catalog and Parquet data. Defaults to ./storage if not set. Example:
+    - DB_PATH=./mydata
+- Integrated database:
+  - Tick Trader uses DuckDB as an integrated catalog and metadata database. DuckDB tracks and manages Parquet files, which are used for durable, efficient storage of all historical and real-time data. Both the server and strategies interact with the same DuckDB instance and Parquet files via the shared DB_PATH.
 
 
 ## ⚙️ Router configuration

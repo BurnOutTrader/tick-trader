@@ -1,14 +1,17 @@
 use std::collections::HashMap;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
+use crate::paths::provider_kind_to_db_string;
+use tt_types::keys::Topic;
+use tt_types::securities::symbols::Exchange;
 
 struct Entry {
-    result: Mutex<Option<Result<(), String>>>,
+    result: Mutex<Option<anyhow::Result<()>>>,
     notify: Notify,
 }
 
 struct DownloadManagerInner {
-    inflight: Mutex<HashMap<Feed, std::sync::Arc<Entry>>>,
+    inflight: Mutex<HashMap<(ProviderKind, Instrument, Topic), std::sync::Arc<Entry>>>,
 }
 
 #[derive(Clone)]
@@ -25,73 +28,23 @@ impl DownloadManager {
         }
     }
 
-    /// Create or join a download task for the same (provider,symbol,exchange,resolution,kind).
-    /// If an identical task is already running, this will await that same task.
     pub async fn request(
         &self,
         client: std::sync::Arc<dyn HistoricalDataProvider>,
         conn: std::sync::Arc<duckdb::Connection>,
         data_root: PathBuf,
-        feed: Feed,
+        provider_kind: ProviderKind,
+        instrument: Instrument,
+        exchange: Exchange,
+
+        topic: Topic,
     ) -> anyhow::Result<()> {
-        // Fast path: join an in-flight task if one exists.
-        if let Some(entry) = { self.inner.inflight.lock().await.get(&key).cloned() } {
-            loop {
-                if let Some(done) = entry.result.lock().await.clone() {
-                    return done.map_err(|e| anyhow::anyhow!(e));
-                }
-                entry.notify.notified().await;
-            }
-        }
-
-        // Insert a new entry marking the task as running.
-        let entry = std::sync::Arc::new(Entry {
-            result: Mutex::new(None),
-            notify: Notify::new(),
-        });
-        {
-            let mut map = self.inner.inflight.lock().await;
-            // Handle a race: if someone inserted meanwhile, join theirs.
-            if let std::collections::hash_map::Entry::Vacant(v) = map.entry(feed.clone()) {
-                v.insert(entry.clone());
-            } else {
-                drop(map);
-                if let Some(existing) = { self.inner.inflight.lock().await.get(&feed).cloned() } {
-                    loop {
-                        if let Some(done) = existing.result.lock().await.clone() {
-                            return done.map_err(|e| anyhow::anyhow!(e));
-                        }
-                        existing.notify.notified().await;
-                    }
-                } else {
-                    // Extremely unlikely; fall through to starting our own task.
-                    error!("DownloadManager race condition");
-                }
-            }
-        }
-
-        // Run the download task inline (stays on this thread; no Send required).
-        let res_str: Result<(), String> = run_download(client, conn, data_root, feed)
-            .await
-            .map_err(|e| e.to_string());
-
-        // Publish result to waiters, notify, and clean up the map entry.
-        {
-            let mut slot = entry.result.lock().await;
-            *slot = Some(res_str.clone());
-            entry.notify.notify_waiters();
-        }
-        {
-            let mut map = self.inner.inflight.lock().await;
-            map.remove(&feed);
-        }
-
-        // Return the original result in anyhow form.
-        res_str.map_err(|e| anyhow::anyhow!(e))
+        // Simplified: run directly without in-flight dedup to avoid Clone/Join complexity
+        run_download(client, conn, data_root, provider_kind, instrument, topic, exchange).await
     }
 }
-use crate::ingest::{ingest_bbo, ingest_books, ingest_candles, ingest_ticks};
-use crate::models::{BboRow, CandleRow, DataKind, TickRow};
+use crate::ingest::{ingest_bbo, ingest_candles, ingest_ticks, ingest_books};
+use crate::models::{BboRow, CandleRow, TickRow};
 use crate::queries::latest_data_time;
 use chrono::{DateTime, Duration, Utc};
 use chrono_tz::Tz;
@@ -100,7 +53,7 @@ use rust_decimal::prelude::ToPrimitive;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::error;
-use tt_types::base_data::{Feed, OrderBook, Resolution, Side};
+use tt_types::base_data::{OrderBook, Resolution, Side};
 use tt_types::history::{HistoricalRequest, HistoryEvent};
 use tt_types::keys::SymbolKey;
 use tt_types::providers::ProviderKind;
@@ -114,33 +67,46 @@ async fn run_download(
     client: Arc<dyn HistoricalDataProvider>,
     conn: Arc<duckdb::Connection>,
     data_root: PathBuf,
-    feed: Feed,
+    provider_kind: ProviderKind,
+    instrument: Instrument,
+    topic: Topic,
+    exchange: Exchange,
 ) -> anyhow::Result<()> {
     const CAL_TZ: Tz = chrono_tz::UTC;
 
-    let provider_code = client.name();
-    let market_type = exchange_market_type(feed.exchange());
-    let hours = hours_for_exchange(feed.exchange());
+    let resolution = match topic {
+        Topic::Ticks => None,
+        Topic::Quotes => None,
+        Topic::Depth => None,
+        Topic::Candles1s => Some(Resolution::Seconds(1)),
+        Topic::Candles1m => Some(Resolution::Minutes(1)),
+        Topic::Candles1h => Some(Resolution::Hours(1)),
+        Topic::Candles1d => Some(Resolution::Daily),
+        _ => return Err(anyhow::anyhow!("invalid topic")),
+    };
 
-    let earliest = client.earliest_available(feed.clone());
+    let provider_code = client.name();
+    let market_type = exchange_market_type(exchange);
+    let hours = hours_for_exchange(exchange);
+
+    let earliest = client.earliest_available(instrument.clone(), topic);
     let now = Utc::now();
+    let wants_intraday = topic != Topic::Candles1d;
 
     // Cursor := max(persisted_ts)+1ns, else provider earliest
-    let mut cursor: DateTime<Utc> = match latest_data_time(&conn, feed.provider(), feed.clone()) {
+    let mut cursor: DateTime<Utc> = match latest_data_time(&conn, provider_kind, &instrument, topic) {
         Ok(Some(ts)) => ts + Duration::nanoseconds(1),
         Ok(None) => earliest,
         Err(e) => return Err(e),
     };
-    let symbol = feed.instrument();
-    let exchange = feed.exchange();
+    let symbol = instrument.to_string();
     if cursor >= now {
         tracing::info!(%symbol, ?provider_code, %exchange, "up to date");
         return Ok(());
     }
 
-    let wants_intraday = wants_intraday(kind, feed);
     // If we're on a fully-closed calendar day for intraday-ish kinds, jump to next open.
-    if wants_intraday && hours.is_closed_all_day_at(cursor, CAL_TZ, SessionKind::Both) {
+    if topic != Topic::Candles1d && hours.is_closed_all_day_at(cursor, CAL_TZ, SessionKind::Both) {
         let open = next_session_open_after(&hours, cursor);
         if open > cursor {
             cursor = open;
@@ -149,22 +115,24 @@ async fn run_download(
 
     while cursor < now {
         // Pick a batch window that fits the kind/resolution.
-        let span = choose_span(kind, feed.resolution());
+        let span = choose_span(resolution);
         let end = (cursor + span).min(now);
 
         // For intraday-ish kinds, skip windows that are 100% closed.
-        if wants_intraday && window_is_all_closed(&hours, CAL_TZ, cursor, end) {
+        if topic != Topic::Candles1d && window_is_all_closed(&hours, CAL_TZ, cursor, end) {
             cursor = next_session_open_after(&hours, cursor);
             continue;
         }
 
         let req = HistoricalRequest {
+            topic:topic.clone(),
+            instrument: instrument.clone(),
             start: cursor,
-            end, // end-exclusive expected; +1ns cursor guards even if provider is inclusive
+            end,
         };
 
-        tracing::info!(%symbol, start=%req.start, end=%req.end, kind=?kind, res=?feed.resolution(), "fetching");
-        let (_handle, mut rx) = client.clone().fetch(req).await?;
+        tracing::info!(%symbol, start=%req.start, end=%req.end, topic=?topic, res=?resolution, "fetching");
+        let events = client.clone().fetch(req).await?;
 
         // Accumulators and watermark of the max timestamp we actually received.
         let mut max_ts: Option<DateTime<Utc>> = None;
@@ -173,18 +141,18 @@ async fn run_download(
         let mut quotes: Vec<BboRow> = Vec::new();
         let mut books: Vec<OrderBook> = Vec::new();
 
-        while let Some(ev) = rx.recv().await {
+        for ev in events { 
             match ev {
                 HistoryEvent::Candle(c) => {
-                    if matches!(kind, DataKind::Candle) {
+                    if matches!(topic, Topic::Candles1s | Topic::Candles1m | Topic::Candles1h | Topic::Candles1d) {
                         // Advance by candle END to guarantee no gaps/overlaps between bars
                         let ts = c.time_end;
                         max_ts = Some(max_ts.map_or(ts, |m| m.max(ts)));
-                        candles.push(CandleRow::from_candle(provider_code.to_string(), c));
+                        candles.push(CandleRow::from_candle(provider_code, c));
                     }
                 }
                 HistoryEvent::Tick(t) => {
-                    if matches!(kind, DataKind::Tick) {
+                    if matches!(topic, Topic::Ticks) {
                         let ts = t.time;
                         max_ts = Some(max_ts.map_or(ts, |m| m.max(ts)));
                         let side_u8 = match t.side {
@@ -193,7 +161,7 @@ async fn run_download(
                             _ => 0,
                         };
                         ticks.push(TickRow {
-                            provider: provider_code.to_db_string(),
+                            provider: provider_kind_to_db_string(provider_code),
                             symbol_id: t.symbol,
                             price: t.price.to_f64().unwrap_or(0.0),
                             size: t.volume.to_f64().unwrap_or(0.0),
@@ -201,16 +169,16 @@ async fn run_download(
                             key_ts_utc_ns: dt_to_ns_i64(t.time), // robust ns key
                             key_tie: t.venue_seq.unwrap_or(0),
                             venue_seq: t.venue_seq,
-                            exec_id: t.exec_id,
+                            exec_id: None,
                         });
                     }
                 }
                 HistoryEvent::Bbo(q) => {
-                    if matches!(kind, DataKind::Bbo) {
+                    if matches!(topic, Topic::Quotes) {
                         let ts = q.time;
                         max_ts = Some(max_ts.map_or(ts, |m| m.max(ts)));
                         quotes.push(BboRow {
-                            provider: provider_code.to_string(),
+                            provider: provider_kind_to_db_string(provider_code),
                             symbol_id: q.symbol,
                             key_ts_utc_ns: dt_to_ns_i64(q.time),
                             bid: q.bid.to_f64().unwrap_or(0.0),
@@ -225,7 +193,7 @@ async fn run_download(
                     }
                 }
                 HistoryEvent::OrderBook(ob) => {
-                    if matches!(kind, DataKind::Depth) {
+                    if matches!(topic, Topic::Depth) {
                         let ts = ob.time;
                         max_ts = Some(max_ts.map_or(ts, |m| m.max(ts)));
                         books.push(ob);
@@ -240,16 +208,17 @@ async fn run_download(
         }
 
         // Persist
-        match kind {
-            DataKind::Tick => {
+        match topic {
+            Topic::Ticks => {
                 if !ticks.is_empty() {
                     let out_paths = ingest_ticks(
                         &conn,
-                        &data_root,
-                        provider_code,
+                        &provider_kind,
+                        &instrument,
                         market_type,
-                        &symbol,
+                        topic,
                         &ticks,
+                        &data_root,
                         9,
                     )?;
                     tracing::info!(files = out_paths.len(), start=%cursor, end=%end, "persisted ticks");
@@ -257,13 +226,14 @@ async fn run_download(
                     tracing::debug!(start=%cursor, end=%end, "no ticks returned");
                 }
             }
-            DataKind::Bbo => {
+            Topic::Quotes => {
                 if !quotes.is_empty() {
                     let out_paths = ingest_bbo(
                         &conn,
-                        provider_code,
+                        &provider_kind,
+                        &instrument,
                         market_type,
-                        &symbol,
+                        topic,
                         &quotes,
                         &data_root,
                         9,
@@ -273,14 +243,14 @@ async fn run_download(
                     tracing::debug!(start=%cursor, end=%end, "no bbo returned");
                 }
             }
-            DataKind::Candle => {
+            Topic::Candles1s | Topic::Candles1m | Topic::Candles1h | Topic::Candles1d => {
                 if !candles.is_empty() {
                     let out_paths = ingest_candles(
                         &conn,
-                        provider_code,
-                        &symbol,
+                        &provider_kind,
+                        &instrument,
                         market_type,
-                        feed.resolution().expect("Candle requires resolution"),
+                        topic,
                         &candles,
                         &data_root,
                         9,
@@ -290,17 +260,14 @@ async fn run_download(
                     tracing::debug!(start=%cursor, end=%end, "no candles returned");
                 }
             }
-            DataKind::Depth => {
+            Topic::Depth => {
                 if !books.is_empty() {
-                    let res = feed
-                        .resolution()
-                        .expect("OrderBook requires a resolution (depth/window key)");
                     let out_paths = ingest_books(
                         &conn,
-                        &provider_code,
+                        &provider_kind,
+                        &instrument,
                         market_type,
-                        &symbol,
-                        res,
+                        topic,
                         &books,
                         &data_root,
                     )?;
@@ -309,6 +276,7 @@ async fn run_download(
                     tracing::debug!(start=%cursor, end=%end, "no order books returned");
                 }
             }
+            _ => {}
         }
 
         // Advance cursor by what we *actually* got, otherwise by window end.
@@ -325,6 +293,17 @@ async fn run_download(
 }
 
 // ---- helpers ----
+
+fn choose_span(res: Option<Resolution>) -> chrono::Duration {
+    if let Some(res) = res {
+        return match res {
+            Resolution::Daily | Resolution::Weekly => chrono::Duration::days(5000),
+            Resolution::Hours(h) =>  chrono::Duration::days(h as i64 * 100),
+            _ => chrono::Duration::days(1),
+        }
+    }
+    chrono::Duration::days(30)
+}
 
 #[inline]
 fn dt_to_ns_i64(dt: chrono::DateTime<Utc>) -> i64 {
@@ -360,42 +339,6 @@ fn dt_to_ns_i64(dt: chrono::DateTime<Utc>) -> i64 {
                 }
             }
         }
-    }
-}
-
-fn choose_span(kind: DataKind, res: Option<Resolution>) -> chrono::Duration {
-    match kind {
-        DataKind::Candle => match res.expect("Candle requires resolution") {
-            Resolution::Weekly => chrono::Duration::days(365), // ~1y
-            Resolution::Daily => chrono::Duration::days(365),  // ~1y
-            Resolution::Hours(h) if h >= 4 => chrono::Duration::days(60),
-            Resolution::Hours(_) => chrono::Duration::days(30),
-            Resolution::Minutes(m) if m >= 15 => chrono::Duration::days(14),
-            Resolution::Minutes(_) => chrono::Duration::days(7),
-            Resolution::Seconds(_) => chrono::Duration::days(1),
-            _ => chrono::Duration::days(7),
-        },
-        DataKind::Bbo => match res.expect("BBO requires resolution") {
-            Resolution::Minutes(m) if m >= 1 => chrono::Duration::days(14),
-            Resolution::Seconds(_) => chrono::Duration::days(2),
-            _ => chrono::Duration::days(2),
-        },
-        DataKind::Depth => match res.expect("OrderBook requires resolution") {
-            Resolution::Minutes(m) if m >= 1 => chrono::Duration::days(2),
-            _ => chrono::Duration::days(1),
-        },
-        DataKind::Tick => chrono::Duration::days(1),
-    }
-}
-
-fn is_daily_or_weekly(res: Option<Resolution>) -> bool {
-    matches!(res, Some(Resolution::Daily) | Some(Resolution::Weekly))
-}
-
-fn wants_intraday(kind: DataKind, res: Option<Resolution>) -> bool {
-    match kind {
-        DataKind::Tick | DataKind::Bbo | DataKind::Depth => true,
-        DataKind::Candle => !is_daily_or_weekly(res),
     }
 }
 

@@ -36,6 +36,4 @@ pub mod perist;
 #[cfg(feature = "queries")]
 pub mod queries;
 #[cfg(feature = "queries")]
-pub mod replay;
-#[cfg(feature = "queries")]
 pub mod update_historical;

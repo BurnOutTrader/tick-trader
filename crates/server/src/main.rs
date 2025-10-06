@@ -9,6 +9,8 @@ use std::sync::Arc;
 use tokio::net::UnixListener;
 use tracing::level_filters::LevelFilter;
 use tt_bus::Router;
+use tt_database::init::init_db;
+use tt_database::update_historical::DownloadManager;
 
 #[cfg(target_os = "linux")]
 pub fn bind_uds(path: &str) -> io::Result<UnixListener> {
@@ -93,6 +95,12 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_max_level(LevelFilter::INFO)
         .init();
+    dotenv().ok();
+
+    let db_path = std::env::var("DB_PATH").unwrap_or_else(|_| "./storage".to_string());
+    let db = init_db(Path::new(&db_path))?;
+    let download_manager = DownloadManager::new();
+
     // Allow overriding the UDS path via env. Defaults:
     // - Linux: abstract namespace '@tick-trader.sock' (no filesystem artifact)
     // - Others: filesystem path '/tmp/tick-trader.sock'

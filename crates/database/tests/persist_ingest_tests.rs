@@ -1,15 +1,13 @@
 #![cfg(feature = "queries")]
+
+use std::str::FromStr;
 use chrono::{Datelike, NaiveDate, TimeZone, Utc};
-use database::paths::{daily_file_name, monthly_file_name, weekly_file_name};
-use standard_lib::database;
-use standard_lib::database::duck::create_partitions_schema;
-use standard_lib::database::ingest::{ingest_bbo, ingest_candles, ingest_ticks};
-use standard_lib::database::init::create_identity_schema_if_needed;
-use standard_lib::database::models::{BboRow, CandleRow, DataKind, TickRow};
-use standard_lib::database::paths::{get_partion, intraday_file_name};
-use standard_lib::market_data::base_data::Resolution;
-use standard_lib::securities::symbols::Exchange;
-use standard_lib::securities::symbols::MarketType;
+use tt_database::duck::create_partitions_schema;
+use tt_database::ingest::ingest_ticks;
+use tt_database::init::create_identity_schema_if_needed;
+use tt_database::models::{BboRow, CandleRow, TickRow};
+use tt_types::base_data::{Exchange, Resolution};
+use tt_types::securities::symbols::{Instrument, MarketType};
 
 fn setup_conn() -> duckdb::Connection {
     let conn = duckdb::Connection::open_in_memory().expect("duckdb mem");
@@ -29,7 +27,6 @@ fn fake_ticks(provider: &str, symbol: &str, base_ns: i64, n: usize) -> Vec<TickR
         v.push(TickRow {
             provider: provider.to_string(),
             symbol_id: symbol.to_string(),
-            exchange: "CME".to_string(),
             price: 10000.0 + i as f64,
             size: 1.0,
             side: 1,
@@ -48,7 +45,6 @@ fn fake_bbo(provider: &str, symbol: &str, base_ns: i64, n: usize) -> Vec<BboRow>
         v.push(BboRow {
             provider: provider.to_string(),
             symbol_id: symbol.to_string(),
-            exchange: "CME".to_string(),
             key_ts_utc_ns: base_ns + (i as i64) * 1_000_000,
             bid: 10000.0 + i as f64,
             bid_size: 1.0,
@@ -77,7 +73,6 @@ fn fake_candles(
             Resolution::Seconds(s) => s as i64,
             Resolution::Minutes(m) => (m as i64) * 60,
             Resolution::Hours(h) => (h as i64) * 3600,
-            Resolution::TickBars(_) | Resolution::Ticks => 1,
             Resolution::Daily => 24 * 3600,
             Resolution::Weekly => 7 * 24 * 3600,
         };
@@ -89,7 +84,6 @@ fn fake_candles(
         v.push(CandleRow {
             provider: provider.to_string(),
             symbol_id: symbol.to_string(),
-            exchange: "CME".to_string(),
             res: res.to_os_string(),
             time_start_ns: start.timestamp_nanos_opt().unwrap(),
             time_end_ns: end.timestamp_nanos_opt().unwrap(),
@@ -100,7 +94,6 @@ fn fake_candles(
             volume: 1.0,
             ask_volume: 0.5,
             bid_volume: 0.5,
-            num_trades: 10,
         });
     }
     v
@@ -113,7 +106,7 @@ fn test_ingest_ticks_merge_daily_file() {
     let root = tmp.path();
 
     let provider = "TESTPROV"; // fake provider to avoid real paths
-    let symbol = "TESTSYM";
+    let symbol =Instrument::from_str("TESTSM").unwrap();
     let market = MarketType::Futures;
 
     // Two timestamps on the same UTC day

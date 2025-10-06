@@ -68,6 +68,13 @@ Legacy higher-level queries remain in `queries.rs` and are gated behind the `que
 4. Query availability: `earliest_available` / `latest_available`.
 5. Run maintenance periodically: prune/quarantine.
 
+## Shared usage and configuration
+
+Tick Trader uses DuckDB as an integrated catalog and metadata database. All historical and real-time data is stored in Parquet files, with DuckDB tracking and managing these files for fast discovery, pruning, and maintenance. Both the server and all strategies must use the same DB_PATH environment variable, ensuring they access the same DuckDB catalog and Parquet data. This is critical for correct operation, as mismatched DB_PATH values will result in inconsistent or missing data views.
+
+- Set DB_PATH in your environment or .env file to the desired storage directory (default: ./storage).
+- Both server and strategies must use the same DB_PATH value.
+
 ## Design choices
 
 - One file per instrument/topic/month is a good balance between file count and update granularity.
