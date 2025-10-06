@@ -203,3 +203,77 @@ fn test_quarantine_unreadable_partitions_removes_bad_files() {
         .unwrap();
     assert_eq!(remaining, 0);
 }
+
+#[test]
+fn test_latest_available_candles_with_legacy_empty_resolution_key() {
+    use duckdb::params;
+
+    let conn = setup_conn();
+
+    // Manually insert provider, symbol, and a legacy dataset row with empty resolution_key
+    conn.execute(
+        "INSERT INTO providers(provider_code) VALUES ('TESTP4')",
+        [],
+    )
+    .unwrap();
+    let provider_id: i64 = conn
+        .query_row(
+            "SELECT provider_id FROM providers WHERE provider_code='TESTP4'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+
+    conn.execute(
+        "INSERT INTO symbols(provider_id, symbol_text) VALUES (?, 'SYM4')",
+        params![provider_id],
+    )
+    .unwrap();
+    let symbol_id: i64 = conn
+        .query_row(
+            "SELECT symbol_id FROM symbols WHERE provider_id=? AND symbol_text='SYM4'",
+            params![provider_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+
+    // Insert legacy dataset: kind=candles1m, resolution_key='' (empty)
+    conn.execute(
+        "INSERT INTO datasets(provider_id, symbol_id, kind, resolution, resolution_key) VALUES (?,?,?,?, '')",
+        params![provider_id, symbol_id, "candles1m", Option::<String>::None],
+    )
+    .unwrap();
+    let dataset_id: i64 = conn
+        .query_row(
+            "SELECT dataset_id FROM datasets WHERE provider_id=? AND symbol_id=? AND kind='candles1m' AND resolution_key=''",
+            params![provider_id, symbol_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+
+    // Insert a partition with a valid time range
+    let day = chrono::NaiveDate::from_ymd_opt(2025, 10, 1).unwrap();
+    let start = chrono::Utc.with_ymd_and_hms(2025, 10, 1, 0, 0, 0).unwrap();
+    let end = chrono::Utc.with_ymd_and_hms(2025, 10, 1, 0, 1, 0).unwrap();
+
+    upsert_partition(
+        &conn,
+        dataset_id,
+        "/tmp/candles_2025-10-01.parquet",
+        "parquet",
+        60,
+        1_024,
+        start,
+        end,
+        None,
+        None,
+        Some(day),
+    )
+    .unwrap();
+
+    // Now resolve via latest_available using Topic::Candles1m; should find the legacy dataset
+    let got = latest_available(&conn, "TESTP4", "SYM4", tt_types::keys::Topic::Candles1m)
+        .unwrap()
+        .map(|b| b.ts);
+    assert!(got.is_some(), "expected latest_available to find a timestamp for legacy candles dataset");
+}

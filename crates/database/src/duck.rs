@@ -380,13 +380,20 @@ pub fn resolve_dataset_id(
         "#,
     )?;
 
-    //todo finish add market data type, do it all manually so you understand how it works
     let mut rows = stmt.query(duckdb::params![provider, symbol, kind_key, res_key])?;
-    Ok(if let Some(row) = rows.next()? {
-        Some(row.get::<_, i64>(0)?)
-    } else {
-        None
-    })
+    if let Some(row) = rows.next()? {
+        return Ok(Some(row.get::<_, i64>(0)?));
+    }
+
+    // Fallback: legacy rows may have empty resolution_key for candle topics
+    if !res_key.is_empty() {
+        let mut rows2 = stmt.query(duckdb::params![provider, symbol, kind_key, ""]) ?;
+        if let Some(row) = rows2.next()? {
+            return Ok(Some(row.get::<_, i64>(0)?));
+        }
+    }
+
+    Ok(None)
 }
 
 #[inline]

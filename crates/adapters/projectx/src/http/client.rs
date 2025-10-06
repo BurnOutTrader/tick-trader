@@ -129,7 +129,7 @@ impl PxHttpClient {
     ) -> anyhow::Result<()> {
         info!("ProjectX Auto Updating instruments");
         let resp: ContractSearchResponse = inner
-            .list_all_contracts(true)
+            .list_all_contracts(false)
             .await
             .map_err(|e| anyhow::anyhow!(e))?;
 

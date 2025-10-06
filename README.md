@@ -66,7 +66,6 @@ It connects over UDS, performs topic-level Subscribe for hot and account topics,
 ## 📚 Documentation index
 
 - Architecture overview: [docs/architecture.md](docs/architecture.md)
-- Strategies guide: [docs/strategies.md](docs/strategies.md)
 - Wire protocol (rkyv frames): [docs/WIRE-v1.md](docs/WIRE-v1.md)
 - Shared memory layout (SHM): [docs/SHM-layout.md](docs/SHM-layout.md)
 - Database and persistence: [docs/database.md](docs/database.md)

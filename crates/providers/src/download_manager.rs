@@ -25,6 +25,7 @@ use tokio::task::JoinHandle;
 use tracing::info;
 use uuid::Uuid;
 use tokio::time::{timeout, Duration as TokioDuration};
+use tt_database::duck::earliest_available;
 
 pub struct Entry {
     result: Mutex<Option<anyhow::Result<()>>>,
@@ -207,10 +208,16 @@ async fn run_download(
 
     // Cursor := max(persisted_ts)+1ns, else provider earliest
     let mut cursor: DateTime<Utc> = match latest_data_time(&connection, req.provider_kind, &req.instrument, req.topic) {
-        Ok(Some(ts)) => ts + Duration::nanoseconds(1),
-        Ok(None) => match earliest {
-            None => return Err(anyhow::anyhow!("no data available")),
-            Some(t) => t
+        Ok(Some(ts)) => {
+            info!("Data found in db, updating: {:?} {}, {}", req.provider_kind, req.instrument, req.topic);
+            ts + Duration::nanoseconds(1)
+        },
+        Ok(None) => {
+            info!("No data found in db, fetching: {:?} {}, {}", req.provider_kind, req.instrument, req.topic);
+            match earliest {
+                None => return Err(anyhow::anyhow!("no data available")),
+                Some(t) => t
+            }
         },
         Err(e) => return Err(e),
     };
