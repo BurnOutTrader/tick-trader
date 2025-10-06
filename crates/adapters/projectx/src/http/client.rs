@@ -169,7 +169,7 @@ impl PxHttpClient {
                 Decimal::from_f64(inst.tick_value).unwrap_or_else(|| symbol_info.value_per_tick);
             s.tick_size =
                 Decimal::from_f64(inst.tick_size).unwrap_or_else(|| symbol_info.tick_size);
-
+            //info!("{:?}",s);
             lock.insert(instrument, s);
         }
         info!(
@@ -226,7 +226,7 @@ impl PxHttpClient {
                 Decimal::from_f64(inst.tick_value).unwrap_or_else(|| symbol_info.value_per_tick);
             s.tick_size =
                 Decimal::from_f64(inst.tick_size).unwrap_or_else(|| symbol_info.tick_size);
-
+            //info!("{:?}",s);
             lock.insert(instrument, s);
         }
         info!(

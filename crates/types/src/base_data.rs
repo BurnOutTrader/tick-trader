@@ -199,6 +199,10 @@ impl Candle {
     pub fn range(&self) -> Decimal {
         self.high - self.low
     }
+
+    pub fn is_closed(&self, time: DateTime<Utc>) -> bool {
+        time > self.time_end
+    }
 }
 
 #[derive(

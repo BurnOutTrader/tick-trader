@@ -5,12 +5,19 @@ use std::os::fd::FromRawFd;
 #[cfg(target_os = "linux")]
 use std::os::unix::net::UnixListener as StdUnixListener;
 use std::path::Path;
+use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::net::UnixListener;
 use tracing::level_filters::LevelFilter;
-use tt_bus::Router;
+use tt_bus::{Router, UpstreamManager};
 use tt_database::init::init_db;
 use tt_providers::download_manager::DownloadManager;
+use tt_types::base_data::{Exchange, Utc};
+use tt_types::history::HistoricalRequest;
+use tt_types::keys::Topic;
+use tt_types::providers::{ProjectXTenant, ProviderKind};
+use tt_types::securities::symbols::Instrument;
 
 #[cfg(target_os = "linux")]
 pub fn bind_uds(path: &str) -> io::Result<UnixListener> {
@@ -95,11 +102,6 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_max_level(LevelFilter::INFO)
         .init();
-    dotenv().ok();
-
-    let db_path = std::env::var("DB_PATH").unwrap_or_else(|_| "./storage".to_string());
-    let _db = init_db(Path::new(&db_path))?;
-    let _download_manager = DownloadManager::new();
 
     // Allow overriding the UDS path via env. Defaults:
     // - Linux: abstract namespace '@tick-trader.sock' (no filesystem artifact)
@@ -119,6 +121,23 @@ async fn main() -> anyhow::Result<()> {
     let router = Arc::new(Router::new(8));
     // Wire upstream manager (providers) into the router for first/last sub notifications
     let mgr = Arc::new(tt_providers::manager::ProviderManager::new(router.clone()));
+
+    let cs = mgr.get_instruments_map(ProviderKind::ProjectX(ProjectXTenant::Topstep)).await?;
+    let topics = vec![Topic::Candles1m, Topic::Candles1s, Topic::Candles1h, Topic::Candles1d];
+    for topic in topics {
+        for (i, c) in &cs {
+            let req = HistoricalRequest {
+                provider_kind: ProviderKind::ProjectX(ProjectXTenant::Topstep),
+                topic,
+                instrument: i.clone(),
+                exchange: c.exchange,
+                start: Utc::now() - chrono::Duration::days(1500),
+                end: Utc::now(),
+            };
+            mgr.update_historical_database(req).await?;
+        }
+    }
+
     router.set_backend(mgr);
 
     loop {

@@ -10,6 +10,9 @@ This document describes the database crate that powers Tick Trader’s on-disk h
 - Ingestion APIs that are easy to use and safe to repeat
 - Maintenance tools for pruning and quarantining broken files
 
+## File Structure
+![Structure](/docs/misc/file_structure.png)
+
 ## Layout (authoritative)
 
 All path logic lives in `tt-database::paths`. The layout is:

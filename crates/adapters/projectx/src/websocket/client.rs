@@ -26,7 +26,7 @@ use tt_types::accounts::events::{
 use tt_types::base_data::{BookLevel, OrderBook, Price, Side, Tick, Volume};
 use tt_types::keys::Topic;
 use tt_types::providers::ProjectXTenant;
-use tt_types::securities::futures_helpers::extract_root;
+use tt_types::securities::futures_helpers::{extract_month_year, extract_root, sanitize_code};
 use tt_types::securities::symbols::Instrument;
 use tt_types::wire::{AccountDeltaBatch, OrdersBatch, PositionsBatch};
 
@@ -107,6 +107,25 @@ pub fn parse_px_instrument(input: &str) -> String {
     } else {
         input.to_string()
     }
+}
+
+/// Format to ProjectX contract id:
+/// - Continuous:  "CON.F.US.MNQ"
+/// - Dated:       "CON.F.US.MNQ.Z25"
+pub fn px_format_from_instrument(instrument: &Instrument) -> String {
+    // sanitize + uppercase once
+    let raw = sanitize_code(&instrument.to_string()).to_ascii_uppercase();
+
+    // If it looks like a dated contract, format ROOT + . + <Mon><YY>
+    if let Some((month_ch, yy)) = extract_month_year(instrument) {
+        // ROOT is everything before the month/year suffix
+        let mut root = extract_root(instrument);
+        root = sanitize_code(&root).to_ascii_uppercase();
+        return format!("CON.F.US.{}.{}{:02}", root, month_ch, yy);
+    }
+
+    // Otherwise treat as a continuous root
+    format!("CON.F.US.{}", raw)
 }
 
 impl PxWebSocketClient {

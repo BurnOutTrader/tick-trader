@@ -205,3 +205,40 @@ fn test_earliest_latest_ticks_across_days() {
     assert_eq!(e.ts.date_naive(), day1);
     assert_eq!(l.ts.date_naive(), day2);
 }
+
+#[test]
+fn test_ingest_candles_merge_monthly_file() {
+    let conn = setup_conn();
+    let tmp = temp_root();
+    let root = tmp.path();
+
+    let provider_kind = ProviderKind::ProjectX(ProjectXTenant::Demo);
+    let provider_s = "projectx";
+    let instrument = Instrument::from_str("TESTSM").unwrap();
+    let market = MarketType::Futures;
+
+    let day = NaiveDate::from_ymd_opt(2025, 2, 7).unwrap();
+
+    // First batch: 5 consecutive 1m candles starting at 00:00
+    let batch1 = fake_candles(provider_s, &instrument, Topic::Candles1m, day, 5);
+
+    // Second batch: overlap last 2 from batch1 and add 3 new (indices 3..7) -> total unique = 8
+    let mut full = fake_candles(provider_s, &instrument, Topic::Candles1m, day, 8);
+    let batch2: Vec<CandleRow> = full.drain(3..).collect();
+
+    let out1 = ingest_candles(&conn, &provider_kind, &instrument, market, Topic::Candles1m, &batch1, root, 9).expect("ingest candles 1");
+    let out2 = ingest_candles(&conn, &provider_kind, &instrument, market, Topic::Candles1m, &batch2, root, 9).expect("ingest candles 2");
+
+    assert_eq!(out1.len(), 1);
+    assert_eq!(out2.len(), 1);
+    assert_eq!(out1[0], out2[0]);
+
+    let expected_dir = partition_dir(root, provider_kind, market, &instrument, Topic::Candles1m, day.year() as u32);
+    let expected_name = data_file_name(&instrument, Topic::Candles1m, NaiveDate::from_ymd_opt(day.year(), day.month(), 1).unwrap());
+    let expected_path = expected_dir.join(expected_name);
+    assert_eq!(out1[0], expected_path);
+
+    let sql = format!("SELECT COUNT(*) FROM read_parquet('{}')", expected_path.display());
+    let cnt: i64 = conn.query_row(&sql, [], |r| r.get(0)).unwrap();
+    assert_eq!(cnt, 8); // merged unique candles (0..7)
+}

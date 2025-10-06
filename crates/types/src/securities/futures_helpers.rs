@@ -6,7 +6,7 @@ use rust_decimal::prelude::FromPrimitive;
 use std::borrow::Cow;
 
 #[inline]
-fn sanitize_code(s: &str) -> Cow<'_, str> {
+pub fn sanitize_code(s: &str) -> Cow<'_, str> {
     if s.chars().all(|c| c.is_ascii_alphanumeric()) {
         return Cow::Borrowed(s);
     }
@@ -14,7 +14,7 @@ fn sanitize_code(s: &str) -> Cow<'_, str> {
 }
 
 #[inline]
-fn month_from_code(c: char) -> Option<u32> {
+pub fn month_from_code(c: char) -> Option<u32> {
     Some(match c {
         'F' => 1,  // Jan
         'G' => 2,  // Feb

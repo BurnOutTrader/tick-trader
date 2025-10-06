@@ -271,7 +271,7 @@ pub trait HistoricalDataProvider: Send + Sync {
         true
     }
 
-    fn earliest_available(&self, instrument: Instrument, topic: Topic) -> DateTime<Utc>;
+    async fn earliest_available(&self, instrument: Instrument, topic: Topic)  -> anyhow::Result<Option<DateTime<Utc>>> ;
 }
 
 #[derive(Debug, Clone)]

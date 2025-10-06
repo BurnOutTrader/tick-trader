@@ -2,13 +2,14 @@ use crate::http::client::PxHttpClient;
 use crate::http::credentials::PxCredential;
 use crate::http::error::PxError;
 use crate::http::models::{RetrieveBarsReq, RetrieveBarsResponse};
-use crate::websocket::client::PxWebSocketClient;
+use crate::websocket::client::{parse_px_instrument, px_format_from_instrument, PxWebSocketClient};
 use ahash::AHashMap;
 use async_trait::async_trait;
-use chrono::{DateTime, ParseResult, Utc};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, ParseResult, Utc, Duration as ChronoDuration};
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tracing::info;
 use tt_bus::Router;
 use tt_types::base_data::{Candle, Resolution};
 use tt_types::history::{HistoricalRequest, HistoryEvent};
@@ -126,6 +127,8 @@ impl PXClient {
                 }
             }
         }
+        self.http.manual_update_instruments(false).await?;
+        self.http.account_snapshots().await?;
         Ok(())
     }
 
@@ -153,19 +156,17 @@ impl PXClient {
         }
         if contract_id.is_none() {
             // refresh instruments and retry once
-            let _ = self.http.manual_update_instruments(false).await;
-            let map = self.http.instruments_snapshot().await;
+            let map = self.http.manual_update_instruments(false).await?;
+            let map = map.read().await;
             if let Some(fc) = map.get(&req.instrument) {
                 contract_id = Some(fc.provider_contract_name.clone());
                 exchange = Some(fc.exchange);
             }
         }
-        let contract_id = contract_id.ok_or_else(|| {
-            anyhow::anyhow!(
-                "ProjectX: unknown instrument {}; run auto_update_instruments first",
-                req.instrument
-            )
-        })?;
+        let contract_id = match contract_id {
+            None =>  px_format_from_instrument(&req.instrument),
+            Some(id) => id
+        };
         let exchange = exchange.expect("exchange must be present for known instrument");
 
         let limit: i32 = 20_000;
@@ -194,6 +195,7 @@ impl PXClient {
 
             let resp: RetrieveBarsResponse = self.http.inner.retrieve_bars(&body).await?;
             if !resp.success {
+                info!("download failed: {:?}", resp.error_message);
                 anyhow::bail!(
                     "ProjectX retrieveBars error: code={:?} msg={:?}",
                     resp.error_code,
@@ -211,13 +213,23 @@ impl PXClient {
                             break 'main_loop;
                         }
                     };
-                // Determine next window start from the last candle's time_end when available
-                let last_end_opt = candles.last().map(|c| c.time_end);
+                // Determine oldest and newest by time_end; API may return bars in reverse chronological order
+                let (min_end_opt, max_end_opt) = (
+                    candles.iter().map(|c| c.time_end).min(),
+                    candles.iter().map(|c| c.time_end).max(),
+                );
+                if let (Some(min_end), Some(max_end)) = (min_end_opt, max_end_opt) {
+                    info!("candles: {} from: {}, to: {}", candles.len(), min_end, max_end);
+                } else {
+                    info!("candles: {}", candles.len());
+                }
+                // Advance window start using the newest bar's end to ensure forward progress
+                let next_start_opt = max_end_opt;
                 all.extend(candles);
-                if let Some(last_end) = last_end_opt {
-                    // Ensure monotonic progress; fall back to cur_end if something is off
-                    if last_end > cur_start {
-                        cur_start = last_end;
+                if let Some(next_start) = next_start_opt {
+                    if next_start >= cur_start {
+                        // Use exact boundary; downstream de-duplication will handle inclusivity
+                        cur_start = next_start;
                     } else {
                         cur_start = cur_end;
                     }
@@ -658,10 +670,22 @@ impl HistoricalDataProvider for PXClient {
         false
     }
 
-    fn earliest_available(&self, _instrument: Instrument, _topic: Topic) -> DateTime<Utc> {
-        // Try to parse, fall back to a default if it fails
-        DateTime::parse_from_rfc3339("2022-12-01T00:00:00Z")
-            .map(|dt| dt.with_timezone(&Utc))
-            .unwrap_or_else(|_| DateTime::<Utc>::from_timestamp(1672444800, 0).unwrap()) // fallback: 2022-12-31T00:00:00Z
+    async fn earliest_available(&self, instrument: Instrument, _topic: Topic) -> anyhow::Result<Option<DateTime<Utc>>> {
+        self.http.manual_update_instruments(false).await?;
+        if let Some(contract) = self.http.instruments_snapshot().await.get(&instrument) {
+            if let Some(ad) = contract.activation_date {
+                let dt = NaiveDateTime::from(ad);
+                let utc_time = DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc);
+                return Ok(Some(utc_time))
+            }
+        }
+        match NaiveDate::from_ymd_opt(2023, 1, 1) {
+            Some(date) => {
+                let dt = NaiveDateTime::from(date);
+                let utc_time = DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc);
+                Ok(Some(utc_time))
+            },
+            None => Ok(None),
+        }
     }
 }

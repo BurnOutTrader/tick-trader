@@ -22,12 +22,13 @@ use tt_types::securities::market_hours::{
 use tt_types::securities::symbols::{Instrument, exchange_market_type};
 use tt_types::server_side::traits::HistoricalDataProvider;
 use tokio::task::JoinHandle;
+use tracing::info;
 use uuid::Uuid;
+use tokio::time::{timeout, Duration as TokioDuration};
 
 pub struct Entry {
     result: Mutex<Option<anyhow::Result<()>>>,
     pub notify: Notify,
-    // identifier and control for cancellation
     id: Uuid,
     join: Mutex<Option<JoinHandle<()>>>
 }
@@ -51,11 +52,9 @@ impl DownloadTaskHandle {
     pub fn id(&self) -> Uuid { self.entry.id }
     pub fn key(&self) -> &(ProviderKind, Instrument, Topic) { &self.key }
     pub fn is_complete(&self) -> bool {
-        // non-blocking peek
         self.entry.result.try_lock().map(|g| g.is_some()).unwrap_or(false)
     }
     pub async fn wait(self) -> anyhow::Result<()> {
-        // fast path: check if a result is already present
         {
             let g = self.entry.result.lock().await;
             if let Some(res) = g.as_ref() {
@@ -65,7 +64,6 @@ impl DownloadTaskHandle {
                 };
             }
         }
-        // wait to be notified, then read the result
         self.entry.notify.notified().await;
         let g = self.entry.result.lock().await;
         match g.as_ref() {
@@ -203,14 +201,17 @@ async fn run_download(
     let market_type = exchange_market_type(req.exchange);
     let hours = hours_for_exchange(req.exchange);
 
-    let earliest = client.earliest_available(req.instrument.clone(), req.topic);
+    let earliest = client.earliest_available(req.instrument.clone(), req.topic).await?;
     let now = Utc::now();
     let wants_intraday = req.topic != Topic::Candles1d;
 
     // Cursor := max(persisted_ts)+1ns, else provider earliest
     let mut cursor: DateTime<Utc> = match latest_data_time(&connection, req.provider_kind, &req.instrument, req.topic) {
         Ok(Some(ts)) => ts + Duration::nanoseconds(1),
-        Ok(None) => earliest,
+        Ok(None) => match earliest {
+            None => return Err(anyhow::anyhow!("no data available")),
+            Some(t) => t
+        },
         Err(e) => return Err(e),
     };
     let symbol = req.instrument.to_string();
@@ -247,8 +248,26 @@ async fn run_download(
             end,
         };
 
-        tracing::info!(%symbol, start=%req.start, end=%req.end, topic=?req.topic, res=?resolution, "fetching");
-        let events = client.clone().fetch(req.clone()).await?;
+        tracing::info!(symbol=%symbol, start=%req.start, end=%req.end, topic=?req.topic, res=?resolution, "fetching");
+        if let Err(e) = client.ensure_connected().await {
+            tracing::error!(error=%e, "ensure_connected failed; aborting task");
+            return Err(e);
+        }
+        let fetch_res = timeout(TokioDuration::from_secs(1000), client.clone().fetch(req.clone())).await;
+        let events = match fetch_res {
+            Ok(Ok(ev)) => {
+                tracing::info!("received {} events", ev.len());
+                ev
+            },
+            Ok(Err(e)) => {
+                tracing::error!(error=%e, start=%cursor, end=%end, "history fetch error; aborting task");
+                return Err(e);
+            }
+            Err(_) => {
+                tracing::warn!(start=%cursor, end=%end, "history fetch timed out; aborting task");
+                return Err(anyhow::anyhow!("history fetch timed out"));
+            }
+        };
 
         // Accumulators and watermark of the max timestamp we actually received.
         let mut max_ts: Option<DateTime<Utc>> = None;
@@ -264,6 +283,9 @@ async fn run_download(
                         // Advance by candle END to guarantee no gaps/overlaps between bars
                         let ts = c.time_end;
                         max_ts = Some(max_ts.map_or(ts, |m| m.max(ts)));
+                        if !c.is_closed(Utc::now()) {
+                            continue;
+                        }
                         candles.push(CandleRow::from_candle(provider_code, c));
                     }
                 }
@@ -405,20 +427,23 @@ async fn run_download(
             cursor = end + Duration::seconds(1);
         }
     }
+    info!("Historical database update completed");
     Ok(())
 }
 
 // ---- helpers ----
 
 fn choose_span(res: Option<Resolution>) -> chrono::Duration {
-    if let Some(res) = res {
-        return match res {
-            Resolution::Daily | Resolution::Weekly => chrono::Duration::days(5000),
-            Resolution::Hours(h) =>  chrono::Duration::days(h as i64 * 100),
-            _ => chrono::Duration::days(1),
-        }
+    // Policy update:
+    // - Candles (any resolution): request approximately one month per batch to align with monthly persistence.
+    // - Non-candles (ticks/quotes/depth): keep conservative daily windows.
+    match res {
+        Some(Resolution::Seconds(_)) => chrono::Duration::days(31),
+        Some(Resolution::Minutes(_)) => chrono::Duration::days(31),
+        Some(Resolution::Hours(_)) => chrono::Duration::days(31),
+        Some(Resolution::Daily) | Some(Resolution::Weekly) => chrono::Duration::days(31),
+        None => chrono::Duration::days(1), // ticks/quotes/depth
     }
-    chrono::Duration::days(30)
 }
 
 #[inline]
