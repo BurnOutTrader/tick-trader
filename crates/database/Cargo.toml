@@ -11,18 +11,13 @@ chrono = { workspace = true}
 chrono-tz = {workspace = true}
 rust_decimal = { workspace = true }
 serde = { workspace = true }
-strum_macros = {workspace = true}
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 serde_json = {workspace = true}
-once_cell = { workspace = true }
-rkyv = { workspace = true}
-futures = {workspace = true}
 tokio = { workspace = true }
-dashmap = { workspace = true }
 ahash = { workspace = true }
-duckdb = {version = "1.4.0", features = ["bundled"]}
+duckdb = {workspace = true, features = ["bundled"]}
 arrow = "56.1.0"
 parquet = "56.2.0"
 nanoid = "0.4.0"

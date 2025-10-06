@@ -9,6 +9,7 @@ use tt_types::keys::{SymbolKey, Topic, AccountKey};
 use tt_types::providers::ProviderKind;
 use tt_types::securities::symbols::Instrument;
 use dashmap::DashMap;
+use duckdb::Connection;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubState {
@@ -124,20 +125,23 @@ pub struct Engine<P: MarketDataProvider + 'static> {
 struct EngineInner {
     interest: HashMap<StreamKey, InterestEntry>,
     metrics: HashMap<StreamKey, StreamMetrics>,
+    database: Connection,
     caches: Caches,
 }
 
 impl<P: MarketDataProvider + 'static> Engine<P> {
-    pub fn new(provider: Arc<P>, cfg: EngineConfig) -> Self {
-        Self {
+    pub fn new(provider: Arc<P>, cfg: EngineConfig) ->anyhow::Result<Self> {
+        let database = init_db()?;
+        Ok(Self {
             provider,
             cfg,
             inner: Arc::new(Mutex::new(EngineInner {
                 interest: HashMap::new(),
                 metrics: HashMap::new(),
                 caches: Caches::default(),
+                database
             })),
-        }
+        })
     }
 
     pub async fn interest_delta(
@@ -257,6 +261,7 @@ impl<P: MarketDataProvider + 'static> Engine<P> {
 // -------- Strategy runtime over the MessageBus --------
 use tokio::sync::mpsc;
 use tt_bus::{ClientMessageBus, ClientSubId};
+use tt_database::init::init_db;
 use tt_types::base_data::{Bbo, Candle, OrderBook, Tick};
 use tt_types::wire::{
     AccountDeltaBatch, BarBatch, OrdersBatch, PositionsBatch, QuoteBatch, Request, Response,

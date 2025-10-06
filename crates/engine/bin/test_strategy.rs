@@ -8,6 +8,7 @@ use tokio_util::codec::length_delimited::LengthDelimitedCodec;
 use tokio_util::codec::{FramedRead, FramedWrite};
 use tracing::{info, warn};
 use tt_bus::ClientMessageBus;
+use tt_database::init::init_db;
 use tt_engine::EngineRuntime;
 use tt_engine::Strategy;
 use tt_types::base_data::OrderBook;
@@ -74,7 +75,6 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
-
     // Prepare client bus and transport channel
     let (req_tx, mut req_rx) = mpsc::channel::<Request>(1024);
     let bus = ClientMessageBus::new_with_transport(req_tx.clone());

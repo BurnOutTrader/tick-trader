@@ -8,7 +8,7 @@ pub fn connect(db_file: &std::path::Path) -> anyhow::Result<duckdb::Connection> 
 }
 
 /// Initialize catalog.duckdb in the repo root
-pub fn init_db() -> duckdb::Result<Arc<Connection>> {
+pub fn init_db() -> duckdb::Result<Connection> {
     let repo_root = std::env::current_dir().unwrap();
     let storage = repo_root.join("../storage").join("market_data");
     std::fs::create_dir_all(&storage).unwrap();
@@ -43,7 +43,7 @@ pub fn init_db() -> duckdb::Result<Arc<Connection>> {
     {
         tracing::warn!(removed, "catalog: quarantined unreadable partition entries");
     }
-    Ok(Arc::new(conn))
+    Ok(conn)
 }
 
 pub fn create_identity_schema_if_needed(conn: &duckdb::Connection) -> duckdb::Result<()> {
