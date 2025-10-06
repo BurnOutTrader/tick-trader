@@ -103,8 +103,8 @@ pub fn get_or_create_symbol_id(
 }
 fn provider_string(provider: &ProviderKind) -> String {
     match provider {
-        ProviderKind::ProjectX(t) => "projectx".to_string(),
-        ProviderKind::Rithmic(s) => "rithmic".to_string(),
+        ProviderKind::ProjectX(_) => "projectx".to_string(),
+        ProviderKind::Rithmic(_) => "rithmic".to_string(),
     }
 }
 

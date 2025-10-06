@@ -48,19 +48,17 @@ use crate::models::{BboRow, CandleRow, TickRow};
 use crate::queries::latest_data_time;
 use chrono::{DateTime, Duration, Utc};
 use chrono_tz::Tz;
-use provider::traits::HistoricalDataProvider;
 use rust_decimal::prelude::ToPrimitive;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tracing::error;
 use tt_types::base_data::{OrderBook, Resolution, Side};
 use tt_types::history::{HistoricalRequest, HistoryEvent};
-use tt_types::keys::SymbolKey;
 use tt_types::providers::ProviderKind;
 use tt_types::securities::market_hours::{
     MarketHours, SessionKind, hours_for_exchange, next_session_open_after,
 };
 use tt_types::securities::symbols::{Instrument, exchange_market_type};
+use tt_types::server_side::traits::HistoricalDataProvider;
 
 // your helper
 async fn run_download(

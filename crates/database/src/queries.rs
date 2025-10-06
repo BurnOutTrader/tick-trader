@@ -1,6 +1,6 @@
 use crate::duck::{latest_available, resolve_dataset_id};
 use crate::layout::Layout;
-use crate::models::{Provider, SeqBound};
+use crate::models::{SeqBound};
 use crate::paths::{provider_kind_to_db_string, topic_to_db_string};
 use ahash::AHashMap;
 use anyhow::{Context, anyhow};
@@ -654,13 +654,9 @@ pub fn get_latest_book(
 
     if let Some(r) = rows.next()? {
         let sym: String = r.get(0)?;
-        let exch_str: String = r.get(1)?;
         let t_ns: i64 = r.get(2)?;
         let bids_txt: String = r.get(3)?;
         let asks_txt: String = r.get(4)?;
-
-        let exchange = Exchange::from_str(&exch_str)
-            .ok_or_else(|| anyhow!("unknown exchange '{}' in parquet", exch_str))?;
 
         let mut bids = parse_ladder_json(&bids_txt)?;
         let mut asks = parse_ladder_json(&asks_txt)?;

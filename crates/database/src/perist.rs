@@ -348,8 +348,6 @@ pub fn persist_books_partition_duckdb(
     snapshots: &[OrderBook],
     data_root: &std::path::Path,
 ) -> anyhow::Result<std::path::PathBuf> {
-    use chrono::Utc;
-    use std::{fs, path::PathBuf};
 
     if snapshots.is_empty() {
         anyhow::bail!("persist_books_partition_duckdb: empty batch");

@@ -98,8 +98,8 @@ async fn main() -> anyhow::Result<()> {
     dotenv().ok();
 
     let db_path = std::env::var("DB_PATH").unwrap_or_else(|_| "./storage".to_string());
-    let db = init_db(Path::new(&db_path))?;
-    let download_manager = DownloadManager::new();
+    let _db = init_db(Path::new(&db_path))?;
+    let _download_manager = DownloadManager::new();
 
     // Allow overriding the UDS path via env. Defaults:
     // - Linux: abstract namespace '@tick-trader.sock' (no filesystem artifact)

@@ -1,8 +1,7 @@
-use provider::traits::{ExecutionProvider, MarketDataProvider, ProviderSessionSpec};
 use std::sync::Arc;
 use tt_bus::Router;
 use tt_types::providers::ProviderKind;
-
+use tt_types::server_side::traits::{ExecutionProvider, MarketDataProvider, ProviderSessionSpec};
 use crate::client::PXClient;
 
 // Build a ProjectX provider and return as trait objects for both MD and EX roles.

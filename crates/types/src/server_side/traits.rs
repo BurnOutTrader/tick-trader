@@ -2,13 +2,15 @@ use ahash::AHashMap;
 use async_trait::async_trait;
 use dotenvy::dotenv;
 use std::collections::HashMap;
-use std::sync::{Arc, mpsc};
 use std::time::Instant;
-use tt_types::base_data::{DateTime, Resolution, Utc};
-use tt_types::history::{HistoricalRequest, HistoryEvent, HistoryHandle};
-use tt_types::keys::{AccountKey, SymbolKey, Topic};
-use tt_types::providers::{ProjectXTenant, ProviderKind, RithmicSystem};
-use tt_types::securities::symbols::Instrument;
+use crate::accounts::account::AccountSnapShot;
+use crate::base_data::{DateTime, Utc};
+use crate::history::{HistoricalRequest, HistoryEvent};
+use crate::keys::{AccountKey, SymbolKey, Topic};
+use crate::providers::{ProjectXTenant, ProviderKind, RithmicSystem};
+use crate::securities::security::FuturesContract;
+use crate::securities::symbols::Instrument;
+use crate::wire::{CancelOrder, PlaceOrder, ReplaceOrder};
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum ConnectionState {
@@ -187,7 +189,7 @@ pub trait MarketDataProvider: Send + Sync {
     async fn list_instruments(
         &self,
         _pattern: Option<String>,
-    ) -> anyhow::Result<Vec<tt_types::securities::symbols::Instrument>> {
+    ) -> anyhow::Result<Vec<Instrument>> {
         Ok(Vec::new())
     }
     /// Optional: full instruments map (Instrument -> FuturesContract). Default empty.
@@ -195,8 +197,8 @@ pub trait MarketDataProvider: Send + Sync {
         &self,
     ) -> anyhow::Result<
         ahash::AHashMap<
-            tt_types::securities::symbols::Instrument,
-            tt_types::securities::security::FuturesContract,
+            Instrument,
+            FuturesContract,
         >,
     > {
         Ok(ahash::AHashMap::new())
@@ -229,7 +231,7 @@ pub trait ExecutionProvider: Send + Sync {
     /// Optional: list accounts available on this execution provider. Default empty.
     async fn list_accounts(
         &self,
-    ) -> anyhow::Result<Vec<tt_types::accounts::account::AccountSnapShot>> {
+    ) -> anyhow::Result<Vec<AccountSnapShot>> {
         Ok(Vec::new())
     }
 
@@ -238,9 +240,9 @@ pub trait ExecutionProvider: Send + Sync {
     async fn unsubscribe_order_updates(&self, account_key: &AccountKey) -> anyhow::Result<()>;
 
     // Order API (typed)
-    async fn place_order(&self, spec: tt_types::wire::PlaceOrder) -> CommandAck;
-    async fn cancel_order(&self, spec: tt_types::wire::CancelOrder) -> CommandAck;
-    async fn replace_order(&self, spec: tt_types::wire::ReplaceOrder) -> CommandAck;
+    async fn place_order(&self, spec: PlaceOrder) -> CommandAck;
+    async fn cancel_order(&self, spec: CancelOrder) -> CommandAck;
+    async fn replace_order(&self, spec: ReplaceOrder) -> CommandAck;
     async fn auto_update(&self) -> anyhow::Result<()>;
 }
 
@@ -262,10 +264,10 @@ pub trait HistoricalDataProvider: Send + Sync {
     async fn fetch(
         &self,
         req: HistoricalRequest,
-    ) -> anyhow::Result<(Vec<HistoryEvent>)>;
+    ) -> anyhow::Result<Vec<HistoryEvent>>;
 
     /// Feature flags help the router pick/shape requests.
-    fn supports(&self, topic: Topic) -> bool {
+    fn supports(&self, _topic: Topic) -> bool {
         true
     }
 

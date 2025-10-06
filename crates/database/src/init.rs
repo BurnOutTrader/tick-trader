@@ -3,7 +3,6 @@ use crate::duck::{
 };
 use duckdb::Connection;
 use std::path::Path;
-use std::sync::Arc;
 
 pub fn connect(db_file: &std::path::Path) -> anyhow::Result<duckdb::Connection> {
     let conn = duckdb::Connection::open(db_file)?;

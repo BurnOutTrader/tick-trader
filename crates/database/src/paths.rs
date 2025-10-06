@@ -5,7 +5,7 @@
 //! - Directory layout: provider/market_type/(root_symbol/)?instrument/topic/YYYY/
 //! - Deterministic file name: instrument.topic.monthly.YYYYMM.parquet
 
-use chrono::{Datelike, Month, NaiveDate};
+use chrono::{Datelike, NaiveDate};
 use std::path::{Path, PathBuf};
 use tt_types::keys::Topic;
 use tt_types::providers::ProviderKind;

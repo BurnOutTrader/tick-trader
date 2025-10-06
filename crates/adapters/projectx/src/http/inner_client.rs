@@ -21,9 +21,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{RwLock, watch};
 use tokio::task::JoinHandle;
-use tt_types::api_helpers::rate_limiter::RateLimiter;
-use tt_types::api_helpers::retry_manager::{RetryConfig, RetryManager};
 use ustr::Ustr;
+use tt_types::server_side::rate_limiter::RateLimiter;
+use tt_types::server_side::retry_manager::{RetryConfig, RetryManager};
 
 /// inner HTTP client for the ProjectX Gateway API
 /// This client deals only with types used by the api, it does not output tick-trader specific types.

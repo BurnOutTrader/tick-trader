@@ -1,9 +1,9 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use dashmap::DashMap;
-use provider::traits::MarketDataProvider;
 use std::sync::Arc;
 use tt_types::keys::{SymbolKey, Topic};
+use tt_types::server_side::traits::MarketDataProvider;
 
 #[async_trait]
 pub trait ProviderWorker: Send + Sync {

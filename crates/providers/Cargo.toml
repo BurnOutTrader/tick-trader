@@ -8,7 +8,6 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 tracing = { workspace = true }
 dashmap = { workspace = true }
-
 provider = { path = "../provider", package = "tt-provider" }
 tt-types = { path = "../types" }
 tt-bus = { path = "../bus", features = ["server"] }

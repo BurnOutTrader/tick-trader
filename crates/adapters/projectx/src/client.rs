@@ -1,28 +1,23 @@
 use crate::http::client::PxHttpClient;
 use crate::http::credentials::PxCredential;
 use crate::http::error::PxError;
-use crate::http::models;
 use crate::http::models::{RetrieveBarsReq, RetrieveBarsResponse};
 use crate::websocket::client::PxWebSocketClient;
 use ahash::AHashMap;
 use async_trait::async_trait;
-use chrono::{DateTime, NaiveDateTime, ParseResult, Utc};
-use provider::traits::{CommandAck, ConnectionState, DisconnectReason, ExecutionProvider, HistoricalDataProvider, MarketDataProvider, ProviderSessionSpec};
-use rust_decimal::Decimal;
-use rust_decimal::prelude::FromPrimitive;
+use chrono::{DateTime, ParseResult, Utc};
 use std::str::FromStr;
 use std::sync::Arc;
-use std::sync::mpsc::Receiver;
 use tokio::sync::RwLock;
 use tt_bus::Router;
 use tt_types::base_data::{Candle, Resolution};
-use tt_types::history::{HistoricalRequest, HistoryEvent, HistoryHandle};
+use tt_types::history::{HistoricalRequest, HistoryEvent};
 use tt_types::keys::{AccountKey, SymbolKey, Topic};
 use tt_types::providers::{ProjectXTenant, ProviderKind};
 use tt_types::securities::futures_helpers::{extract_month_year, extract_root};
-use tt_types::securities::market_hours::hours_for_exchange;
 use tt_types::securities::symbols::Exchange;
 use tt_types::securities::symbols::Instrument;
+use tt_types::server_side::traits::{CommandAck, ConnectionState, DisconnectReason, ExecutionProvider, HistoricalDataProvider, MarketDataProvider, ProviderSessionSpec};
 
 pub struct PXClient {
     pub provider_kind: ProviderKind,
@@ -172,7 +167,6 @@ impl PXClient {
             )
         })?;
         let exchange = exchange.expect("exchange must be present for known instrument");
-        let hours = hours_for_exchange(exchange);
 
         let limit: i32 = 20_000;
         let step = resolution.as_duration();
@@ -652,7 +646,7 @@ impl HistoricalDataProvider for PXClient {
         Ok(())
     }
 
-    async fn fetch(&self, req: HistoricalRequest) -> anyhow::Result<(Vec<HistoryEvent>)> {
+    async fn fetch(&self, req: HistoricalRequest) -> anyhow::Result<Vec<HistoryEvent>> {
         self.retrieve_bars(&req).await
     }
 
@@ -664,7 +658,7 @@ impl HistoricalDataProvider for PXClient {
         false
     }
 
-    fn earliest_available(&self, instrument: Instrument, topic: Topic) -> DateTime<Utc> {
+    fn earliest_available(&self, _instrument: Instrument, _topic: Topic) -> DateTime<Utc> {
         // Try to parse, fall back to a default if it fails
         DateTime::parse_from_rfc3339("2022-12-01T00:00:00Z")
             .map(|dt| dt.with_timezone(&Utc))

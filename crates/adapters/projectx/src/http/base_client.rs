@@ -2,7 +2,7 @@ use reqwest::Method;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use std::collections::HashMap;
 use std::time::Duration;
-use tt_types::api_helpers::rate_limiter::RateLimiter;
+use tt_types::server_side::rate_limiter::RateLimiter;
 use ustr::Ustr;
 
 // Lightweight reqwest-based HTTP client with per-key rate limiting

@@ -1,13 +1,12 @@
-use chrono::{DateTime, Utc};
+use chrono::{Utc};
 use rust_decimal::Decimal;
 use rust_decimal::prelude::FromPrimitive;
 use serde::{Deserialize, Serialize};
-use std::str::FromStr;
 use tokio::{sync::watch, task::JoinHandle};
 use tt_types::base_data::{Candle, Exchange, Resolution};
 use tt_types::securities::futures_helpers::extract_root;
 use tt_types::securities::market_hours;
-use tt_types::securities::market_hours::{MarketHours, hours_for_exchange};
+use tt_types::securities::market_hours::{MarketHours};
 use tt_types::securities::symbols::Instrument;
 
 #[allow(unused)]

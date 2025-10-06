@@ -1,7 +1,7 @@
 use dotenvy::dotenv;
-use provider::traits::ProviderParams;
 use std::time::Instant;
 use tt_types::keys::{SymbolKey, Topic};
+use tt_types::server_side::traits::ProviderParams;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubState {

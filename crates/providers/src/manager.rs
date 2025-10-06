@@ -1,11 +1,11 @@
 use crate::worker::ProviderWorker;
 use anyhow::Result;
 use dashmap::DashMap;
-use provider::traits::{ExecutionProvider, MarketDataProvider, ProviderSessionSpec};
 use std::sync::Arc;
 use tt_bus::Router;
 use tt_bus::UpstreamManager;
 use tt_types::providers::ProviderKind;
+use tt_types::server_side::traits::{ExecutionProvider, MarketDataProvider, ProviderSessionSpec};
 
 /// Minimal ProviderManager that ensures a provider pair exists for a given ProviderKind.
 /// For this initial pass, it uses the ProjectX in-process adapter and returns dyn traits.
