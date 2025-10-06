@@ -1,3 +1,4 @@
+#![cfg(feature = "queries")]
 use chrono::{TimeZone, Utc};
 use rust_decimal::Decimal;
 use standard_lib::engine_core::md_router::Feed;

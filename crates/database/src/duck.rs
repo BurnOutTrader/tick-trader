@@ -358,10 +358,9 @@ pub fn resolve_dataset_id(
     provider: &str,
     symbol: &str,
     topic: Topic,
-    res_override: Option<Resolution>,
 ) -> anyhow::Result<Option<i64>> {
     let kind_key = topic_to_kind_key(topic);
-    let res_key = resolution_key(res_override.or(topic_to_resolution(topic)));
+    let res_key = resolution_key(topic_to_resolution(topic));
 
     let mut stmt = conn.prepare(
         r#"
@@ -406,9 +405,8 @@ pub fn earliest_available(
     provider: &str,
     symbol: &str,
     topic: Topic,
-    res_override: Option<Resolution>,
 ) -> Result<Option<SeqBound>> {
-    let Some(dataset_id) = resolve_dataset_id(conn, provider, symbol, topic, res_override)? else {
+    let Some(dataset_id) = resolve_dataset_id(conn, provider, symbol, topic)? else {
         return Ok(None);
     };
 
@@ -438,9 +436,8 @@ pub fn latest_available(
     provider: &str,
     symbol: &str,
     topic: Topic,
-    res_override: Option<Resolution>,
 ) -> Result<Option<SeqBound>> {
-    let Some(dataset_id) = resolve_dataset_id(conn, provider, symbol, topic, res_override)? else {
+    let Some(dataset_id) = resolve_dataset_id(conn, provider, symbol, topic)? else {
         return Ok(None);
     };
 
@@ -471,11 +468,10 @@ pub fn earliest_for_many(
     provider: &str,
     symbols: &[&str],
     topic: Topic,
-    res_override: Option<Resolution>,
 ) -> Result<Vec<(String, Option<SeqBound>)>> {
     let mut out = Vec::with_capacity(symbols.len());
     for sym in symbols {
-        let v = earliest_available(conn, provider, sym, topic, res_override)?;
+        let v = earliest_available(conn, provider, sym, topic)?;
         out.push(((*sym).to_string(), v));
     }
     Ok(out)
@@ -487,11 +483,10 @@ pub fn latest_for_many(
     provider: &str,
     symbols: &[&str],
     topic: Topic,
-    res_override: Option<Resolution>,
 ) -> Result<Vec<(String, Option<SeqBound>)>> {
     let mut out = Vec::with_capacity(symbols.len());
     for sym in symbols {
-        let v = latest_available(conn, provider, sym, topic, res_override)?;
+        let v = latest_available(conn, provider, sym, topic)?;
         out.push(((*sym).to_string(), v));
     }
     Ok(out)

@@ -1,3 +1,4 @@
+#![cfg(feature = "queries")]
 use chrono::{Datelike, NaiveDate, TimeZone, Utc};
 use database::paths::{
     daily_file_name, monthly_file_name, weekly_file_name,

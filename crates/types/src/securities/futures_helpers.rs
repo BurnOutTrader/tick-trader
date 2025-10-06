@@ -208,7 +208,7 @@ fn unix_nanos_utc_from_date(date: NaiveDate) -> u64 {
 }
 
 #[inline]
-pub fn parse_symbol_from_contract_id(contract_id: &str) -> Option<String> {
+pub fn parse_instrument_from_contract_id(contract_id: &str) -> Option<String> {
     if !contract_id.starts_with("CON.") {
         return None;
     }

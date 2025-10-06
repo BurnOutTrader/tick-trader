@@ -693,23 +693,14 @@ pub fn earliest_book_available(
     };
 
     let mut q = conn.prepare(
--        "select min(min_ts) as ts
-+        "select min(min_ts_ns) as ts_ns
+        "select min(min_ts_ns) as ts_ns
             from partitions
            where dataset_id = ?",
      )?;
--    let ts_str: Option<String> = q
--        .query_row(duckdb::params![dataset_id], |r| r.get(0))
--        .optional()?;
--    let ts = match ts_str {
--        Some(s) => Some(DateTime::parse_from_rfc3339(&s)?.with_timezone(&Utc)),
--        None => None,
--    };
--    Ok(ts)
-+    let ts_ns: Option<i64> = q
-+        .query_row(duckdb::params![dataset_id], |r| r.get(0))
-+        .optional()?;
-+    Ok(ts_ns.map(epoch_ns_to_dt))
+    let ts_ns: Option<i64> = q
+        .query_row(duckdb::params![dataset_id], |r| r.get(0))
+        .optional()?;
+    Ok(ts_ns.map(epoch_ns_to_dt))
 }
 
 /// Latest available order-book snapshot (ts only).
@@ -726,23 +717,14 @@ pub fn latest_book_available(
     };
 
     let mut q = conn.prepare(
--        "select max(max_ts) as ts
-+        "select max(max_ts_ns) as ts_ns
+        "select max(max_ts_ns) as ts_ns
             from partitions
            where dataset_id = ?",
      )?;
--    let ts_str: Option<String> = q
--        .query_row(duckdb::params![dataset_id], |r| r.get(0))
--        .optional()?;
--    let ts = match ts_str {
--        Some(s) => Some(DateTime::parse_from_rfc3339(&s)?.with_timezone(&Utc)),
--        None => None,
--    };
--    Ok(ts)
-+    let ts_ns: Option<i64> = q
-+        .query_row(duckdb::params![dataset_id], |r| r.get(0))
-+        .optional()?;
-+    Ok(ts_ns.map(epoch_ns_to_dt))
+    let ts_ns: Option<i64> = q
+        .query_row(duckdb::params![dataset_id], |r| r.get(0))
+        .optional()?;
+    Ok(ts_ns.map(epoch_ns_to_dt))
 }
 
 /// Parse a compact JSON [[price, size], ...] into Vec<(Decimal, Decimal)>.
