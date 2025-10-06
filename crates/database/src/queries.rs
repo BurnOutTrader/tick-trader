@@ -147,7 +147,7 @@ pub fn earliest_any(
 /// specific resolution (e.g., Minutes(1)); for non-resolutioned
 /// datasets (ticks, bbo, orderbook), pass `None`.
 pub fn latest_data_time(
-    conn: &Arc<Connection>,
+    conn: &Connection,
     provider: ProviderKind,
     instrument: &Instrument,
     topic: Topic,

@@ -26,7 +26,7 @@ pub fn topic_to_db_string(topic: Topic) -> String {
     }
 }
 
-pub(crate) fn provider_kind_to_db_string(provider_kind: ProviderKind) -> String {
+pub fn provider_kind_to_db_string(provider_kind: ProviderKind) -> String {
     match provider_kind {
         ProviderKind::ProjectX(_) => "projectx".to_string(),
         ProviderKind::Rithmic(_) => "rithmic".to_string(),

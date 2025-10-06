@@ -1,8 +1,8 @@
 use dotenvy::dotenv;
 use projectx::http::credentials::PxCredential;
 use projectx::http::inner_client::PxHttpInnerClient;
-use provider::traits::ProviderSessionSpec;
 use tt_types::providers::{ProjectXTenant, ProviderKind};
+use tt_types::server_side::traits::ProviderSessionSpec;
 
 #[ignore]
 #[tokio::test]

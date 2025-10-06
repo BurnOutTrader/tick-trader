@@ -1,14 +1,17 @@
-use crate::base_data::{Bbo, Candle, OrderBook, Tick};
+use crate::base_data::{Bbo, Candle, Exchange, OrderBook, Tick};
 use crate::keys::Topic;
 use crate::securities::symbols::Instrument;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
+use crate::providers::ProviderKind;
 
 /// What a backtest wants to pull.
 #[derive(Clone, Debug)]
 pub struct HistoricalRequest {
+    pub provider_kind: ProviderKind,
     pub topic: Topic,
     pub instrument: Instrument,
+    pub exchange: Exchange,
     pub start: DateTime<Utc>,
     pub end: DateTime<Utc>,
 }

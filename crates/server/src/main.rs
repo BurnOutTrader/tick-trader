@@ -10,7 +10,7 @@ use tokio::net::UnixListener;
 use tracing::level_filters::LevelFilter;
 use tt_bus::Router;
 use tt_database::init::init_db;
-use tt_database::update_historical::DownloadManager;
+use tt_providers::download_manager::DownloadManager;
 
 #[cfg(target_os = "linux")]
 pub fn bind_uds(path: &str) -> io::Result<UnixListener> {

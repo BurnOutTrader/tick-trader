@@ -1,7 +1,6 @@
 [workspace]
 members = [
     "crates/bus",
-    "crates/provider",
     "crates/engine",
     "crates/types",
     "crates/adapters/projectx",
@@ -21,6 +20,7 @@ ahash = "0.8.12"
 async-trait = "0.1.89"
 dotenvy = "0.15.7"
 duckdb = "1.4.0"
+dotenv = "0.15.0"
 chrono = { version = "0.4.42", features = ["clock", "std", "serde",] }
 chrono-tz = "0.10.4"
 bytes = "1.10.1"
@@ -45,3 +45,4 @@ rust_decimal_macros = "1.38.0"
 serde_json = "1.0.145"
 lazy_static = "1.5.0"
 rustls = { version = "0.23.20", default-features = false, features = ["ring"] }
+uuid = "1.18.1"

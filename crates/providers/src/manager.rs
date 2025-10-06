@@ -4,20 +4,24 @@ use dashmap::DashMap;
 use std::sync::Arc;
 use tt_bus::Router;
 use tt_bus::UpstreamManager;
+use tt_types::history::{HistoricalRequest, HistoryEvent};
 use tt_types::providers::ProviderKind;
-use tt_types::server_side::traits::{ExecutionProvider, MarketDataProvider, ProviderSessionSpec};
+use tt_types::server_side::traits::{ExecutionProvider, HistoricalDataProvider, MarketDataProvider, ProviderSessionSpec};
+use crate::download_manager::DownloadManager;
 
 /// Minimal ProviderManager that ensures a provider pair exists for a given ProviderKind.
 /// For this initial pass, it uses the ProjectX in-process adapter and returns dyn traits.
 pub struct ProviderManager {
     md: DashMap<ProviderKind, Arc<dyn MarketDataProvider>>,
     ex: DashMap<ProviderKind, Arc<dyn ExecutionProvider>>,
+    hist: DashMap<ProviderKind, Arc<dyn HistoricalDataProvider>>,
     // Pool of workers per provider kind, indexed by shard id
     workers: DashMap<(ProviderKind, usize), Arc<crate::worker::InprocessWorker>>,
     shards: usize,
     // Upstream wiring requirements
     bus: Arc<Router>,
     session: ProviderSessionSpec,
+    download_manager: DownloadManager,
 }
 
 #[async_trait::async_trait]
@@ -29,7 +33,7 @@ impl UpstreamManager for ProviderManager {
     ) -> Result<()> {
         let kind = key.provider;
         // Ensure provider pair and workers exist for this provider kind
-        let _ = self.ensure_pair(kind).await?;
+        let _ = self.ensure_clients(kind).await?;
         // Delegate to the appropriate worker based on shard
         self.subscribe_md(topic, key).await
     }
@@ -40,13 +44,13 @@ impl UpstreamManager for ProviderManager {
     ) -> Result<()> {
         let kind = key.provider;
         // If workers exist, delegate; otherwise no-op
-        let _ = self.ensure_pair(kind).await?; // ensure present to have a worker map; returns immediately if already exists
+        let _ = self.ensure_clients(kind).await?; // ensure present to have a worker map; returns immediately if already exists
         self.unsubscribe_md(topic, key).await
     }
 
     async fn subscribe_account(&self, key: tt_types::keys::AccountKey) -> Result<()> {
         let kind = key.provider;
-        self.ensure_pair(kind).await?;
+        self.ensure_clients(kind).await?;
         let ex = self
             .ex
             .get(&kind)
@@ -61,7 +65,7 @@ impl UpstreamManager for ProviderManager {
 
     async fn unsubscribe_account(&self, key: tt_types::keys::AccountKey) -> Result<()> {
         let kind = key.provider;
-        self.ensure_pair(kind).await?;
+        self.ensure_clients(kind).await?;
         let ex = self
             .ex
             .get(&kind)
@@ -77,7 +81,7 @@ impl UpstreamManager for ProviderManager {
     async fn place_order(&self, spec: tt_types::wire::PlaceOrder) -> Result<()> {
         // Ensure execution provider for this key's provider kind
         let kind = spec.key.provider;
-        self.ensure_pair(kind).await?;
+        self.ensure_clients(kind).await?;
         let ex = self
             .ex
             .get(&kind)
@@ -93,7 +97,7 @@ impl UpstreamManager for ProviderManager {
         } else {
             return Err(anyhow::anyhow!("no providers"));
         };
-        self.ensure_pair(kind).await?;
+        self.ensure_clients(kind).await?;
         let ex = self
             .ex
             .get(&kind)
@@ -109,7 +113,7 @@ impl UpstreamManager for ProviderManager {
         } else {
             return Err(anyhow::anyhow!("no providers"));
         };
-        self.ensure_pair(kind).await?;
+        self.ensure_clients(kind).await?;
         let ex = self
             .ex
             .get(&kind)
@@ -124,7 +128,7 @@ impl UpstreamManager for ProviderManager {
         provider: ProviderKind,
     ) -> Result<tt_types::wire::AccountInfoResponse> {
         // Ensure provider exists; connect execution side if needed
-        self.ensure_pair(provider).await?;
+        self.ensure_clients(provider).await?;
         let ex = self
             .ex
             .get(&provider)
@@ -153,7 +157,7 @@ impl UpstreamManager for ProviderManager {
         pattern: Option<String>,
     ) -> Result<Vec<tt_types::securities::symbols::Instrument>> {
         // Ensure provider exists and ask the MD side for instruments (if supported by the trait impl)
-        self.ensure_pair(provider).await?;
+        self.ensure_clients(provider).await?;
         if let Some(md) = self.md.get(&provider) {
             let list = md.list_instruments(pattern).await.unwrap_or_default();
             return Ok(list);
@@ -170,7 +174,7 @@ impl UpstreamManager for ProviderManager {
             tt_types::wire::FuturesContractWire,
         )>,
     > {
-        self.ensure_pair(provider).await?;
+        self.ensure_clients(provider).await?;
         if let Some(md) = self.md.get(&provider) {
             let map = md.instruments_map().await.unwrap_or_default();
             let mut out = Vec::with_capacity(map.len());
@@ -183,6 +187,42 @@ impl UpstreamManager for ProviderManager {
             return Ok(out);
         }
         Ok(Vec::new())
+    }
+
+    async fn fetch_historical_data(
+        &self,
+        req: HistoricalRequest,
+    ) -> anyhow::Result<Vec<HistoryEvent>> {
+        self.ensure_clients(req.provider_kind).await?;
+        if let Some(client) = self.hist.get(&req.provider_kind) {
+            if !client.supports(req.topic) {
+                return Err(anyhow::anyhow!("Unsupported topic: {:?} for historical data provider: {:?}", req.provider_kind, req.topic));
+            }
+            return client.fetch(req).await
+        }
+        Err(anyhow::anyhow!("Unsupported historical data provider: {:?}", req.provider_kind))
+    }
+
+    async fn update_historical_database(&self, req: HistoricalRequest) -> anyhow::Result<()> {
+
+        self.ensure_clients(req.provider_kind).await?;
+        if let Some(client) = self.hist.get(&req.provider_kind) {
+            if !client.supports(req.topic) {
+                return Err(anyhow::anyhow!("Unsupported topic: {:?} for historical data provider: {:?}", req.provider_kind, req.topic));
+            }
+            let dm = &self.download_manager;
+            if let Some(handle) = dm.request_update(client.clone(), req.clone()).await? {
+                tracing::info!(task_id=%handle.id(), provider=?req.provider_kind, instrument=%req.instrument, topic=?req.topic, "historical update already inflight");
+                handle.entry.notify.notified().await;
+                return Ok(());
+            } else {
+                let started = dm.start_update(client.clone(), req.clone()).await?;
+                tracing::info!(task_id=%started.id(), provider=?req.provider_kind, instrument=%req.instrument, topic=?req.topic, "historical update started");
+                started.entry.notify.notified().await;
+                return Ok(());
+            }
+        }
+        Err(anyhow::anyhow!("Unsupported historical data provider: {:?}", req.provider_kind))
     }
 }
 
@@ -205,6 +245,8 @@ impl ProviderManager {
         Self {
             md: DashMap::new(),
             ex: DashMap::new(),
+            hist: DashMap::new(),
+            download_manager: DownloadManager::new(),
             workers: DashMap::new(),
             shards: 4,
             bus: router,
@@ -216,6 +258,8 @@ impl ProviderManager {
         Self {
             md: DashMap::new(),
             ex: DashMap::new(),
+            hist: DashMap::new(),
+            download_manager: DownloadManager::new(),
             workers: DashMap::new(),
             shards: shards.max(1),
             bus: router,
@@ -230,20 +274,22 @@ impl ProviderManager {
         Self {
             md: DashMap::new(),
             ex: DashMap::new(),
+            hist: DashMap::new(),
             workers: DashMap::new(),
+            download_manager: DownloadManager::new(),
             shards: shards.max(1),
             bus: router,
             session,
         }
     }
 
-    pub async fn ensure_pair(&self, kind: ProviderKind) -> anyhow::Result<()> {
-        if let (Some(_m), Some(_e)) = (self.md.get(&kind), self.ex.get(&kind)) {
-            return Ok(());
-        }
+    pub async fn ensure_clients(&self, kind: ProviderKind) -> anyhow::Result<()> {
         match kind {
             ProviderKind::ProjectX(_) => {
-                let (md, ex) = projectx::factory::create_provider_pair(
+                if let (Some(_m), Some(_e), Some(_h)) = (self.md.get(&kind), self.ex.get(&kind), self.hist.get(&kind)) {
+                    return Ok(());
+                }
+                let (md, ex, hist) = projectx::factory::create_provider_pair(
                     kind,
                     self.session.clone(),
                     self.bus.clone(),
@@ -264,6 +310,7 @@ impl ProviderManager {
                 }
                 self.md.insert(kind, md.clone());
                 self.ex.insert(kind, ex.clone());
+                self.hist.insert(kind, hist.clone());
                 Ok(())
             }
             ProviderKind::Rithmic(_) => anyhow::bail!("Rithmic not implemented"),

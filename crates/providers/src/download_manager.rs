@@ -1,56 +1,18 @@
 use std::collections::HashMap;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
-use crate::paths::provider_kind_to_db_string;
+use tt_database::paths::provider_kind_to_db_string;
 use tt_types::keys::Topic;
-use tt_types::securities::symbols::Exchange;
-
-struct Entry {
-    result: Mutex<Option<anyhow::Result<()>>>,
-    notify: Notify,
-}
-
-struct DownloadManagerInner {
-    inflight: Mutex<HashMap<(ProviderKind, Instrument, Topic), std::sync::Arc<Entry>>>,
-}
-
-#[derive(Clone)]
-pub struct DownloadManager {
-    inner: std::sync::Arc<DownloadManagerInner>,
-}
-
-impl DownloadManager {
-    pub fn new() -> Self {
-        Self {
-            inner: std::sync::Arc::new(DownloadManagerInner {
-                inflight: Mutex::new(HashMap::new()),
-            }),
-        }
-    }
-
-    pub async fn request(
-        &self,
-        client: std::sync::Arc<dyn HistoricalDataProvider>,
-        conn: std::sync::Arc<duckdb::Connection>,
-        data_root: PathBuf,
-        provider_kind: ProviderKind,
-        instrument: Instrument,
-        exchange: Exchange,
-
-        topic: Topic,
-    ) -> anyhow::Result<()> {
-        // Simplified: run directly without in-flight dedup to avoid Clone/Join complexity
-        run_download(client, conn, data_root, provider_kind, instrument, topic, exchange).await
-    }
-}
-use crate::ingest::{ingest_bbo, ingest_candles, ingest_ticks, ingest_books};
-use crate::models::{BboRow, CandleRow, TickRow};
-use crate::queries::latest_data_time;
+use tt_database::ingest::{ingest_bbo, ingest_candles, ingest_ticks, ingest_books};
+use tt_database::models::{BboRow, CandleRow, TickRow};
+use tt_database::queries::latest_data_time;
 use chrono::{DateTime, Duration, Utc};
 use chrono_tz::Tz;
 use rust_decimal::prelude::ToPrimitive;
-use std::path::PathBuf;
+use std::path::Path;
 use std::sync::Arc;
+use dotenv::dotenv;
+use tt_database::init::init_db;
 use tt_types::base_data::{OrderBook, Resolution, Side};
 use tt_types::history::{HistoricalRequest, HistoryEvent};
 use tt_types::providers::ProviderKind;
@@ -59,20 +21,174 @@ use tt_types::securities::market_hours::{
 };
 use tt_types::securities::symbols::{Instrument, exchange_market_type};
 use tt_types::server_side::traits::HistoricalDataProvider;
+use tokio::task::JoinHandle;
+use uuid::Uuid;
+
+pub struct Entry {
+    result: Mutex<Option<anyhow::Result<()>>>,
+    pub notify: Notify,
+    // identifier and control for cancellation
+    id: Uuid,
+    join: Mutex<Option<JoinHandle<()>>>
+}
+
+struct DownloadManagerInner {
+    inflight: Arc<Mutex<HashMap<(ProviderKind, Instrument, Topic), std::sync::Arc<Entry>>>>,
+}
+
+#[derive(Clone)]
+pub struct DownloadManager {
+    inner: std::sync::Arc<DownloadManagerInner>,
+}
+
+#[derive(Clone)]
+pub struct DownloadTaskHandle {
+    key: (ProviderKind, Instrument, Topic),
+    pub entry: Arc<Entry>,
+}
+
+impl DownloadTaskHandle {
+    pub fn id(&self) -> Uuid { self.entry.id }
+    pub fn key(&self) -> &(ProviderKind, Instrument, Topic) { &self.key }
+    pub fn is_complete(&self) -> bool {
+        // non-blocking peek
+        self.entry.result.try_lock().map(|g| g.is_some()).unwrap_or(false)
+    }
+    pub async fn wait(self) -> anyhow::Result<()> {
+        // fast path: check if a result is already present
+        {
+            let g = self.entry.result.lock().await;
+            if let Some(res) = g.as_ref() {
+                return match res {
+                    Ok(()) => Ok(()),
+                    Err(e) => Err(anyhow::anyhow!("{}", e)),
+                };
+            }
+        }
+        // wait to be notified, then read the result
+        self.entry.notify.notified().await;
+        let g = self.entry.result.lock().await;
+        match g.as_ref() {
+            Some(Ok(())) => Ok(()),
+            Some(Err(e)) => Err(anyhow::anyhow!("{}", e)),
+            None => Ok(())
+        }
+    }
+    pub fn cancel(&self) {
+        if let Ok(mut g) = self.entry.join.try_lock() {
+            if let Some(j) = g.take() {
+                j.abort();
+            }
+        }
+    }
+}
+
+impl DownloadManager {
+    pub fn new() -> Self {
+        Self {
+            inner: std::sync::Arc::new(DownloadManagerInner {
+                inflight: Arc::new(Mutex::new(HashMap::new())),
+            }),
+        }
+    }
+
+    /// If an identical update task is already inflight, return a handle to it; otherwise None.
+    /// Callers can then decide to start a new task via `start_update`.
+    pub async fn request_update(
+        &self,
+        _client: std::sync::Arc<dyn HistoricalDataProvider>,
+        req: HistoricalRequest,
+    ) -> anyhow::Result<Option<DownloadTaskHandle>> {
+        let key = (req.provider_kind, req.instrument.clone(), req.topic.clone());
+        let guard = self.inner.inflight.lock().await;
+        if let Some(entry) = guard.get(&key) {
+            let handle = DownloadTaskHandle { key, entry: entry.clone() };
+            Ok(Some(handle))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Create or reuse an inflight update task for the given request and return its handle.
+    /// If a task already exists, no new one is spawned.
+    pub async fn start_update(
+        &self,
+        client: std::sync::Arc<dyn HistoricalDataProvider>,
+        req: HistoricalRequest,
+    ) -> anyhow::Result<DownloadTaskHandle> {
+        let key = (req.provider_kind, req.instrument.clone(), req.topic.clone());
+        // fast path: existing
+        {
+            let guard = self.inner.inflight.lock().await;
+            if let Some(e) = guard.get(&key) {
+                return Ok(DownloadTaskHandle { key, entry: e.clone() });
+            }
+        }
+        // need to create; do it with insertion lock to avoid races
+        let entry_arc = {
+            let mut guard = self.inner.inflight.lock().await;
+            if let Some(e) = guard.get(&key) {
+                e.clone()
+            } else {
+                let e = Arc::new(Entry {
+                    result: Mutex::new(None),
+                    notify: Notify::new(),
+                    id: Uuid::new_v4(),
+                    join: Mutex::new(None),
+                });
+                guard.insert(key.clone(), e.clone());
+                e
+            }
+        };
+
+        // If join is empty, we are the creator; spawn and set the join handle.
+        let mut should_spawn = false;
+        if let Ok(mut jg) = entry_arc.join.try_lock() {
+            if jg.is_none() {
+                should_spawn = true;
+                // placeholder so other threads don't also spawn
+                *jg = Some(tokio::spawn(async {}));
+            }
+        }
+        if should_spawn {
+            let dm = self.clone();
+            let entry2 = entry_arc.clone();
+            let key2 = key.clone();
+            let client2 = client.clone();
+            let req2 = req.clone();
+            let handle = tokio::spawn(async move {
+                let res = run_download(client2, req2).await;
+                // store result and notify
+                {
+                    let mut g = entry2.result.lock().await;
+                    *g = Some(res);
+                }
+                entry2.notify.notify_waiters();
+                // remove from inflight
+                let mut map = dm.inner.inflight.lock().await;
+                map.remove(&key2);
+            });
+            // replace the placeholder
+            if let Ok(mut jg) = entry_arc.join.try_lock() {
+                *jg = Some(handle);
+            }
+        }
+        Ok(DownloadTaskHandle { key, entry: entry_arc })
+    }
+}
+
 
 // your helper
 async fn run_download(
     client: Arc<dyn HistoricalDataProvider>,
-    conn: Arc<duckdb::Connection>,
-    data_root: PathBuf,
-    provider_kind: ProviderKind,
-    instrument: Instrument,
-    topic: Topic,
-    exchange: Exchange,
+    req: HistoricalRequest
 ) -> anyhow::Result<()> {
+    dotenv().ok();
+    let db_path = std::env::var("DB_PATH").unwrap_or_else(|_| "./storage".to_string());
+    let db_path = Path::new(&db_path);
     const CAL_TZ: Tz = chrono_tz::UTC;
-
-    let resolution = match topic {
+    let connection = init_db(&db_path)?;
+    let resolution = match req.topic {
         Topic::Ticks => None,
         Topic::Quotes => None,
         Topic::Depth => None,
@@ -84,27 +200,27 @@ async fn run_download(
     };
 
     let provider_code = client.name();
-    let market_type = exchange_market_type(exchange);
-    let hours = hours_for_exchange(exchange);
+    let market_type = exchange_market_type(req.exchange);
+    let hours = hours_for_exchange(req.exchange);
 
-    let earliest = client.earliest_available(instrument.clone(), topic);
+    let earliest = client.earliest_available(req.instrument.clone(), req.topic);
     let now = Utc::now();
-    let wants_intraday = topic != Topic::Candles1d;
+    let wants_intraday = req.topic != Topic::Candles1d;
 
     // Cursor := max(persisted_ts)+1ns, else provider earliest
-    let mut cursor: DateTime<Utc> = match latest_data_time(&conn, provider_kind, &instrument, topic) {
+    let mut cursor: DateTime<Utc> = match latest_data_time(&connection, req.provider_kind, &req.instrument, req.topic) {
         Ok(Some(ts)) => ts + Duration::nanoseconds(1),
         Ok(None) => earliest,
         Err(e) => return Err(e),
     };
-    let symbol = instrument.to_string();
+    let symbol = req.instrument.to_string();
     if cursor >= now {
-        tracing::info!(%symbol, ?provider_code, %exchange, "up to date");
+        tracing::info!(%symbol, ?provider_code, %req.exchange, "up to date");
         return Ok(());
     }
 
     // If we're on a fully-closed calendar day for intraday-ish kinds, jump to next open.
-    if topic != Topic::Candles1d && hours.is_closed_all_day_at(cursor, CAL_TZ, SessionKind::Both) {
+    if req.topic != Topic::Candles1d && hours.is_closed_all_day_at(cursor, CAL_TZ, SessionKind::Both) {
         let open = next_session_open_after(&hours, cursor);
         if open > cursor {
             cursor = open;
@@ -117,20 +233,22 @@ async fn run_download(
         let end = (cursor + span).min(now);
 
         // For intraday-ish kinds, skip windows that are 100% closed.
-        if topic != Topic::Candles1d && window_is_all_closed(&hours, CAL_TZ, cursor, end) {
+        if req.topic != Topic::Candles1d && window_is_all_closed(&hours, CAL_TZ, cursor, end) {
             cursor = next_session_open_after(&hours, cursor);
             continue;
         }
 
         let req = HistoricalRequest {
-            topic:topic.clone(),
-            instrument: instrument.clone(),
+            provider_kind:req.provider_kind,
+            topic:req.topic.clone(),
+            instrument: req.instrument.clone(),
+            exchange: req.exchange,
             start: cursor,
             end,
         };
 
-        tracing::info!(%symbol, start=%req.start, end=%req.end, topic=?topic, res=?resolution, "fetching");
-        let events = client.clone().fetch(req).await?;
+        tracing::info!(%symbol, start=%req.start, end=%req.end, topic=?req.topic, res=?resolution, "fetching");
+        let events = client.clone().fetch(req.clone()).await?;
 
         // Accumulators and watermark of the max timestamp we actually received.
         let mut max_ts: Option<DateTime<Utc>> = None;
@@ -142,7 +260,7 @@ async fn run_download(
         for ev in events { 
             match ev {
                 HistoryEvent::Candle(c) => {
-                    if matches!(topic, Topic::Candles1s | Topic::Candles1m | Topic::Candles1h | Topic::Candles1d) {
+                    if matches!(req.topic, Topic::Candles1s | Topic::Candles1m | Topic::Candles1h | Topic::Candles1d) {
                         // Advance by candle END to guarantee no gaps/overlaps between bars
                         let ts = c.time_end;
                         max_ts = Some(max_ts.map_or(ts, |m| m.max(ts)));
@@ -150,7 +268,7 @@ async fn run_download(
                     }
                 }
                 HistoryEvent::Tick(t) => {
-                    if matches!(topic, Topic::Ticks) {
+                    if matches!(req.topic, Topic::Ticks) {
                         let ts = t.time;
                         max_ts = Some(max_ts.map_or(ts, |m| m.max(ts)));
                         let side_u8 = match t.side {
@@ -172,7 +290,7 @@ async fn run_download(
                     }
                 }
                 HistoryEvent::Bbo(q) => {
-                    if matches!(topic, Topic::Quotes) {
+                    if matches!(req.topic, Topic::Quotes) {
                         let ts = q.time;
                         max_ts = Some(max_ts.map_or(ts, |m| m.max(ts)));
                         quotes.push(BboRow {
@@ -191,7 +309,7 @@ async fn run_download(
                     }
                 }
                 HistoryEvent::OrderBook(ob) => {
-                    if matches!(topic, Topic::Depth) {
+                    if matches!(req.topic, Topic::Depth) {
                         let ts = ob.time;
                         max_ts = Some(max_ts.map_or(ts, |m| m.max(ts)));
                         books.push(ob);
@@ -206,17 +324,17 @@ async fn run_download(
         }
 
         // Persist
-        match topic {
+        match req.topic {
             Topic::Ticks => {
                 if !ticks.is_empty() {
                     let out_paths = ingest_ticks(
-                        &conn,
-                        &provider_kind,
-                        &instrument,
+                        &connection,
+                        &req.provider_kind,
+                        &req.instrument,
                         market_type,
-                        topic,
+                        req.topic,
                         &ticks,
-                        &data_root,
+                        &db_path,
                         9,
                     )?;
                     tracing::info!(files = out_paths.len(), start=%cursor, end=%end, "persisted ticks");
@@ -227,13 +345,13 @@ async fn run_download(
             Topic::Quotes => {
                 if !quotes.is_empty() {
                     let out_paths = ingest_bbo(
-                        &conn,
-                        &provider_kind,
-                        &instrument,
+                        &connection,
+                        &req.provider_kind,
+                        &req.instrument,
                         market_type,
-                        topic,
+                        req.topic,
                         &quotes,
-                        &data_root,
+                        &db_path,
                         9,
                     )?;
                     tracing::info!(files = out_paths.len(), start=%cursor, end=%end, "persisted bbo");
@@ -244,13 +362,13 @@ async fn run_download(
             Topic::Candles1s | Topic::Candles1m | Topic::Candles1h | Topic::Candles1d => {
                 if !candles.is_empty() {
                     let out_paths = ingest_candles(
-                        &conn,
-                        &provider_kind,
-                        &instrument,
+                        &connection,
+                        &req.provider_kind,
+                        &req.instrument,
                         market_type,
-                        topic,
+                        req.topic,
                         &candles,
-                        &data_root,
+                        &db_path,
                         9,
                     )?;
                     tracing::info!(files = out_paths.len(), start=%cursor, end=%end, "persisted candles");
@@ -261,13 +379,13 @@ async fn run_download(
             Topic::Depth => {
                 if !books.is_empty() {
                     let out_paths = ingest_books(
-                        &conn,
-                        &provider_kind,
-                        &instrument,
+                        &connection,
+                        &req.provider_kind,
+                        &req.instrument,
                         market_type,
-                        topic,
+                        req.topic,
                         &books,
-                        &data_root,
+                        &db_path,
                     )?;
                     tracing::info!(files = out_paths.len(), start=%cursor, end=%end, "persisted order books");
                 } else {

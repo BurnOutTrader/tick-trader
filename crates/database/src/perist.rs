@@ -335,9 +335,6 @@ pub fn persist_bbo_partition_zstd(
 // If you already added `write_orderbooks_partition(...)` that writes and
 // registers, you can keep that. If you prefer symmetry with the others,
 // here is a similar writer that uses DuckDB COPY over a temp table.
-//
-// If you keep your existing `write_orderbooks_partition`, you can skip this.
-
 pub fn persist_books_partition_duckdb(
     conn: &duckdb::Connection,
     provider: &ProviderKind,

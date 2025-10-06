@@ -5,12 +5,12 @@ use projectx::http::client::PxHttpClient;
 use projectx::http::credentials::PxCredential;
 use projectx::http::models::ContractSearchResponse;
 use projectx::websocket::client::PxWebSocketClient;
-use provider::traits::ProviderSessionSpec;
 use rustls::crypto::{CryptoProvider, ring};
 use std::sync::Arc;
 use tracing::{error, info, level_filters::LevelFilter, warn};
 use tt_bus::Router;
 use tt_types::providers::{ProjectXTenant, ProviderKind};
+use tt_types::server_side::traits::ProviderSessionSpec;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

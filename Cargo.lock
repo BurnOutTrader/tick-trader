@@ -705,6 +705,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "dotenv"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77c90badedccf4105eca100756a0b1289e191f6fcbdadd3cee1d2f614f97da8f"
+
+[[package]]
 name = "dotenvy"
 version = "0.15.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2993,7 +2999,6 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
- "tt-provider",
  "tt-types",
 ]
 
@@ -3014,7 +3019,6 @@ dependencies = [
  "tracing-subscriber",
  "tt-bus",
  "tt-database",
- "tt-provider",
  "tt-types",
 ]
 
@@ -3044,21 +3048,9 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "tt-bus",
- "tt-provider",
  "tt-shm",
  "tt-types",
  "ustr",
-]
-
-[[package]]
-name = "tt-provider"
-version = "0.1.0"
-dependencies = [
- "ahash 0.8.12",
- "anyhow",
- "async-trait",
- "dotenvy",
- "tt-types",
 ]
 
 [[package]]
@@ -3067,13 +3059,20 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "chrono",
+ "chrono-tz",
  "dashmap",
+ "dotenv",
+ "duckdb",
+ "rust_decimal",
+ "tokio",
  "tracing",
  "tt-bus",
+ "tt-database",
  "tt-projectx",
- "tt-provider",
  "tt-shm",
  "tt-types",
+ "uuid",
 ]
 
 [[package]]

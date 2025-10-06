@@ -4,7 +4,6 @@ version = "0.1.0"
 edition.workspace = true
 
 [dependencies]
-tt-provider = { path = "../provider" }
 tt-database = {path = "../database", features = ["queries"]}
 anyhow = { workspace = true }
 tracing = { workspace = true }

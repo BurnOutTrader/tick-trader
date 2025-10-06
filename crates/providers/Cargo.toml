@@ -8,8 +8,15 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 tracing = { workspace = true }
 dashmap = { workspace = true }
-provider = { path = "../provider", package = "tt-provider" }
 tt-types = { path = "../types" }
 tt-bus = { path = "../bus", features = ["server"] }
 projectx = { package = "tt-projectx", path = "../adapters/projectx" }
 tt-shm = { path = "../shm" }
+tt-database = {path = "../database", features = ["queries"]}
+tokio = { workspace = true }
+chrono = { workspace = true }
+chrono-tz = { workspace = true }
+rust_decimal = { workspace = true }
+duckdb = {workspace = true}
+dotenv =  {workspace = true}
+uuid = {workspace = true}

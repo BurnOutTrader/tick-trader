@@ -1,10 +1,10 @@
 use dotenvy::dotenv;
 use projectx::http::client::PxHttpClient;
 use projectx::http::credentials::PxCredential;
-use provider::traits::ProviderSessionSpec;
 use rustls::crypto::{CryptoProvider, ring};
 use tracing::level_filters::LevelFilter;
 use tt_types::providers::{ProjectXTenant, ProviderKind};
+use tt_types::server_side::traits::ProviderSessionSpec;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
