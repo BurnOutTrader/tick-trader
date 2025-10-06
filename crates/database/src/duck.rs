@@ -34,8 +34,8 @@ fn topic_to_resolution(topic: Topic) -> Option<Resolution> {
 }
 
 fn resolution_key(res: Option<Resolution>) -> String {
-    res.map(|r| r.to_os_string())
-        .unwrap_or_else(|| "none".to_string())
+    // Use empty string for non-candle datasets to match ensure_dataset_row inserts
+    res.map(|r| r.to_os_string()).unwrap_or_else(|| "".to_string())
 }
 
 /// Create or reuse a DuckDB connection (file-backed or in-memory).

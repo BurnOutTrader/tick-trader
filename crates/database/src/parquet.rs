@@ -103,6 +103,8 @@ fn to_batch_ticks(rows: &[TickRow]) -> Result<RecordBatch, ParquetError> {
     for r in rows {
         provider.append_value(&r.provider);
         symbol_id.append_value(&r.symbol_id);
+        // Default exchange to empty string until it's part of the model
+        exchange.append_value("");
         price.append_value(r.price);
         size.append_value(r.size);
         side.append_value(r.side);
@@ -159,6 +161,8 @@ fn to_batch_candles(rows: &[CandleRow]) -> Result<RecordBatch, ParquetError> {
     for r in rows {
         provider.append_value(&r.provider);
         symbol_id.append_value(&r.symbol_id);
+        // Default exchange to empty string until it's part of the model
+        exchange.append_value("");
         res.append_value(&r.res);
         ts0_ns.append_value(r.time_start_ns); // <-- ns
         ts1_ns.append_value(r.time_end_ns); // <-- ns
@@ -169,6 +173,8 @@ fn to_batch_candles(rows: &[CandleRow]) -> Result<RecordBatch, ParquetError> {
         v.append_value(r.volume);
         av.append_value(r.ask_volume);
         bv.append_value(r.bid_volume);
+        // num_trades not present in model yet; default to 0
+        n.append_value(0);
     }
 
     Ok(RecordBatch::try_new(
@@ -212,6 +218,8 @@ fn to_batch_bbo(rows: &[BboRow]) -> Result<RecordBatch, ParquetError> {
     for r in rows {
         provider.append_value(&r.provider);
         symbol_id.append_value(&r.symbol_id);
+        // Default exchange to empty string until it's part of the model
+        exchange.append_value("");
         ts_ns.append_value(r.key_ts_utc_ns); // <-- ns
         bid.append_value(r.bid);
         bid_sz.append_value(r.bid_size);
