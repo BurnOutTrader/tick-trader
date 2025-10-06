@@ -2,11 +2,11 @@
 //!
 //! These functions are called by `ingest::*` after grouping rows by (year, month). They:
 //! - Ensure the dataset exists in the catalog.
-//! - Compute deterministic monthly paths via `paths`.
+//! - Compute the deterministic monthly file path using `paths`.
 //! - Write incoming rows to a temporary Parquet with ZSTD compression.
 //! - Merge with an existing Parquet (stable de-dup by key) and atomically replace.
-//! - Compute/update partition stats efficiently.
-//! - Upsert the partition row in the catalog.
+//! - Compute/update partition stats without scanning via DuckDB for the first write.
+//! - Upsert the partition row in the catalog (rows, bytes, min/max ts, optional seq, day_key).
 
 use crate::append::append_merge_parquet;
 use crate::catalog::ensure_dataset;
