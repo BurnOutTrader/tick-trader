@@ -137,10 +137,7 @@ impl PXClient {
 
     /// Retrieve historical bars for a given instrument and topic over [start, end).
     /// Paginates using the ProjectX 20,000-bars limit and normalizes timestamps to UTC.
-    pub async fn retrieve_bars(
-        &self,
-        req: &HistoricalRequest,
-    ) -> anyhow::Result<Vec<HistoryEvent>> {
+    pub async fn retrieve_bars(&self, req: &HistoricalRequest) -> anyhow::Result<Vec<HistoryEvent>> {
         // Map Topic -> Resolution and PX unit fields
         let (resolution, unit, unit_number) = match req.topic {
             Topic::Candles1s => (Resolution::Seconds(1), 1, 1),
@@ -150,43 +147,38 @@ impl PXClient {
             _ => anyhow::bail!("retrieve_bars only supports candle topics (1s/1m/1h/1d)"),
         };
 
-        // Resolve contract id and exchange from cache; refresh if needed
-        let mut contract_id: Option<String> = None;
-        let mut exchange: Option<Exchange> = None;
-        {
+        // Resolve contract id and exchange (as you had)
+        let (contract_id, exchange) = {
+            let mut cid: Option<String> = None;
+            let mut ex: Option<Exchange> = None;
             let map = self.http.instruments_snapshot().await;
             if let Some(fc) = map.get(&req.instrument) {
-                contract_id = Some(fc.provider_contract_name.clone());
-                exchange = Some(fc.exchange);
+                cid = Some(fc.provider_contract_name.clone());
+                ex = Some(fc.exchange);
             }
-        }
-        if contract_id.is_none() {
-            // refresh instruments and retry once
-            let map = self.http.manual_update_instruments(false).await?;
-            let map = map.read().await;
-            if let Some(fc) = map.get(&req.instrument) {
-                contract_id = Some(fc.provider_contract_name.clone());
-                exchange = Some(fc.exchange);
+            if cid.is_none() {
+                let map = self.http.manual_update_instruments(false).await?;
+                let map = map.read().await;
+                if let Some(fc) = map.get(&req.instrument) {
+                    cid = Some(fc.provider_contract_name.clone());
+                    ex = Some(fc.exchange);
+                }
             }
-        }
-        let contract_id = match contract_id {
-            None => px_format_from_instrument(&req.instrument),
-            Some(id) => id,
+            (cid.unwrap_or_else(|| px_format_from_instrument(&req.instrument)),
+             ex.expect("exchange must be present for known instrument"))
         };
-        let exchange = exchange.expect("exchange must be present for known instrument");
 
         let limit: i32 = 20_000;
         let step = resolution.as_duration();
         let chunk_span = step * (limit as i32);
 
-        let mut all: Vec<Candle> = Vec::new();
+        let mut out: Vec<Candle> = Vec::new();
         let mut cur_start: DateTime<Utc> = req.start;
+        let mut prev_max_start: Option<DateTime<Utc>> = None; // drive pagination by last bar start
         let end = req.end;
-        'main_loop: while cur_start < end {
-            let mut cur_end = cur_start + chunk_span;
-            if cur_end > end {
-                cur_end = end;
-            }
+
+        'main: while cur_start < end {
+            let cur_end = (cur_start + chunk_span).min(end);
 
             let body = RetrieveBarsReq {
                 contract_id: contract_id.clone(),
@@ -201,68 +193,63 @@ impl PXClient {
 
             let resp: RetrieveBarsResponse = self.http.inner.retrieve_bars(&body).await?;
             if !resp.success {
-                info!("download failed: {:?}", resp.error_message);
                 anyhow::bail!(
-                    "ProjectX retrieveBars error: code={:?} msg={:?}",
-                    resp.error_code,
-                    resp.error_message
-                );
+                "ProjectX retrieveBars error: code={:?} msg={:?}",
+                resp.error_code,
+                resp.error_message
+            );
             }
 
-            // Convert API bars to engine candles; parse RFC3339 with offset to UTC
-            if !resp.bars.is_empty() {
-                let candles =
-                    match resp.to_engine_candles(req.instrument.clone(), resolution, exchange) {
-                        Ok(c) => c,
-                        Err(e) => {
-                            log::error!("Error parsing ProjectX bars: {}", e);
-                            break 'main_loop;
-                        }
-                    };
-                // Determine oldest and newest by time_end; API may return bars in reverse chronological order
-                let (min_end_opt, max_end_opt) = (
-                    candles.iter().map(|c| c.time_end).min(),
-                    candles.iter().map(|c| c.time_end).max(),
-                );
-                if let (Some(min_end), Some(max_end)) = (min_end_opt, max_end_opt) {
-                    info!(
-                        "candles: {} from: {}, to: {}",
-                        candles.len(),
-                        min_end,
-                        max_end
-                    );
-                } else {
-                    info!("candles: {}", candles.len());
-                }
-                // Advance window start using the newest bar's end to ensure forward progress
-                let next_start_opt = max_end_opt;
-                all.extend(candles);
-                if let Some(next_start) = next_start_opt {
-                    if next_start >= cur_start {
-                        // Use exact boundary; downstream de-duplication will handle inclusivity
-                        cur_start = next_start;
-                    } else {
-                        cur_start = cur_end;
-                    }
-                } else {
-                    cur_start = cur_end;
-                }
-            } else {
-                // No bars returned; ensure progress by advancing to the current window end
+            if resp.bars.is_empty() {
+                // no data in this window — move the window forward
                 cur_start = cur_end;
+                continue;
             }
+
+            // Parse to engine candles
+            let mut batch = match resp.to_engine_candles(req.instrument.clone(), resolution, exchange) {
+                Ok(c) => c,
+                Err(e) => {
+                    log::error!("Error parsing ProjectX bars: {}", e);
+                    break 'main;
+                }
+            };
+
+            // Keep only *new* bars strictly after prev_max_start
+            if let Some(pms) = prev_max_start {
+                batch.retain(|c| c.time_start > pms);
+            }
+
+            if batch.is_empty() {
+                // Provider likely returned inclusive overlap at the boundary — nudge forward.
+                // We advance by 1 second because API granularity is seconds.
+                cur_start = cur_start + chrono::Duration::seconds(1);
+                continue;
+            }
+
+            // Append and update pagination anchor by *max start* in this batch
+            let (min_s, max_s) = (
+                batch.iter().map(|c| c.time_start).min().unwrap(),
+                batch.iter().map(|c| c.time_start).max().unwrap(),
+            );
+            log::info!("candles: {} from start={} to start={}", batch.len(), min_s, max_s);
+
+            out.extend(batch);
+            prev_max_start = Some(match prev_max_start {
+                Some(prev) => prev.max(max_s),
+                None => max_s,
+            });
+
+            // **Critical**: advance by last bar start + 1s (provider accuracy is seconds)
+            cur_start = prev_max_start.unwrap() + chrono::Duration::seconds(1);
         }
 
-        // Finalize: sort ascending, de-dup by start time, and clip to [start, end)
-        all.sort_by_key(|c| c.time_start);
-        all.dedup_by_key(|c| c.time_start);
-        all.retain(|c| c.time_start >= req.start && c.time_start < req.end);
+        // Finalize: sort, dedup by start, clip
+        out.sort_by_key(|c| c.time_start);
+        out.dedup_by_key(|c| c.time_start); // skip duplicates if provider re-sent same timestamp
+        out.retain(|c| c.time_start >= req.start && c.time_start < req.end);
 
-        let mut events = vec![];
-        for c in all {
-            events.push(HistoryEvent::Candle(c))
-        }
-        Ok(events)
+        Ok(out.into_iter().map(HistoryEvent::Candle).collect())
     }
 }
 
