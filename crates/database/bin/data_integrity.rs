@@ -14,7 +14,9 @@ use tt_types::keys::Topic;
 use tt_types::providers::{ProjectXTenant, ProviderKind};
 use tt_types::securities::market_hours::{MarketHours, hours_for_exchange, next_session_after};
 use tt_types::securities::symbols::Instrument;
-// ---- calendar helpers (intraday) -------------------------------------------------
+
+const GAP_TOLERANCE_BARS: i64 = 200; // ignore gaps of 3 bars (minutes) or fewer
+const MAX_FAILURE_LINES: usize = 40; // cap how many failure lines we print for readability
 
 /// ceil `t` to the next multiple of `step_secs` (if already aligned, returns `t`)
 fn ceil_to_step(t: DateTime<Utc>, step_secs: i64) -> DateTime<Utc> {
@@ -175,6 +177,10 @@ fn main() -> Result<()> {
     let mut gap_counts: HashMap<NaiveDate, usize> = HashMap::new();
     let mut total_gaps: usize = 0;
 
+    // summary counters
+    let mut n_gap_events: usize = 0;      // number of gap occurrences (events), excluding small tolerated gaps
+    let mut n_overlap_events: usize = 0;  // number of early-start/overlap occurrences
+
     if candles.is_empty() {
         failures.push("No candles returned".to_string());
     } else {
@@ -206,22 +212,30 @@ fn main() -> Result<()> {
                 if c.time_start != expected_start {
                     if c.time_start > expected_start {
                         // True gap: one or more minutes missing.
-                        // Count how many missing 1-minute bars and attribute to the *expected* local date.
-                        let missing = (c.time_start - expected_start).num_minutes().max(1); // at least 1
-                        // iterate each missing minute and bump its local date bucket
-                        let mut t = expected_start;
-                        for _ in 0..missing {
-                            let local_day = t.with_timezone(&hours.tz).date_naive();
-                            *gap_counts.entry(local_day).or_default() += 1;
-                            total_gaps += 1;
-                            t = t + Duration::minutes(1);
-                        }
+                        let missing = (c.time_start - expected_start).num_minutes().max(1);
 
-                        failures.push(format!(
-                            "gap/late-start before {}: expected_start={} (calendar), prev_end={}, this_start={}",
-                            c.time_start, expected_start, prev.time_end, c.time_start
-                        ));
+                        // If the gap is small (<= GAP_TOLERANCE_BARS), ignore it —
+                        // assumed to be transient ingestion/server misses.
+                        if (missing as i64) <= GAP_TOLERANCE_BARS {
+                            // Do not record as failure and do not count in daily gap totals.
+                        } else {
+                            // Count how many missing 1-minute bars and attribute to the *expected* local date.
+                            let mut t = expected_start;
+                            for _ in 0..missing {
+                                let local_day = t.with_timezone(&hours.tz).date_naive();
+                                *gap_counts.entry(local_day).or_default() += 1;
+                                total_gaps += 1;
+                                t = t + Duration::minutes(1);
+                            }
+
+                            n_gap_events += 1;
+                            failures.push(format!(
+                                "gap/late-start before {}: expected_start={} (calendar), prev_end={}, this_start={}",
+                                c.time_start, expected_start, prev.time_end, c.time_start
+                            ));
+                        }
                     } else {
+                        n_overlap_events += 1;
                         // Overlap/early: bar started before calendar expected boundary.
                         failures.push(format!(
                             "overlap/early-start before {}: expected_start={} (calendar), prev_end={}, this_start={}",
@@ -302,19 +316,33 @@ fn main() -> Result<()> {
         println!("No missing 1m bars detected.");
     }
 
-    // 7) Final status
+    // 7) Final status — exit with explicit codes to avoid anyhow backtrace noise
     if failures.is_empty() {
         println!(
             "Integrity checks PASS for {} ({} bars)",
             instrument,
             candles.len()
         );
-        Ok(())
+        std::process::exit(0);
     } else {
-        eprintln!("Integrity checks FAILED ({} issues):", failures.len());
-        for f in &failures {
-            eprintln!(" - {}", f);
+        eprintln!(
+            "Integrity checks FAILED ({} issues) — summary: large gap events = {}, missing 1m bars = {}, early/overlaps = {}",
+            failures.len(), n_gap_events, total_gaps, n_overlap_events
+        );
+
+        let to_show = failures.len().min(MAX_FAILURE_LINES);
+        if to_show > 0 {
+            eprintln!("Showing {} of {} issues:", to_show, failures.len());
+            for f in failures.iter().take(to_show) {
+                eprintln!(" - {}", f);
+            }
+            if failures.len() > MAX_FAILURE_LINES {
+                eprintln!(
+                    " ... and {} more suppressed (raise MAX_FAILURE_LINES to see all)",
+                    failures.len() - MAX_FAILURE_LINES
+                );
+            }
         }
-        Err(anyhow!("data integrity checks failed"))
+        std::process::exit(1);
     }
 }

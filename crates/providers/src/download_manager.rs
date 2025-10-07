@@ -1,36 +1,36 @@
-use chrono::{DateTime, Duration, Utc};
-use chrono_tz::Tz;
-use dotenv::dotenv;
-use rust_decimal::prelude::ToPrimitive;
 use std::collections::HashMap;
-use std::path::Path;
-use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
-use tokio::task::JoinHandle;
-use tokio::time::{Duration as TokioDuration, timeout};
-use tracing::info;
-use tt_database::ingest::{ingest_bbo, ingest_books, ingest_candles, ingest_ticks};
-use tt_database::init::init_db;
-use tt_database::models::{BboRow, CandleRow, TickRow};
 use tt_database::paths::provider_kind_to_db_string;
+use tt_types::keys::Topic;
+use tt_database::ingest::{ingest_bbo, ingest_candles, ingest_ticks, ingest_books};
+use tt_database::models::{BboRow, CandleRow, TickRow};
 use tt_database::queries::latest_data_time;
+use chrono::{DateTime, Duration, Utc};
+use chrono_tz::Tz;
+use rust_decimal::prelude::ToPrimitive;
+use std::path::Path;
+use std::sync::Arc;
+use dotenv::dotenv;
+use tt_database::init::init_db;
 use tt_types::base_data::{OrderBook, Resolution, Side};
 use tt_types::history::{HistoricalRequest, HistoryEvent};
-use tt_types::keys::Topic;
 use tt_types::providers::ProviderKind;
 use tt_types::securities::market_hours::{
     MarketHours, SessionKind, hours_for_exchange, next_session_open_after,
 };
 use tt_types::securities::symbols::{Instrument, exchange_market_type};
 use tt_types::server_side::traits::HistoricalDataProvider;
+use tokio::task::JoinHandle;
+use tracing::info;
 use uuid::Uuid;
+use tokio::time::{timeout, Duration as TokioDuration};
 
 pub struct Entry {
     result: Mutex<Option<anyhow::Result<()>>>,
     pub notify: Notify,
     id: Uuid,
-    join: Mutex<Option<JoinHandle<()>>>,
+    join: Mutex<Option<JoinHandle<()>>>
 }
 
 struct DownloadManagerInner {
@@ -49,18 +49,10 @@ pub struct DownloadTaskHandle {
 }
 
 impl DownloadTaskHandle {
-    pub fn id(&self) -> Uuid {
-        self.entry.id
-    }
-    pub fn key(&self) -> &(ProviderKind, Instrument, Topic) {
-        &self.key
-    }
+    pub fn id(&self) -> Uuid { self.entry.id }
+    pub fn key(&self) -> &(ProviderKind, Instrument, Topic) { &self.key }
     pub fn is_complete(&self) -> bool {
-        self.entry
-            .result
-            .try_lock()
-            .map(|g| g.is_some())
-            .unwrap_or(false)
+        self.entry.result.try_lock().map(|g| g.is_some()).unwrap_or(false)
     }
     pub async fn wait(self) -> anyhow::Result<()> {
         {
@@ -77,7 +69,7 @@ impl DownloadTaskHandle {
         match g.as_ref() {
             Some(Ok(())) => Ok(()),
             Some(Err(e)) => Err(anyhow::anyhow!("{}", e)),
-            None => Ok(()),
+            None => Ok(())
         }
     }
     pub fn cancel(&self) {
@@ -108,10 +100,7 @@ impl DownloadManager {
         let key = (req.provider_kind, req.instrument.clone(), req.topic.clone());
         let guard = self.inner.inflight.lock().await;
         if let Some(entry) = guard.get(&key) {
-            let handle = DownloadTaskHandle {
-                key,
-                entry: entry.clone(),
-            };
+            let handle = DownloadTaskHandle { key, entry: entry.clone() };
             Ok(Some(handle))
         } else {
             Ok(None)
@@ -130,10 +119,7 @@ impl DownloadManager {
         {
             let guard = self.inner.inflight.lock().await;
             if let Some(e) = guard.get(&key) {
-                return Ok(DownloadTaskHandle {
-                    key,
-                    entry: e.clone(),
-                });
+                return Ok(DownloadTaskHandle { key, entry: e.clone() });
             }
         }
         // need to create; do it with insertion lock to avoid races
@@ -185,17 +171,15 @@ impl DownloadManager {
                 *jg = Some(handle);
             }
         }
-        Ok(DownloadTaskHandle {
-            key,
-            entry: entry_arc,
-        })
+        Ok(DownloadTaskHandle { key, entry: entry_arc })
     }
 }
+
 
 // your helper
 async fn run_download(
     client: Arc<dyn HistoricalDataProvider>,
-    req: HistoricalRequest,
+    req: HistoricalRequest
 ) -> anyhow::Result<()> {
     dotenv().ok();
     let db_path = std::env::var("DB_PATH").unwrap_or_else(|_| "./storage".to_string());
@@ -215,39 +199,33 @@ async fn run_download(
 
     let provider_code = client.name();
     let market_type = exchange_market_type(req.exchange);
+    let hours = hours_for_exchange(req.exchange);
 
-    let earliest = client
-        .earliest_available(req.instrument.clone(), req.topic)
-        .await?;
+    let earliest = client.earliest_available(req.instrument.clone(), req.topic).await?;
     let now = Utc::now();
     let wants_intraday = req.topic != Topic::Candles1d;
 
     // Cursor := max(persisted_ts)+1ns, else provider earliest
-    let mut cursor: DateTime<Utc> =
-        match latest_data_time(&connection, req.provider_kind, &req.instrument, req.topic) {
-            Ok(Some(ts)) => {
-                info!(
-                    "Data found in db, updating: {:?} {}, {}",
-                    req.provider_kind, req.instrument, req.topic
-                );
-                ts + Duration::nanoseconds(1)
-            }
-            Ok(None) => {
-                info!(
-                    "No data found in db, fetching: {:?} {}, {}",
-                    req.provider_kind, req.instrument, req.topic
-                );
-                match earliest {
-                    None => return Err(anyhow::anyhow!("no data available")),
-                    Some(t) => t,
-                }
-            }
-            Err(e) => return Err(e),
-        };
+    let mut cursor: DateTime<Utc> = match latest_data_time(&connection, req.provider_kind, &req.instrument, req.topic) {
+        Ok(Some(ts)) => ts + Duration::nanoseconds(1),
+        Ok(None) => match earliest {
+            None => return Err(anyhow::anyhow!("no data available")),
+            Some(t) => t
+        },
+        Err(e) => return Err(e),
+    };
     let symbol = req.instrument.to_string();
     if cursor >= now {
         tracing::info!(%symbol, ?provider_code, %req.exchange, "up to date");
         return Ok(());
+    }
+
+    // If we're on a fully-closed calendar day for intraday-ish kinds, jump to next open.
+    if req.topic != Topic::Candles1d && hours.is_closed_all_day_at(cursor, CAL_TZ, SessionKind::Both) {
+        let open = next_session_open_after(&hours, cursor);
+        if open > cursor {
+            cursor = open;
+        }
     }
 
     while cursor < now {
@@ -255,9 +233,15 @@ async fn run_download(
         let span = choose_span(resolution);
         let end = (cursor + span).min(now);
 
+        // For intraday-ish kinds, skip windows that are 100% closed.
+        if req.topic != Topic::Candles1d && window_is_all_closed(&hours, CAL_TZ, cursor, end) {
+            cursor = next_session_open_after(&hours, cursor);
+            continue;
+        }
+
         let req = HistoricalRequest {
-            provider_kind: req.provider_kind,
-            topic: req.topic.clone(),
+            provider_kind:req.provider_kind,
+            topic:req.topic.clone(),
             instrument: req.instrument.clone(),
             exchange: req.exchange,
             start: cursor,
@@ -269,16 +253,12 @@ async fn run_download(
             tracing::error!(error=%e, "ensure_connected failed; aborting task");
             return Err(e);
         }
-        let fetch_res = timeout(
-            TokioDuration::from_secs(1000),
-            client.clone().fetch(req.clone()),
-        )
-        .await;
+        let fetch_res = timeout(TokioDuration::from_secs(1000), client.clone().fetch(req.clone())).await;
         let events = match fetch_res {
             Ok(Ok(ev)) => {
                 tracing::info!("received {} events", ev.len());
                 ev
-            }
+            },
             Ok(Err(e)) => {
                 tracing::error!(error=%e, start=%cursor, end=%end, "history fetch error; aborting task");
                 return Err(e);
@@ -296,13 +276,10 @@ async fn run_download(
         let mut quotes: Vec<BboRow> = Vec::new();
         let mut books: Vec<OrderBook> = Vec::new();
 
-        for ev in events {
+        for ev in events { 
             match ev {
                 HistoryEvent::Candle(c) => {
-                    if matches!(
-                        req.topic,
-                        Topic::Candles1s | Topic::Candles1m | Topic::Candles1h | Topic::Candles1d
-                    ) {
+                    if matches!(req.topic, Topic::Candles1s | Topic::Candles1m | Topic::Candles1h | Topic::Candles1d) {
                         // Advance by candle END to guarantee no gaps/overlaps between bars
                         let ts = c.time_end;
                         max_ts = Some(max_ts.map_or(ts, |m| m.max(ts)));
@@ -443,6 +420,9 @@ async fn run_download(
         // Advance cursor by what we *actually* got, otherwise by window end.
         if let Some(ts) = max_ts {
             cursor = ts + Duration::nanoseconds(1);
+        } else if wants_intraday {
+            let next_open = next_session_open_after(&hours, cursor);
+            cursor = next_open.max(end + Duration::nanoseconds(1));
         } else {
             cursor = end + Duration::seconds(1);
         }
@@ -454,15 +434,17 @@ async fn run_download(
 // ---- helpers ----
 
 fn choose_span(res: Option<Resolution>) -> chrono::Duration {
-    // Policy update:
-    // - Candles (any resolution): request approximately one month per batch to align with monthly persistence.
-    // - Non-candles (ticks/quotes/depth): keep conservative daily windows.
+    // Policy:
+    // - Intraday (<= 1h): request 1 calendar day at a time
+    // - Higher than 1h (daily/weekly or multi-hour): request 1 week at a time
     match res {
-        Some(Resolution::Seconds(_)) => chrono::Duration::days(31),
-        Some(Resolution::Minutes(_)) => chrono::Duration::days(31),
-        Some(Resolution::Hours(_)) => chrono::Duration::days(31),
-        Some(Resolution::Daily) | Some(Resolution::Weekly) => chrono::Duration::days(31),
-        None => chrono::Duration::days(1), // ticks/quotes/depth
+        Some(Resolution::Seconds(_)) => chrono::Duration::days(1),
+        Some(Resolution::Minutes(_)) => chrono::Duration::days(1),
+        Some(Resolution::Hours(h)) => {
+            if h <= 1 { chrono::Duration::days(1) } else { chrono::Duration::days(7) }
+        }
+        Some(Resolution::Daily) | Some(Resolution::Weekly) => chrono::Duration::days(7),
+        None => chrono::Duration::days(1), // ticks/quotes/depth: be conservative
     }
 }
 
