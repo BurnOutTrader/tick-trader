@@ -10,9 +10,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, mpsc, oneshot};
-use tracing::info;
+use tracing::{info, warn};
 use tt_bus::{ClientMessageBus, ClientSubId};
 use tt_database::init::init_db;
+use tt_types::accounts::events::AccountDelta;
 use tt_types::data::core::{Bbo, Candle, Tick};
 use tt_types::data::mbp10::Mbp10;
 use tt_types::keys::{AccountKey, SymbolKey, Topic};
@@ -176,17 +177,30 @@ impl<P: MarketDataProvider + 'static> Engine<P> {
 
 #[async_trait]
 pub trait Strategy: Send + Sync + 'static {
+    #[inline]
     fn desired_topics(&mut self) -> HashSet<Topic>;
+    #[inline]
     async fn on_start(&mut self, _h: EngineHandle) {}
+    #[inline]
     async fn on_stop(&mut self) {}
+    #[inline]
     async fn on_tick(&mut self, _t: Tick) {}
+    #[inline]
     async fn on_quote(&mut self, _q: Bbo) {}
+    #[inline]
     async fn on_bar(&mut self, _b: Candle) {}
-    async fn on_depth(&mut self, _d: Mbp10) {}
+    #[inline]
+    async fn on_mbp10(&mut self, _d: Mbp10) {}
+    #[inline]
     async fn on_orders_batch(&mut self, _b: OrdersBatch) {}
+    #[inline]
     async fn on_positions_batch(&mut self, _b: PositionsBatch) {}
-    async fn on_account_delta_batch(&mut self, _b: AccountDeltaBatch) {}
+    #[inline]
+    /// Receive snapshots of account state, these are messages, not mutable objects.
+    async fn on_account_delta(&mut self, _accounts: Vec<AccountDelta>) {}
+    #[inline]
     async fn on_subscribe(&mut self, _instrument: Instrument, _topic: Topic, _success: bool) {}
+    #[inline]
     async fn on_unsubscribe(&mut self, _instrument: Instrument, _topic: Topic) {}
 }
 
@@ -793,13 +807,20 @@ impl EngineRuntime {
         let sub_id = self.bus.add_client(tx).await;
         self.sub_id = Some(sub_id.clone());
         self.rx = Some(rx);
-        // Keep legacy topic-level subscribe for low churn
+        // Keep legacy topic-level subscribe for low churn, but do it non-blocking to avoid stalling start
         {
-            let mut strat = strategy.lock().await;
-            for topic in strat.desired_topics().into_iter() {
-                let sub = Subscribe { topic, latest_only: false, from_seq: 0 };
-                self.bus.handle_request(&sub_id, Request::Subscribe(sub)).await?;
-            }
+            let sub_id_clone = sub_id.clone();
+            let bus_clone = self.bus.clone();
+            let strategy_clone = strategy.clone();
+            tokio::spawn(async move {
+                let mut strat = strategy_clone.lock().await;
+                for topic in strat.desired_topics().into_iter() {
+                    let sub = Subscribe { topic, latest_only: false, from_seq: 0 };
+                    if let Err(e) = bus_clone.handle_request(&sub_id_clone, Request::Subscribe(sub)).await {
+                        warn!("failed to send legacy topic subscribe for {:?}: {}", topic, e);
+                    }
+                }
+            });
         }
         let rx = self.rx.take().expect("rx present after start");
         let state = self.state.clone();
@@ -815,13 +836,12 @@ impl EngineRuntime {
             state: self.state.clone(),
         };
         let handle = EngineHandle { inner: Arc::new(shared) };
-        {
-            let mut strat = strategy.lock().await;
-            strat.on_start(handle.clone()).await;
-        }
+        // Start processing task BEFORE invoking strategy.on_start so correlated responses can be handled during on_start
+        let strategy_for_task = strategy.clone();
         let handle_task = tokio::spawn(async move {
             let mut rx = rx;
             while let Some(resp) = rx.recv().await {
+                info!("resp: {:?}", resp);
                 // Fulfill engine-local correlated callbacks first
                 match &resp {
                     Response::InstrumentsResponse(ir) => {
@@ -846,39 +866,45 @@ impl EngineRuntime {
                 }
                 match resp {
                     Response::TickBatch(TickBatch { ticks, .. }) => {
-                        for t in ticks { let mut strat = strategy.lock().await; strat.on_tick(t).await; }
+                        for t in ticks { let mut strat = strategy_for_task.lock().await; strat.on_tick(t).await; }
                     }
                     Response::QuoteBatch(QuoteBatch { quotes, .. }) => {
-                        for q in quotes { let mut strat = strategy.lock().await; strat.on_quote(q).await; }
+                        for q in quotes { let mut strat = strategy_for_task.lock().await; strat.on_quote(q).await; }
                     }
                     Response::BarBatch(BarBatch { bars, .. }) => {
-                        for b in bars { let mut strat = strategy.lock().await; strat.on_bar(b).await; }
+                        for b in bars { let mut strat = strategy_for_task.lock().await; strat.on_bar(b).await; }
                     }
-                    Response::MBP10(ob) => { let mut strat = strategy.lock().await; strat.on_depth(ob.event).await; }
+                    Response::MBP10(ob) => { let mut strat = strategy_for_task.lock().await; strat.on_mbp10(ob.event).await; }
                     Response::OrdersBatch(ob) => {
                         { let mut st = state.lock().await; st.last_orders = Some(ob.clone()); }
-                        { let mut strat = strategy.lock().await; strat.on_orders_batch(ob.clone()).await; }
+                        { let mut strat = strategy_for_task.lock().await; strat.on_orders_batch(ob.clone()).await; }
                     }
                     Response::PositionsBatch(pb) => {
                         { let mut st = state.lock().await; st.last_positions = Some(pb.clone()); }
-                        { let mut strat = strategy.lock().await; strat.on_positions_batch(pb.clone()).await; }
+                        { let mut strat = strategy_for_task.lock().await; strat.on_positions_batch(pb.clone()).await; }
                     }
                     Response::AccountDeltaBatch(ab) => {
                         { let mut st = state.lock().await; st.last_accounts = Some(ab.clone()); }
-                        { let mut strat = strategy.lock().await; strat.on_account_delta_batch(ab.clone()).await; }
+                        { let mut strat = strategy_for_task.lock().await; strat.on_account_delta(ab.accounts).await; }
                     }
-                    Response::Tick(t) => { let mut strat = strategy.lock().await; strat.on_tick(t).await; }
-                    Response::Quote(q) => { let mut strat = strategy.lock().await; strat.on_quote(q).await; }
-                    Response::Bar(b) => { let mut strat = strategy.lock().await; strat.on_bar(b).await; }
+                    Response::Tick(t) => { let mut strat = strategy_for_task.lock().await; strat.on_tick(t).await; }
+                    Response::Quote(q) => { let mut strat = strategy_for_task.lock().await; strat.on_quote(q).await; }
+                    Response::Bar(b) => { let mut strat = strategy_for_task.lock().await; strat.on_bar(b).await; }
                     Response::Pong(_) | Response::InstrumentsResponse(_) | Response::InstrumentsMapResponse(_) | Response::VendorData(_) | Response::AnnounceShm(_) | Response::AccountInfoResponse(_) => {}
-                    Response::SubscribeResponse { topic, instrument, success } => { let mut strat = strategy.lock().await; strat.on_subscribe(instrument, topic, success).await; }
-                    Response::UnsubscribeResponse { topic, instrument } => { let mut strat = strategy.lock().await; strat.on_unsubscribe(instrument, topic).await; }
+                    Response::SubscribeResponse { topic, instrument, success } => { let mut strat = strategy_for_task.lock().await; strat.on_subscribe(instrument, topic, success).await; }
+                    Response::UnsubscribeResponse { topic, instrument } => { let mut strat = strategy_for_task.lock().await; strat.on_unsubscribe(instrument, topic).await; }
                 }
             }
-            let mut strat = strategy.lock().await;
+            let mut strat = strategy_for_task.lock().await;
             let _ = strat.on_stop().await;
         });
         self.task = Some(handle_task);
+        {
+            info!("engine: invoking strategy.on_start");
+            let mut strat = strategy.lock().await;
+            strat.on_start(handle.clone()).await;
+            info!("engine: strategy.on_start returned");
+        }
         Ok(handle)
     }
 

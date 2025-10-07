@@ -104,7 +104,16 @@ pub fn parse_px_instrument(input: &str) -> String {
     if parts.len() >= 2 {
         let expiry = parts.pop().unwrap();
         let root = parts.pop().unwrap();
-        format!("{}{}", root, expiry)
+        // Normalize expiry to a single-digit year (e.g., Z25 -> Z5, Z05 -> Z5)
+        let exp_norm = if expiry.len() >= 2 {
+            let mut chars = expiry.chars();
+            let month = chars.next().unwrap_or('Z');
+            let last_digit = chars.last().unwrap_or('0');
+            format!("{}{}", month, last_digit)
+        } else {
+            expiry.to_string()
+        };
+        format!("{}{}", root, exp_norm)
     } else {
         input.to_string()
     }
@@ -122,7 +131,9 @@ pub fn px_format_from_instrument(instrument: &Instrument) -> String {
         // ROOT is everything before the month/year suffix
         let mut root = extract_root(instrument);
         root = sanitize_code(&root).to_ascii_uppercase();
-        return format!("CON.F.US.{}.{}{:02}", root, month_ch, yy);
+        // ProjectX expects two-digit year; map 1-digit codes (e.g., 5) to 25 for 2025
+        let yy_norm: u8 = if yy < 10 { yy + 20 } else { yy };
+        return format!("CON.F.US.{}.{}{:02}", root, month_ch, yy_norm);
     }
 
     // Otherwise treat as a continuous root
@@ -582,202 +593,275 @@ impl PxWebSocketClient {
                         match target {
                             // Market hub events
                             "GatewayQuote" => {
-                                // SignalR Invocation typically passes [contractId, data] or just [data]
-                                // Extract the data object and deserialize into GatewayQuote, then convert to Quote
+                                // Handle payload that can be a single object or an array of objects.
+                                // Also, resolve Instrument from the first argument (full contract id like "CON.F.US.MNQ.Z25").
                                 let args_opt = val.get("arguments").and_then(|a| a.as_array());
                                 if let Some(args) = args_opt {
-                                    let data_val = if args.len() >= 2 {
-                                        &args[1]
-                                    } else {
-                                        args.get(0).unwrap_or(&Value::Null)
-                                    };
-                                    if let Ok(px_quote) =
-                                        serde_json::from_value::<GatewayQuote>(data_val.to_owned())
-                                    {
-                                        if let Ok(instrument) = Instrument::from_str(
-                                            &parse_px_instrument(px_quote.symbol.as_str()),
-                                        ) {
-                                            let symbol = extract_root(&instrument);
-                                            let bid = Price::from_f64(px_quote.best_bid)
-                                                .unwrap_or_default();
-                                            let ask = Price::from_f64(px_quote.best_ask)
-                                                .unwrap_or_default();
-                                            let bid_size = Volume::from(0);
-                                            let ask_size = Volume::from(0);
-                                            // prefer timestamp then last_updated
-                                            let time = DateTime::<Utc>::from_str(
-                                                px_quote.timestamp.as_str(),
-                                            )
-                                            .or_else(|_| {
-                                                DateTime::<Utc>::from_str(
-                                                    px_quote.last_updated.as_str(),
-                                                )
-                                            })
-                                            .unwrap_or_else(|_| Utc::now());
-                                            let bbo = tt_types::data::core::Bbo {
-                                                symbol,
-                                                instrument: instrument.clone(),
-                                                bid,
-                                                bid_size,
-                                                ask,
-                                                ask_size,
-                                                time,
-                                                bid_orders: None,
-                                                ask_orders: None,
-                                                venue_seq: None,
-                                                is_snapshot: Some(false),
-                                            };
-                                            // Publish to SHM snapshot (Quotes)
-                                            let provider =
-                                                tt_types::providers::ProviderKind::ProjectX(
-                                                    self.firm,
-                                                );
-                                            let key = tt_types::keys::SymbolKey {
-                                                instrument: instrument.clone(),
-                                                provider,
-                                            };
-                                            {
-                                                let buf = match tt_types::wire::encode(&bbo) {
-                                                    Ok(buf) => buf,
-                                                    Err(e) => {
-                                                        error!("failed to encode message: {}", e);
-                                                        return;
-                                                    },
-                                                };
-                                                tt_shm::write_snapshot(Topic::Quotes, &key, &buf.to_vec());
+                                    // contract id is first arg when present
+                                    let instrument_opt = args.get(0).and_then(|v| v.as_str()).map(|s| parse_px_instrument(s));
+                                    // data is second arg when present, otherwise first
+                                    let maybe_data = if args.len() >= 2 { Some(&args[1]) } else { args.get(0) };
+
+                                    let mut quotes: Vec<GatewayQuote> = Vec::new();
+                                    if let Some(data_val) = maybe_data {
+                                        if let Some(arr) = data_val.as_array() {
+                                            for item in arr {
+                                                if let Ok(q) = serde_json::from_value::<GatewayQuote>(item.clone()) {
+                                                    quotes.push(q);
+                                                }
                                             }
-                                            // Publish to bus if attached
-                                            if let Err(e) = self.bus.publish_quote(bbo).await {
-                                                log::warn!("failed to publish quote: {}", e);
+                                        } else if data_val.is_object() {
+                                            if let Ok(q) = serde_json::from_value::<GatewayQuote>(data_val.clone()) {
+                                                quotes.push(q);
+                                            }
+                                        }
+                                    }
+                                    if quotes.is_empty() {
+                                        return;
+                                    }
+
+                                    if let Some(instr_str) = instrument_opt {
+                                        if let Ok(instrument) = Instrument::from_str(&instr_str) {
+                                            let symbol = extract_root(&instrument);
+                                            let provider = tt_types::providers::ProviderKind::ProjectX(self.firm);
+                                            let key = tt_types::keys::SymbolKey { instrument: instrument.clone(), provider };
+
+                                            let mut published = 0usize;
+                                            for px_quote in quotes.into_iter() {
+                                                let bid = Price::from_f64(px_quote.best_bid).unwrap_or_default();
+                                                let ask = Price::from_f64(px_quote.best_ask).unwrap_or_default();
+                                                let bid_size = Volume::from(0);
+                                                let ask_size = Volume::from(0);
+                                                let time = DateTime::<Utc>::from_str(px_quote.timestamp.as_str())
+                                                    .or_else(|_| DateTime::<Utc>::from_str(px_quote.last_updated.as_str()))
+                                                    .unwrap_or_else(|_| Utc::now());
+                                                let bbo = tt_types::data::core::Bbo {
+                                                    symbol: symbol.clone(),
+                                                    instrument: instrument.clone(),
+                                                    bid,
+                                                    bid_size,
+                                                    ask,
+                                                    ask_size,
+                                                    time,
+                                                    bid_orders: None,
+                                                    ask_orders: None,
+                                                    venue_seq: None,
+                                                    is_snapshot: Some(false),
+                                                };
+                                                let buf = match tt_types::wire::encode(&bbo) { Ok(buf) => buf, Err(e) => { error!("failed to encode message: {}", e); continue; } };
+                                                tt_shm::write_snapshot(Topic::Quotes, &key, &buf.to_vec());
+                                                if let Err(e) = self.bus.publish_quote(bbo).await { log::warn!("failed to publish quote: {}", e); } else { published += 1; }
+                                            }
+                                            if published == 0 {
+                                                info!(target: "projectx.ws", "GatewayQuote: parsed but no valid quotes for {}", instrument);
                                             }
                                         } else {
-                                            info!(target: "projectx.ws", "GatewayQuote (invalid instrument): {}", px_quote.symbol);
+                                            info!(target: "projectx.ws", "GatewayQuote (invalid instrument arg): {:?}", args.get(0));
                                         }
                                     } else {
-                                        info!(target: "projectx.ws", "GatewayQuote (unparsed): {}", data_val);
+                                        info!(target: "projectx.ws", "GatewayQuote (missing contract id arg): {:?}", args);
                                     }
                                 }
                             }
                             "GatewayTrade" => {
-                                // Extract args and deserialize payload (can be single object or array of objects)
+                                // Extract args and deserialize payload (can be array of objects now)
                                 let args_opt = val.get("arguments").and_then(|a| a.as_array());
                                 if let Some(args) = args_opt {
-                                    let data_val = if args.len() >= 2 {
-                                        &args[1]
-                                    } else {
-                                        args.get(0).unwrap_or(&Value::Null)
-                                    };
+                                    // First arg is the full contract id (e.g., "CON.F.US.MNQ.Z25"). Use it to derive Instrument.
+                                    let instrument_opt = args.get(0).and_then(|v| v.as_str()).map(|s| parse_px_instrument(s));
 
-                                    if let Ok(px_trade) =
-                                        serde_json::from_value::<GatewayTrade>(data_val.to_owned())
-                                    {
-                                        if let Ok(instrument) = Instrument::from_str(
-                                            &parse_px_instrument(px_trade.symbol_id.as_str()),
-                                        ) {
-                                            let symbol = extract_root(&instrument);
-                                            let price = match Price::from_f64(px_trade.price) {
-                                                Some(p) => p,
-                                                None => {
-                                                    log::warn!(
-                                                        "invalid price for {}",
-                                                        px_trade.price
-                                                    );
-                                                    return;
+                                    // Second arg is either an array of trade objects or a single object
+                                    let maybe_data = if args.len() >= 2 { Some(&args[1]) } else { args.get(0) };
+
+                                    let mut trades: Vec<GatewayTrade> = Vec::new();
+                                    if let Some(data_val) = maybe_data {
+                                        if let Some(arr) = data_val.as_array() {
+                                            // Deserialize an array of GatewayTrade
+                                            for item in arr {
+                                                if let Ok(t) = serde_json::from_value::<GatewayTrade>(item.clone()) {
+                                                    trades.push(t);
                                                 }
-                                            };
-                                            let volume = match Volume::from_i64(px_trade.volume) {
-                                                Some(s) => s,
-                                                None => {
-                                                    log::warn!(
-                                                        "invalid size for {}",
-                                                        px_trade.volume
-                                                    );
-                                                    return;
-                                                }
-                                            };
-                                            let side = match px_trade.r#type {
-                                                0 => Side::Buy,
-                                                1 => Side::Sell,
-                                                _ => Side::None,
-                                            };
-                                            let time = match DateTime::<Utc>::from_str(
-                                                px_trade.timestamp.as_str(),
-                                            ) {
-                                                Ok(t) => t,
-                                                Err(e) => {
-                                                    log::warn!(
-                                                        "invalid timestamp for {}: {}",
-                                                        px_trade.timestamp,
-                                                        e
-                                                    );
-                                                    Utc::now()
-                                                }
-                                            };
-                                            let tick = Tick {
-                                                symbol,
-                                                instrument: instrument.clone(),
-                                                price,
-                                                volume,
-                                                time,
-                                                side,
-                                                venue_seq: None,
-                                            };
-                                            // Write Tick snapshot to SHM
-                                            let provider =
-                                                tt_types::providers::ProviderKind::ProjectX(
-                                                    self.firm,
-                                                );
-                                            let key = tt_types::keys::SymbolKey {
-                                                instrument: instrument.clone(),
-                                                provider,
-                                            };
-                                            {
-                                                let buf = match tt_types::wire::encode(&tick) {
-                                                    Ok(buf) => buf,
-                                                    Err(e) => {
-                                                        error!("failed to encode message: {}", e);
-                                                        return;
-                                                    },
-                                                };
-                                                tt_shm::write_snapshot(Topic::Ticks, &key, &buf.to_vec());
                                             }
-                                            if let Err(e) = self.bus.publish_tick(tick).await {
-                                                log::warn!("failed to publish tick: {}", e);
+                                        } else if data_val.is_object() {
+                                            if let Ok(t) = serde_json::from_value::<GatewayTrade>(data_val.clone()) {
+                                                trades.push(t);
                                             }
                                         }
+                                    }
+
+                                    if trades.is_empty() {
+                                        // Nothing to do for this message
+                                        return;
+                                    }
+
+                                    // Resolve instrument once
+                                    if let Some(instr_str) = instrument_opt {
+                                        if let Ok(instrument) = Instrument::from_str(&instr_str) {
+                                            let symbol = extract_root(&instrument);
+                                            let provider = tt_types::providers::ProviderKind::ProjectX(self.firm);
+                                            let key = tt_types::keys::SymbolKey { instrument: instrument.clone(), provider };
+
+                                            let mut published = 0usize;
+                                            for px_trade in trades.into_iter() {
+                                                let price = match Price::from_f64(px_trade.price) {
+                                                    Some(p) => p,
+                                                    None => { log::warn!("invalid price for {}", px_trade.price); continue; }
+                                                };
+                                                let volume = match Volume::from_i64(px_trade.volume) {
+                                                    Some(s) => s,
+                                                    None => { log::warn!("invalid size for {}", px_trade.volume); continue; }
+                                                };
+                                                let side = match px_trade.r#type { 0 => Side::Buy, 1 => Side::Sell, _ => Side::None };
+                                                let time = DateTime::<Utc>::from_str(px_trade.timestamp.as_str()).unwrap_or_else(|e| {
+                                                    log::warn!("invalid timestamp for {}: {}", px_trade.timestamp, e);
+                                                    Utc::now()
+                                                });
+                                                let tick = Tick { symbol: symbol.clone(), instrument: instrument.clone(), price, volume, time, side, venue_seq: None };
+                                                // Write Tick snapshot to SHM
+                                                let buf = match tt_types::wire::encode(&tick) { Ok(buf) => buf, Err(e) => { error!("failed to encode message: {}", e); continue; } };
+                                                tt_shm::write_snapshot(Topic::Ticks, &key, &buf.to_vec());
+                                                if let Err(e) = self.bus.publish_tick(tick).await { log::warn!("failed to publish tick: {}", e); } else { published += 1; }
+                                            }
+                                            if published == 0 {
+                                                info!(target: "projectx.ws", "GatewayTrade: parsed but no valid ticks for {}", instrument);
+                                            }
+                                        } else {
+                                            info!(target: "projectx.ws", "GatewayTrade (invalid instrument arg): {:?}", args.get(0));
+                                        }
+                                    } else {
+                                        info!(target: "projectx.ws", "GatewayTrade (missing contract id arg): {:?}", args);
                                     }
                                 }
                             }
                             "GatewayDepth" => {
-                                // Extract args and handle payload which may be an array of levels
+                                // Extract args and handle payload which may be an array or a single object
                                 let args_opt = val.get("arguments").and_then(|a| a.as_array());
                                 if let Some(args) = args_opt {
+                                    // contract id is first arg; data is second when present
                                     let (instrument_opt, data_val) = if args.len() >= 2 {
                                         (
-                                            args.get(0)
-                                                .and_then(|v| v.as_str())
-                                                .map(|s| s.to_string()),
-                                            &args[1],
+                                            args.get(0).and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                            Some(&args[1])
                                         )
                                     } else {
                                         (
+                                            args.get(0).and_then(|v| v.as_str()).map(|s| s.to_string()),
                                             args.get(0)
-                                                .and_then(|v| v.as_str())
-                                                .map(|s| s.to_string()),
-                                            args.get(0).unwrap_or(&Value::Null),
                                         )
                                     };
 
-                                    // Resolve instrument from the first argument if present
                                     if let Some(instr_str) = instrument_opt {
-                                        if let Ok(instrument) = Instrument::from_str(
-                                            &parse_px_instrument(instr_str.as_str()),
-                                        ) {
+                                        // Normalize instrument like other handlers (collapse 2-digit year to 1 digit)
+                                        if let Ok(instrument) = Instrument::from_str(&parse_px_instrument(instr_str.as_str())) {
                                             let symbol = extract_root(&instrument);
+                                            let provider = tt_types::providers::ProviderKind::ProjectX(self.firm);
+                                            let key = tt_types::keys::SymbolKey { instrument: instrument.clone(), provider };
 
                                             // Normalize payload to a vector of depth items
                                             let mut items: Vec<models::GatewayDepth> = Vec::new();
+                                            if let Some(data) = data_val {
+                                                if data.is_array() {
+                                                    if let Some(arr) = data.as_array() {
+                                                        for item in arr {
+                                                            if let Ok(d) = serde_json::from_value::<models::GatewayDepth>(item.clone()) {
+                                                                items.push(d);
+                                                            }
+                                                        }
+                                                    }
+                                                } else if data.is_object() {
+                                                    if let Ok(d) = serde_json::from_value::<models::GatewayDepth>(data.clone()) {
+                                                        items.push(d);
+                                                    }
+                                                }
+                                            }
 
+                                            if items.is_empty() {
+                                                return;
+                                            }
+
+                                            // Map ProjectX depth items to MBP10 incremental updates and publish individually
+                                            use tt_types::data::mbp10::{Mbp10, Action as MbpAction, BookSide as MbpSide, Flags as MbpFlags};
+                                            use rust_decimal::prelude::FromPrimitive as _;
+                                            let mut published = 0usize;
+                                            for it in items.into_iter() {
+                                                // Map side using API DomType definitions
+                                                // Ask(1), BestAsk(3), NewBestAsk(10) => Ask; Bid(2), BestBid(4), NewBestBid(9) => Bid; others => None
+                                                let side = match it.r#type {
+                                                    1 | 3 | 10 => MbpSide::Ask,
+                                                    2 | 4 | 9 => MbpSide::Bid,
+                                                    _ => MbpSide::None,
+                                                };
+                                                // Map action to engine Action per API:
+                                                // Unknown(0), Low(7), High(8) => None
+                                                // Reset(6) => Clear
+                                                // Trade(5) => Trade
+                                                // Fill(11) => Fill
+                                                // Otherwise (Ask/Bid/BestAsk/BestBid/NewBest*) => Modify (set total volume at price)
+                                                let action = match it.r#type {
+                                                    0 | 7 | 8 => MbpAction::None,
+                                                    6 => MbpAction::Clear,
+                                                    5 => MbpAction::Trade,
+                                                    11 => MbpAction::Fill,
+                                                    _ => MbpAction::Modify,
+                                                };
+
+                                                // Build Mbp10 with proper timestamp semantics
+                                                // ts_event: provider/event timestamp; ts_recv: local receive timestamp
+                                                let ts_event = DateTime::<Utc>::from_str(it.timestamp.as_str()).unwrap_or_else(|_| Utc::now());
+                                                let ts_event_ns = (ts_event.timestamp() as u64)
+                                                    .saturating_mul(1_000_000_000)
+                                                    .saturating_add(ts_event.timestamp_subsec_nanos() as u64);
+                                                let ts_recv = Utc::now();
+                                                let ts_recv_ns = (ts_recv.timestamp() as u64)
+                                                    .saturating_mul(1_000_000_000)
+                                                    .saturating_add(ts_recv.timestamp_subsec_nanos() as u64);
+
+                                                // Compute ts_in_delta = ts_recv - ts_event (ns), clamp to i32
+                                                let mut bad_ts = false;
+                                                let delta_i128 = (ts_recv_ns as i128) - (ts_event_ns as i128);
+                                                let ts_in_delta_i32 = if delta_i128 < 0 || delta_i128 > i32::MAX as i128 {
+                                                    bad_ts = true;
+                                                    0
+                                                } else {
+                                                    delta_i128 as i32
+                                                };
+
+                                                let size_u32 = if it.volume < 0 { 0 } else { (it.volume as u64).min(u32::MAX as u64) as u32 };
+                                                let mut flags = MbpFlags::from(MbpFlags::F_MBP);
+                                                if matches!(it.r#type, 3 | 4 | 9 | 10) { // best bid/ask related
+                                                    flags = MbpFlags(flags.0 | MbpFlags::F_TOB);
+                                                }
+                                                if bad_ts {
+                                                    flags = MbpFlags(flags.0 | MbpFlags::F_BAD_TS_RECV);
+                                                }
+
+                                                // Build directly instead of make_mbp10 to avoid decimal conversion corner cases
+                                                let event = Mbp10 {
+                                                    ts_recv,
+                                                    ts_event,
+                                                    rtype: 10,
+                                                    publisher_id: 0,
+                                                    instrument_id: 0,
+                                                    action,
+                                                    side,
+                                                    depth: it.index.unwrap_or(0).try_into().unwrap_or(0),
+                                                    price: Decimal::from_f64(it.price).unwrap_or_else(|| Decimal::from_i32(0).unwrap()),
+                                                    size: size_u32,
+                                                    flags,
+                                                    ts_in_delta: ts_in_delta_i32,
+                                                    sequence: 0,
+                                                    book: None,
+                                                };
+
+                                                if let Err(e) = self.bus.publish_mbp10_for_key(&key, event).await {
+                                                    log::warn!(target: "projectx.ws", "failed to publish MBP10: {}", e);
+                                                } else {
+                                                    published += 1;
+                                                }
+                                            }
+                                            if published == 0 {
+                                                info!(target: "projectx.ws", "GatewayDepth: parsed but no valid updates for {}", instrument);
+                                            }
                                         } else {
                                             info!(target: "projectx.ws", "GatewayDepth: invalid instrument in args: {}", instr_str);
                                         }
@@ -931,7 +1015,7 @@ impl PxWebSocketClient {
                                 //info!(target: "projectx.ws", "GatewayUserPosition cached: id={} account_id={} contract={}", position.id, position.account_id, position.contract_id);
                             }
                             "GatewayUserTrade" => {
-                                /*let seq = match Utc::now().timestamp_nanos_opt() {
+                                let seq = match Utc::now().timestamp_nanos_opt() {
                                     None => u64::MIN,
                                     Some(ts) => ts as u64
                                 };
@@ -967,7 +1051,7 @@ impl PxWebSocketClient {
                                 let time_accepted =
                                     DateTime::<Utc>::from_str(&trade.creation_timestamp)
                                         .unwrap_or_else(|_| Utc::now());
-                                info!(target: "projectx.ws", "GatewayUserTrade standardized: id={} order_id={} side={:?} px={} qty={} fees={}", trade.id, trade.order_id, side, trade.price, trade.size, trade.fees);*/
+                                info!(target: "projectx.ws", "GatewayUserTrade standardized: id={} order_id={} side={:?} px={} qty={} fees={}", trade.id, trade.order_id, side, trade.price, trade.size, trade.fees);
                             }
                             _ => {}
                         }

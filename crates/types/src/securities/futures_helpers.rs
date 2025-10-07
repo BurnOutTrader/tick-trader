@@ -150,47 +150,36 @@ pub fn parse_expiry_from_instrument(instrument: &Instrument) -> Option<NaiveDate
     NaiveDate::from_ymd_opt(year, month, 1)
 }
 
-#[allow(dead_code)]
-/// Extract a futures **root** from a vendor symbol code.
-///
-/// Heuristic:
-/// - Uppercase the input.
-/// - Strip **up to two trailing digits** (year suffix).
-/// - If there was at least one digit removed and the prior char is an
-///   alphabetic **month code** (F,G,H, …, Z), strip that as well.
-/// - Return everything **before** that boundary.
-///
-/// This produces:
-/// - `"ESZ25"` → `"ES"`
-/// - `"MNQZ5"` → `"MNQ"`
-/// - `"CL"`    → `"CL"` (no change)
-///
-/// The function is intentionally fast and allocation-light; it does not
-/// validate that the remaining characters are a real exchange root.
-///
-/// ### Notes
-/// - Works for common futures codes with 1–2 digit years.
-/// - If you need 3–4 digit year formats, extend the heuristic.
-///
-/// ### Example
-/// ```ignore
-/// assert_eq!(extract_root("ESZ25"), "ES");
-/// assert_eq!(extract_root("MNQZ5"), "MNQ");
-/// assert_eq!(extract_root("cl"), "CL");
+/// Returns the futures root (e.g., "MNQ" from "MNQZ25" or "MNQZ5"; "NQ" from "NQZ5").
+/// Rules:
+/// - Accept only a valid month code letter: F G H J K M N Q U V X Z
+/// - Accept 1–2 trailing digits for the year
+/// - Case-insensitive; preserves the original casing of the root
 pub fn extract_root(instrument: &Instrument) -> String {
+    // Valid month codes per CME
+    const MONTHS: &[u8] = b"FGHJKMNQUVXZ";
+
     let code = instrument.to_string();
     let up = code.to_ascii_uppercase();
     let b = up.as_bytes();
+
+    // find trailing 1–2 digits
     let mut i = b.len();
-    let mut digits = 0;
+    let mut digits = 0usize;
     while i > 0 && b[i - 1].is_ascii_digit() && digits < 2 {
         i -= 1;
         digits += 1;
     }
-    if i > 0 && digits > 0 && b[i - 1].is_ascii_alphabetic() {
-        i -= 1;
+
+    // require at least 1 digit and a valid month letter before it
+    if digits >= 1 && i > 0 && MONTHS.contains(&b[i - 1]) {
+        // cut the letter too
+        let cut = i - 1;
+        return code[..cut].to_string();
     }
-    code[..i].to_string()
+
+    // no valid month+year suffix -> return as-is
+    code
 }
 
 #[allow(dead_code)]

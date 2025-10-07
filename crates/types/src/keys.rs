@@ -118,6 +118,11 @@ pub struct SymbolKey {
     pub instrument: Instrument, // UPPER
     pub provider: ProviderKind, // provider kind (may include tenant/affiliation)
 }
+impl SymbolKey {
+    pub fn new(instrument: Instrument, provider: ProviderKind) -> Self {
+        Self { instrument, provider }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct AccountKey {

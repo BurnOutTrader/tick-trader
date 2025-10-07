@@ -7,29 +7,29 @@ pub use rust_decimal::Decimal;
 use strum_macros::Display;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, Serialize, Deserialize)]
-pub enum Side {
+pub enum BookSide {
     Ask,   // 'A'
     Bid,   // 'B'
     None,  // 'N' or unknown
 }
 
-impl From<u8> for Side {
+impl From<u8> for BookSide {
     fn from(b: u8) -> Self {
         match b {
-            b'A' => Side::Ask,
-            b'B' => Side::Bid,
-            b'N' => Side::None,
-            _ => Side::None, // default fallback
+            b'A' => BookSide::Ask,
+            b'B' => BookSide::Bid,
+            b'N' => BookSide::None,
+            _ => BookSide::None, // default fallback
         }
     }
 }
 
-impl From<Side> for u8 {
-    fn from(s: Side) -> u8 {
+impl From<BookSide> for u8 {
+    fn from(s: BookSide) -> u8 {
         match s {
-            Side::Ask => b'A',
-            Side::Bid => b'B',
-            Side::None => b'N',
+            BookSide::Ask => b'A',
+            BookSide::Bid => b'B',
+            BookSide::None => b'N',
         }
     }
 }
@@ -165,7 +165,7 @@ pub struct Mbp10 {
     pub instrument_id: u32,
 
     pub action: Action,
-    pub side: Side,
+    pub side: BookSide,
 
     /// Book level where the update occurred.
     pub depth: u8,
@@ -233,7 +233,7 @@ pub fn make_mbp10(
     let ts_event = dt_from_ns(ts_event_ns)?;
 
     let action = Action::from(action_b);
-    let side = Side::from(side_b);
+    let side = BookSide::from(side_b);
     let flags = Flags::from(flags_b);
 
     let price = dec_from_nanos(price_nanos);

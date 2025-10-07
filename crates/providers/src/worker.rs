@@ -34,7 +34,9 @@ impl ProviderWorker for InprocessWorker {
         if *e == 0 {
             // On first local subscriber, ensure upstream and announce SHM for hot snapshots
             self.md.subscribe_md(topic, key).await?;
-            if matches!(topic, Topic::Quotes | Topic::MBP10 | Topic::Ticks) {
+            if matches!(topic, Topic::Quotes | Topic::MBP10 | Topic::Ticks | Topic::Candles1d
+                | Topic::Candles1h | Topic::Candles1m | Topic::Candles1s) {
+
                 let name = tt_shm::suggest_name(topic, key);
                 let size = if matches!(topic, Topic::MBP10) {
                     tt_shm::DEFAULT_DEPTH_SNAPSHOT_SIZE
@@ -67,7 +69,8 @@ impl ProviderWorker for InprocessWorker {
                 self.interest.remove(&(topic, key.clone()));
                 self.md.unsubscribe_md(topic, key).await?;
                 // On last local unsubscribe, remove SHM snapshot for hot topics
-                if matches!(topic, Topic::Quotes | Topic::MBP10 | Topic::Ticks) {
+                if matches!(topic, Topic::Quotes | Topic::MBP10 | Topic::Ticks | Topic::Candles1d
+                | Topic::Candles1h | Topic::Candles1m | Topic::Candles1s) {
                     tt_shm::remove_snapshot(topic, key);
                 }
             }

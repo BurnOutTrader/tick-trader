@@ -6,13 +6,17 @@ use tokio::time::sleep;
 use tracing::info;
 use tt_bus::ClientMessageBus;
 use tt_engine::engine::{EngineRuntime, EngineHandle, Strategy};
+use tt_types::accounts::events::AccountDelta;
 use tt_types::data::mbp10::Mbp10;
-use tt_types::keys::Topic;
+use tt_types::keys::{SymbolKey, Topic};
+use tt_types::providers::{ProjectXTenant, ProviderKind};
 use tt_types::securities::symbols::Instrument;
 use tt_types::wire;
 
 #[derive(Default)]
-struct TestStrategy {}
+struct TestStrategy {
+    engine: Option<EngineHandle>,
+}
 
 #[async_trait::async_trait]
 impl Strategy for TestStrategy {
@@ -23,8 +27,11 @@ impl Strategy for TestStrategy {
         s.insert(Topic::Ticks);
         s
     }
-    async fn on_start(&mut self, _h: EngineHandle) {
+
+    async fn on_start(&mut self, h: EngineHandle) {
         info!("strategy start");
+        h.subscribe_key(Topic::MBP10, SymbolKey::new(Instrument::from_str("MNQZ25").unwrap(), ProviderKind::ProjectX(ProjectXTenant::Topstep))).await.unwrap();
+        self.engine = Some(h);
     }
     async fn on_stop(&mut self) {
         info!("strategy stop");
@@ -36,7 +43,7 @@ impl Strategy for TestStrategy {
         println!("{:?}", q);
     }
     async fn on_bar(&mut self, _b: tt_types::data::core::Candle) {}
-    async fn on_depth(&mut self, d: Mbp10) {
+    async fn on_mbp10(&mut self, d: Mbp10) {
         println!("{:?}", d);
     }
     async fn on_orders_batch(&mut self, b: wire::OrdersBatch) {
@@ -45,11 +52,13 @@ impl Strategy for TestStrategy {
     async fn on_positions_batch(&mut self, b: wire::PositionsBatch) {
         println!("{:?}", b);
     }
-    async fn on_account_delta_batch(&mut self, b: wire::AccountDeltaBatch) {
-        println!("{:?}", b);
+    async fn on_account_delta(&mut self, accounts: Vec<AccountDelta>,) {
+        for account_delta in accounts {
+            println!("{:?}", account_delta);
+        }
     }
-    async fn on_subscribe(&mut self, _instrument: Instrument, topic: Topic, success: bool) {
-        println!("{:?}: {}", topic, success);
+    async fn on_subscribe(&mut self, instrument: Instrument, topic: Topic, success: bool) {
+        println!("Subscribed to {} on topic {:?}: Success: {}", instrument, topic, success);
     }
     async fn on_unsubscribe(&mut self, _instrument: Instrument, topic: Topic) {
         println!("{:?}", topic);
