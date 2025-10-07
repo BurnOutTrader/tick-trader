@@ -1,3 +1,4 @@
+use anyhow::Context;
 use chrono::Utc;
 use rust_decimal::Decimal;
 use rust_decimal::prelude::FromPrimitive;
@@ -141,8 +142,8 @@ impl RetrieveBarsResponse {
         exchange: Exchange,
     ) -> anyhow::Result<Candle> {
         let time_start = chrono::DateTime::parse_from_rfc3339(&bar.t)
-            .map(|dt| dt.with_timezone(&Utc))
-            .map_err(|e| anyhow::anyhow!("parse bar time failed: {}", e))?;
+            .context("parse bar time failed")?
+            .to_utc();
         let time_end = candle_end(time_start, resolution, exchange).unwrap();
         let root = extract_root(&instrument);
         let candle = Candle {
