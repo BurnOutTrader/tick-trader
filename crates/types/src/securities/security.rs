@@ -30,7 +30,9 @@ pub struct FuturesContract {
     pub value_per_tick: Decimal,
     pub decimal_accuracy: u32,
     pub quote_ccy: Currency,
+    #[serde(with = "crate::serde_ext::naivedate_opt")]
     pub activation_date: Option<NaiveDate>,
+    #[serde(with = "crate::serde_ext::naivedate_opt")]
     pub expiration_date: Option<NaiveDate>,
     pub is_continuous: bool,
 }

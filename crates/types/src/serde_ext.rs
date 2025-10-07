@@ -145,3 +145,35 @@ pub mod datetime {
             .ok_or_else(|| de::Error::custom("invalid (secs,nanos) for DateTime<Utc>"))
     }
 }
+
+// Binary-friendly serde helpers for NaiveDate and Option<NaiveDate>.
+pub mod naivedate {
+    use chrono::NaiveDate;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use serde::de::{self};
+
+    pub fn serialize<S>(value: &NaiveDate, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        if serializer.is_human_readable() {
+            return serializer.serialize_str(&value.to_string());
+        }
+        let y = value.year();
+        let m = value.month();
+        let d = value.day();
+        (y, m as u32, d as u32).serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<NaiveDate, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        if deserializer.is_human_readable() {
+            let s = String::deserialize(deserializer)?;
+            return NaiveDate::parse_from_str(&s, "%Y-%m-%d").map_err(de::Error::custom);
+        }
+        let (y, m, d): (i32, u32, u32) = <(i32, u32, u32)>::deserialize(deserializer)?;
+        NaiveDate::from_ymd_opt(y, m, d).ok_or_else(|| de::Error::custom("invalid NaiveDate components"))
+    }
+}

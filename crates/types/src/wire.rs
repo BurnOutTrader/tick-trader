@@ -446,3 +446,48 @@ pub fn decode<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> anyhow::Result<T> {
     let msg = bincode::deserialize(bytes)?;
     Ok(msg)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::str::FromStr;
+
+    #[test]
+    fn instruments_map_response_bincode_roundtrip() {
+        // Build a minimal FuturesContract with sane Decimals
+        let fc = FuturesContract {
+            root: "MNQ".to_string(),
+            instrument: Instrument::from_str("MNQ.Z25").unwrap(),
+            security_type: crate::securities::symbols::SecurityType::Future,
+            exchange: crate::securities::symbols::Exchange::GLOBEX,
+            provider_contract_name: "MNQZ5".to_string(),
+            provider_id: ProviderKind::ProjectX(crate::providers::ProjectXTenant::Topstep),
+            tick_size: rust_decimal::Decimal::new(25, 2),
+            value_per_tick: rust_decimal::Decimal::new(50, 0),
+            decimal_accuracy: 2,
+            quote_ccy: crate::securities::symbols::Currency::USD,
+            activation_date: None,
+            expiration_date: None,
+            is_continuous: false,
+        };
+        let resp = InstrumentsMapResponse {
+            provider: "ProjectX::Topstep".to_string(),
+            instruments: vec![(Instrument::from_str("MNQ.Z25").unwrap(), fc)],
+            corr_id: 42,
+        };
+        let wm = WireMessage::Response(Response::InstrumentsMapResponse(resp.clone()));
+        let bytes = encode(&wm).expect("encode");
+        let decoded: WireMessage = decode(&bytes).expect("decode");
+        match decoded {
+            WireMessage::Response(Response::InstrumentsMapResponse(r2)) => {
+                assert_eq!(r2.corr_id, resp.corr_id);
+                assert_eq!(r2.provider, resp.provider);
+                assert_eq!(r2.instruments.len(), 1);
+                let (_ins, fc2) = &r2.instruments[0];
+                assert_eq!(fc2.tick_size, rust_decimal::Decimal::new(25, 2));
+                assert_eq!(fc2.value_per_tick, rust_decimal::Decimal::new(50, 0));
+            }
+            other => panic!("unexpected decoded: {:?}", other),
+        }
+    }
+}
