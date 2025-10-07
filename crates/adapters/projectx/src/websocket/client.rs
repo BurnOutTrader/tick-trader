@@ -23,13 +23,13 @@ use tt_bus::Router;
 use tt_types::accounts::events::{
     AccountDelta, ClientOrderId, OrderUpdate, PositionDelta, ProviderOrderId,
 };
-use tt_types::data::core::{BookLevel, OrderBookSnapShot, Tick};
+use tt_types::data::core::{Tick};
 use tt_types::data::models::{Price, Side, Volume};
 use tt_types::keys::Topic;
 use tt_types::providers::ProjectXTenant;
 use tt_types::securities::futures_helpers::{extract_month_year, extract_root, sanitize_code};
 use tt_types::securities::symbols::Instrument;
-use tt_types::wire::{AccountDeltaBatch, OrdersBatch, PositionsBatch};
+use tt_types::wire::{encode, AccountDeltaBatch, OrdersBatch, PositionsBatch};
 
 #[allow(unused)]
 /// Realtime client scaffold for ProjectX hubs
@@ -637,10 +637,14 @@ impl PxWebSocketClient {
                                                 provider,
                                             };
                                             {
-                                                let bytes =
-                                                    rkyv::to_bytes::<rkyv::rancor::Error>(&bbo)
-                                                        .unwrap_or_default();
-                                                tt_shm::write_snapshot(Topic::Quotes, &key, &bytes);
+                                                let buf = match tt_types::wire::encode(&bbo) {
+                                                    Ok(buf) => buf,
+                                                    Err(e) => {
+                                                        error!("failed to encode message: {}", e);
+                                                        return;
+                                                    },
+                                                };
+                                                tt_shm::write_snapshot(Topic::Quotes, &key, &buf.to_vec());
                                             }
                                             // Publish to bus if attached
                                             if let Err(e) = self.bus.publish_quote(bbo).await {
@@ -728,10 +732,14 @@ impl PxWebSocketClient {
                                                 provider,
                                             };
                                             {
-                                                let bytes =
-                                                    rkyv::to_bytes::<rkyv::rancor::Error>(&tick)
-                                                        .unwrap_or_default();
-                                                tt_shm::write_snapshot(Topic::Ticks, &key, &bytes);
+                                                let buf = match tt_types::wire::encode(&tick) {
+                                                    Ok(buf) => buf,
+                                                    Err(e) => {
+                                                        error!("failed to encode message: {}", e);
+                                                        return;
+                                                    },
+                                                };
+                                                tt_shm::write_snapshot(Topic::Ticks, &key, &buf.to_vec());
                                             }
                                             if let Err(e) = self.bus.publish_tick(tick).await {
                                                 log::warn!("failed to publish tick: {}", e);
@@ -769,153 +777,7 @@ impl PxWebSocketClient {
 
                                             // Normalize payload to a vector of depth items
                                             let mut items: Vec<models::GatewayDepth> = Vec::new();
-                                            if data_val.is_array() {
-                                                if let Some(arr) = data_val.as_array() {
-                                                    for v in arr {
-                                                        if let Ok(it) = serde_json::from_value::<
-                                                            models::GatewayDepth,
-                                                        >(
-                                                            v.clone()
-                                                        ) {
-                                                            items.push(it);
-                                                        }
-                                                    }
-                                                }
-                                            } else if data_val.is_object() {
-                                                if let Ok(it) =
-                                                    serde_json::from_value::<models::GatewayDepth>(
-                                                        data_val.clone(),
-                                                    )
-                                                {
-                                                    items.push(it);
-                                                }
-                                            }
 
-                                            if !items.is_empty() {
-                                                let mut bids: Vec<BookLevel> = Vec::new();
-                                                let mut asks: Vec<BookLevel> = Vec::new();
-                                                let mut latest_ts: Option<DateTime<Utc>> = None;
-
-                                                for it in items.into_iter() {
-                                                    let price = match Price::from_f64(it.price) {
-                                                        Some(p) => p,
-                                                        None => continue,
-                                                    };
-                                                    let vol_i64 = if it.current_volume != 0 {
-                                                        it.current_volume
-                                                    } else {
-                                                        it.volume
-                                                    };
-                                                    let volume = match Volume::from_i64(vol_i64) {
-                                                        Some(v) => v,
-                                                        None => continue,
-                                                    };
-                                                    let ts = DateTime::<Utc>::from_str(
-                                                        it.timestamp.as_str(),
-                                                    )
-                                                    .unwrap_or_else(|_| Utc::now());
-                                                    if latest_ts.map(|t| ts > t).unwrap_or(true) {
-                                                        latest_ts = Some(ts);
-                                                    }
-
-                                                    if let Some(index) = it.index {
-                                                        match it.r#type {
-                                                            1 => {
-                                                                // Ask/BestAsk/NewBestAsk
-                                                                asks.insert(
-                                                                    index as usize,
-                                                                    BookLevel {
-                                                                        price,
-                                                                        volume,
-                                                                        level: index as u32,
-                                                                    },
-                                                                );
-                                                            }
-                                                            2 => {
-                                                                // Bid/BestBid/NewBestBid
-                                                                bids.insert(
-                                                                    index as usize,
-                                                                    BookLevel {
-                                                                        price,
-                                                                        volume,
-                                                                        level: index as u32,
-                                                                    },
-                                                                );
-                                                            }
-                                                            _ => { /* ignore other DOM types in orderbook snapshot */
-                                                            }
-                                                        }
-                                                    } else {
-                                                        match it.r#type {
-                                                            3 | 10 => {
-                                                                // Ask/BestAsk/NewBestAsk
-                                                                asks.insert(
-                                                                    0,
-                                                                    BookLevel {
-                                                                        price,
-                                                                        volume,
-                                                                        level: 0,
-                                                                    },
-                                                                );
-                                                            }
-                                                            4 | 9 => {
-                                                                // Bid/BestBid/NewBestBid
-                                                                bids.insert(
-                                                                    0,
-                                                                    BookLevel {
-                                                                        price,
-                                                                        volume,
-                                                                        level: 0,
-                                                                    },
-                                                                );
-                                                            }
-                                                            //todo, handle other types, ticks and quotes to be generated
-                                                            _ => {}
-                                                        }
-                                                    }
-                                                }
-
-                                                // Sort levels: bids desc (best first), asks asc (best first)
-                                                bids.sort_by(|a, b| b.price.cmp(&a.price));
-                                                asks.sort_by(|a, b| a.price.cmp(&b.price));
-
-                                                let ob = OrderBookSnapShot {
-                                                    symbol,
-                                                    instrument: instrument.clone(),
-                                                    bids,
-                                                    asks,
-                                                    time: latest_ts.unwrap_or_else(|| Utc::now()),
-                                                };
-
-                                                // Build SymbolKey for this stream
-                                                let provider =
-                                                    tt_types::providers::ProviderKind::ProjectX(
-                                                        self.firm,
-                                                    );
-                                                let key = tt_types::keys::SymbolKey {
-                                                    instrument: instrument.clone(),
-                                                    provider,
-                                                };
-                                                // Write OrderBook snapshot to SHM
-                                                {
-                                                    let bytes =
-                                                        rkyv::to_bytes::<rkyv::rancor::Error>(&ob)
-                                                            .unwrap_or_default();
-                                                    tt_shm::write_snapshot(
-                                                        Topic::MBP10,
-                                                        &key,
-                                                        &bytes,
-                                                    );
-                                                }
-                                                // Publish rkyv OrderBook snapshot via key-based fanout for precise routing
-                                                if let Err(e) = self
-                                                    .bus
-                                                    .publish_orderbook_for_key(&key, ob)
-                                                    .await
-                                                {
-                                                    error!(target: "projectx.ws", "failed to publish OrderBook: {:?}", e);
-                                                }
-                                            }
                                         } else {
                                             info!(target: "projectx.ws", "GatewayDepth: invalid instrument in args: {}", instr_str);
                                         }

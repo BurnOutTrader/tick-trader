@@ -68,7 +68,7 @@ use chrono::{
     Weekday,
 };
 use chrono_tz::{America, Asia, Europe, Tz, US};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 use tracing::warn;
 
 /// One schedule slice for a market session.
@@ -77,7 +77,7 @@ use tracing::warn;
 /// - `open_ssm` / `close_ssm`: seconds since local midnight in the exchange TZ.
 ///   If `open_ssm <= close_ssm` the session is same-day; if `open_ssm > close_ssm`
 ///   the session wraps into the next local day and closes at `close_ssm` there.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct SessionRule {
     /// Weekday activation mask (Mon=0 .. Sun=6)
     pub days: [bool; 7],
@@ -91,7 +91,7 @@ pub struct SessionRule {
 ///
 /// This is a pragmatic calendar describing typical hours for an exchange. It may not
 /// capture product-specific exceptions; consult contract specs for exact rules.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct MarketHours {
     /// Which exchange these hours represent.
     pub exchange: Exchange,
@@ -108,6 +108,7 @@ pub struct MarketHours {
     /// True if the exchange has a true weekend close (used for weekly boundaries).
     pub has_weekend_close: bool,
 }
+
 
 /// Which session set to consult when querying hours
 #[derive(Debug, Clone, Copy)]

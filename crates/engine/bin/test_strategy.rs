@@ -6,15 +6,15 @@ use tokio::sync::mpsc;
 use tokio::time::sleep;
 use tokio_util::codec::length_delimited::LengthDelimitedCodec;
 use tokio_util::codec::{FramedRead, FramedWrite};
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 use tt_bus::ClientMessageBus;
 use tt_engine::engine::EngineRuntime;
 use tt_engine::engine::Strategy;
-use tt_types::data::core::OrderBookSnapShot;
+use tt_types::data::mbp10::Mbp10;
 use tt_types::keys::Topic;
 use tt_types::securities::symbols::Instrument;
 use tt_types::wire;
-use tt_types::wire::{Kick, Request, WireMessage};
+use tt_types::wire::{decode, Kick, Request, WireMessage};
 
 #[derive(Clone, Default)]
 struct TestStrategy;
@@ -47,7 +47,7 @@ impl Strategy for TestStrategy {
         println!("{:?}", q);
     }
     async fn on_bar(&self, _b: tt_types::data::core::Candle) {}
-    async fn on_depth(&self, d: OrderBookSnapShot) {
+    async fn on_depth(&self, d: Mbp10) {
         println!("{:?}", d);
     }
     async fn on_orders_batch(&self, b: wire::OrdersBatch) {
@@ -100,7 +100,13 @@ async fn main() -> anyhow::Result<()> {
     let writer = tokio::spawn(async move {
         while let Some(req) = req_rx.recv().await {
             let wire = WireMessage::Request(req);
-            let buf = wire::codec::encode(&wire);
+            let buf = match tt_types::wire::encode(&wire) {
+                Ok(buf) => buf,
+                Err(e) => {
+                    error!("failed to encode message: {}", e);
+                    continue;
+                },
+            };
             if let Err(e) = framed_writer.send(Bytes::from(buf)).await {
                 warn!(error = %e, "writer send failed");
                 break;
@@ -113,7 +119,7 @@ async fn main() -> anyhow::Result<()> {
     let reader = tokio::spawn(async move {
         while let Some(item) = framed_reader.next().await {
             let Ok(bytes) = item else { break };
-            match wire::codec::decode(&bytes) {
+            match decode(&bytes) {
                 Ok(WireMessage::Response(resp)) => {
                     let _ = bus_reader.route_response(resp).await;
                 }

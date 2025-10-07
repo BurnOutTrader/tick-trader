@@ -3,7 +3,6 @@
 [![Status](https://img.shields.io/badge/Status-Experimental-orange)](#)
 [![Rust](https://img.shields.io/badge/Rust-2024%20edition-b7410e?logo=rust)](https://www.rust-lang.org/)
 [![Async](https://img.shields.io/badge/Async-Tokio-17a2b8?logo=tokio)](https://tokio.rs/)
-[![Serialization](https://img.shields.io/badge/Serialization-rkyv-5c6bc0)](https://github.com/rkyv/rkyv)
 [![Transport](https://img.shields.io/badge/Transport-UDS%20%7C%20SHM-6c757d)](#)
 [![Provider](https://img.shields.io/badge/Provider-ProjectX-8e44ad)](crates/adapters/projectx)
 [![Provider](https://img.shields.io/badge/Provider-Rithmic%20(planned)-95a5a6)](#)

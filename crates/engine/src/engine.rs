@@ -17,6 +17,7 @@ use tt_types::data::core::{Bbo, Candle, Tick};
 use tt_types::data::mbp10::Mbp10;
 use tt_types::keys::{AccountKey, SymbolKey, Topic};
 use tt_types::providers::ProviderKind;
+use tt_types::securities::security::FuturesContract;
 use tt_types::securities::symbols::Instrument;
 use tt_types::server_side::traits::{MarketDataProvider, ProbeStatus, ProviderParams};
 use tt_types::wire::{
@@ -255,7 +256,7 @@ impl EngineRuntime {
     pub async fn get_instruments_map(
         &self,
         provider: ProviderKind,
-    ) -> anyhow::Result<Vec<(Instrument, tt_types::wire::FuturesContractWire)>> {
+    ) -> anyhow::Result<Vec<(Instrument, FuturesContract)>> {
         use tokio::time::timeout;
         use tt_types::wire::{InstrumentsMapRequest, Response as WireResp};
         let rx = self
@@ -643,9 +644,6 @@ impl EngineRuntime {
                         }
                     }
                     Response::MBP10(ob) => {
-                        for book in ob.books {
-                            strategy.on_depth(book).await;
-                        }
                     }
                     Response::OrdersBatch(ob) => {
                         // Update engine account state cache then notify strategy

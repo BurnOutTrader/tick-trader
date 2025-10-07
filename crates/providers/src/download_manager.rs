@@ -3,7 +3,7 @@ use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tt_database::paths::provider_kind_to_db_string;
 use tt_types::keys::Topic;
-use tt_database::ingest::{ingest_bbo, ingest_books, ingest_candles, ingest_ticks};
+use tt_database::ingest::{ingest_bbo, ingest_candles, ingest_ticks};
 use tt_database::models::{BboRow, CandleRow, TickRow};
 use tt_database::queries::latest_data_time;
 use chrono::{DateTime, Duration, Utc};
@@ -13,7 +13,6 @@ use std::path::Path;
 use std::sync::Arc;
 use dotenv::dotenv;
 use tt_database::init::init_db;
-use tt_types::data::core::OrderBookSnapShot;
 use tt_types::history::{HistoricalRequest, HistoryEvent};
 use tt_types::providers::ProviderKind;
 use tt_types::securities::hours::market_hours::{
@@ -275,7 +274,6 @@ async fn run_download(
         let mut ticks: Vec<TickRow> = Vec::new();
         let mut candles: Vec<CandleRow> = Vec::new();
         let mut quotes: Vec<BboRow> = Vec::new();
-        let mut books: Vec<OrderBookSnapShot> = Vec::new();
 
         for ev in events { 
             match ev {
@@ -329,13 +327,6 @@ async fn run_download(
                             venue_seq: q.venue_seq,
                             is_snapshot: q.is_snapshot,
                         });
-                    }
-                }
-                HistoryEvent::OrderBook(ob) => {
-                    if matches!(req.topic, Topic::MBP10) {
-                        let ts = ob.time;
-                        max_ts = Some(max_ts.map_or(ts, |m| m.max(ts)));
-                        books.push(ob);
                     }
                 }
                 HistoryEvent::EndOfStream => break,
@@ -400,20 +391,7 @@ async fn run_download(
                 }
             }
             Topic::MBP10 => {
-                if !books.is_empty() {
-                    let out_paths = ingest_books(
-                        &connection,
-                        &req.provider_kind,
-                        &req.instrument,
-                        market_type,
-                        req.topic,
-                        &books,
-                        &db_path,
-                    )?;
-                    tracing::info!(files = out_paths.len(), start=%cursor, end=%end, "persisted order books");
-                } else {
-                    tracing::debug!(start=%cursor, end=%end, "no order books returned");
-                }
+
             }
             _ => {}
         }

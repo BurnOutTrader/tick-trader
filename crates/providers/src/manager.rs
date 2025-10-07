@@ -7,6 +7,7 @@ use tt_bus::Router;
 use tt_bus::UpstreamManager;
 use tt_types::history::{HistoricalRequest, HistoryEvent};
 use tt_types::providers::ProviderKind;
+use tt_types::securities::security::FuturesContract;
 use tt_types::server_side::traits::{
     ExecutionProvider, HistoricalDataProvider, MarketDataProvider, ProviderSessionSpec,
 };
@@ -173,7 +174,7 @@ impl UpstreamManager for ProviderManager {
     ) -> Result<
         Vec<(
             tt_types::securities::symbols::Instrument,
-            tt_types::wire::FuturesContractWire,
+            FuturesContract,
         )>,
     > {
         self.ensure_clients(provider).await?;
@@ -183,7 +184,7 @@ impl UpstreamManager for ProviderManager {
             for (inst, fc) in map.into_iter() {
                 out.push((
                     inst.clone(),
-                    tt_types::wire::FuturesContractWire::from_contract(&fc),
+                    fc,
                 ));
             }
             return Ok(out);

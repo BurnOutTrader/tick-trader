@@ -1,8 +1,9 @@
 use rust_decimal::Decimal;
 use std::fmt::Display;
 use std::str::FromStr;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct AccountName(String);
 impl FromStr for AccountName {
     type Err = String;
@@ -28,7 +29,7 @@ impl AsRef<str> for AccountName {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AccountSnapShot {
     pub name: AccountName,
     pub id: i64,

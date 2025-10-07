@@ -6,9 +6,10 @@ use crate::securities::hours::market_hours::{MarketHours, hours_for_exchange};
 use crate::securities::symbols::{Currency, Exchange, Instrument, SecurityType, get_symbol_info};
 use chrono::{DateTime, NaiveDate, Utc};
 use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize};
 
 /// Handle that composes facts (props), calendar (hours), models, and small runtime cache.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct FuturesContract {
     pub root: String,
     pub instrument: Instrument,
@@ -17,8 +18,6 @@ pub struct FuturesContract {
     /// Provider ID for this instrument, this is the id used to place orders on the exchange.
     pub provider_contract_name: String,
     pub provider_id: ProviderKind,
-    /// Trading calendar for this instrument
-    pub hours: MarketHours,
 
     /*    /// Pluggable models (always present; defaulted by an initializer/factory)
     pub fee_model: Arc<dyn FeeModel>,
@@ -67,7 +66,6 @@ impl FuturesContract {
             instrument: instrument.clone(),
             security_type,
             exchange,
-            hours: market_hours,
             tick_size: symbol_info.tick_size,
             value_per_tick: symbol_info.value_per_tick,
             decimal_accuracy: symbol_info.decimal_accuracy,

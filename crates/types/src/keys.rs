@@ -119,7 +119,7 @@ pub struct SymbolKey {
     pub provider: ProviderKind, // provider kind (may include tenant/affiliation)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct AccountKey {
     pub provider: ProviderKind,    // provider kind
     pub account_name: AccountName, // as-is

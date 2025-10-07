@@ -79,7 +79,7 @@ pub struct QuoteBatch {
 }
 
 /// Batch of OHLC bars for a topic/sequence
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BarBatch {
     /// Topic (e.g. Bars1m)
     pub topic: Topic,
@@ -90,7 +90,7 @@ pub struct BarBatch {
 }
 
 /// Batch of order book snapshots/updates
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MBP10Batch {
     /// Topic (e.g. Depth)
     pub topic: Topic,
@@ -100,7 +100,7 @@ pub struct MBP10Batch {
 }
 
 /// Vendor-specific binary data batch
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VendorData {
     /// Topic
     pub topic: Topic,
@@ -111,7 +111,7 @@ pub struct VendorData {
 }
 
 /// Batch of order updates (lossless)
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OrdersBatch {
     /// Topic (e.g. Orders)
     pub topic: Topic,
@@ -122,7 +122,7 @@ pub struct OrdersBatch {
 }
 
 /// Batch of position updates (lossless)
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PositionsBatch {
     /// Topic (e.g. Positions)
     pub topic: Topic,
@@ -133,7 +133,7 @@ pub struct PositionsBatch {
 }
 
 /// Batch of account delta updates (lossless)
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AccountDeltaBatch {
     /// Topic (e.g. AccountEvt)
     pub topic: Topic,
@@ -144,7 +144,7 @@ pub struct AccountDeltaBatch {
 }
 
 /// Request for available instruments from a provider
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InstrumentsRequest {
     /// Provider to query
     pub provider: ProviderKind,
@@ -155,7 +155,7 @@ pub struct InstrumentsRequest {
 }
 
 /// Response with available instruments from a provider
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InstrumentsResponse {
     /// Provider
     pub provider: ProviderKind,
@@ -165,52 +165,19 @@ pub struct InstrumentsResponse {
     pub corr_id: u64,
 }
 
-/// Minimal wire representation of a FuturesContract
-#[derive(Debug, Clone, PartialEq)]
-pub struct FuturesContractWire {
-    /// Instrument identifier
-    pub instrument: Instrument,
-    /// Provider identifier
-    pub provider_id: ProviderKind,
-    /// Exchange
-    pub exchange: Exchange,
-    /// Tick size
-    pub tick_size: Decimal,
-    /// Value per tick
-    pub value_per_tick: Decimal,
-    /// Number of decimal places
-    pub decimal_accuracy: u32,
-    /// True if this is a continuous contract
-    pub is_continuous: bool,
-}
-
-impl FuturesContractWire {
-    pub fn from_contract(fc: &FuturesContract) -> Self {
-        FuturesContractWire {
-            instrument: fc.instrument.clone(),
-            provider_id: fc.provider_id.clone(),
-            exchange: fc.exchange.clone(),
-            tick_size: fc.tick_size.clone(),
-            value_per_tick: fc.value_per_tick.clone(),
-            decimal_accuracy: fc.decimal_accuracy,
-            is_continuous: fc.is_continuous,
-        }
-    }
-}
-
 /// Response with a map of instruments and their contract details
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InstrumentsMapResponse {
     /// Provider name
     pub provider: String,
     /// Pairs of (Instrument, FuturesContractWire)
-    pub instruments: Vec<(Instrument, FuturesContractWire)>,
+    pub instruments: Vec<(Instrument, FuturesContract)>,
     /// Correlation ID
     pub corr_id: u64,
 }
 
 /// Request for a full map of futures contracts from a provider
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InstrumentsMapRequest {
     /// Provider to query
     pub provider: ProviderKind,
@@ -219,7 +186,7 @@ pub struct InstrumentsMapRequest {
 }
 
 /// Authentication credentials for a provider
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthCredentials {
     /// Provider
     pub provider: ProviderKind,
@@ -236,21 +203,21 @@ pub struct AuthCredentials {
 }
 
 /// Unsubscribe from all topics/keys (clean detach)
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UnsubscribeAll {
     /// Optional reason for unsubscribe
     pub reason: Option<String>,
 }
 
 /// Client-initiated disconnect request (ask the router to kick this connection)
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Kick {
     /// Optional reason for disconnect
     pub reason: Option<String>,
 }
 
 /// Unsubscribe from a specific (topic, key) pair
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UnsubscribeKey {
     /// Topic
     pub topic: Topic,
@@ -259,7 +226,7 @@ pub struct UnsubscribeKey {
 }
 
 /// Announce a shared memory (SHM) snapshot stream
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AnnounceShm {
     /// Topic
     pub topic: Topic,
@@ -274,7 +241,7 @@ pub struct AnnounceShm {
 }
 
 /// Order type for wire protocol
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OrderTypeWire {
     /// Market order
     Market,
@@ -293,7 +260,7 @@ pub enum OrderTypeWire {
 }
 
 /// Bracket order details for stop loss/take profit
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BracketWire {
     /// Number of ticks for bracket
     pub ticks: i32,
@@ -302,7 +269,7 @@ pub struct BracketWire {
 }
 
 /// Place a new order
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlaceOrder {
     /// Account ID
     pub account_id: i64,
@@ -329,7 +296,7 @@ pub struct PlaceOrder {
 }
 
 /// Cancel an existing order
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CancelOrder {
     /// Account ID
     pub account_id: i64,
@@ -340,7 +307,7 @@ pub struct CancelOrder {
 }
 
 /// Replace (modify) an existing order
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReplaceOrder {
     /// Account ID
     pub account_id: i64,
@@ -359,21 +326,21 @@ pub struct ReplaceOrder {
 }
 
 /// Subscribe to all execution streams for an account
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SubscribeAccount {
     /// Account key
     pub key: crate::keys::AccountKey,
 }
 
 /// Unsubscribe from all execution streams for an account
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UnsubscribeAccount {
     /// Account key
     pub key: crate::keys::AccountKey,
 }
 
 /// Request account info for a provider
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AccountInfoRequest {
     /// Provider
     pub provider: ProviderKind,
@@ -382,7 +349,7 @@ pub struct AccountInfoRequest {
 }
 
 /// Summary of an account (for info response)
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AccountSummaryWire {
     /// Account ID
     pub account_id: i64,
@@ -393,7 +360,7 @@ pub struct AccountSummaryWire {
 }
 
 /// Response with account info for a provider
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AccountInfoResponse {
     /// Provider
     pub provider: ProviderKind,
@@ -403,7 +370,7 @@ pub struct AccountInfoResponse {
     pub accounts: Vec<AccountSummaryWire>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Request {
     // Control from clients to server (coarse)
     Subscribe(Subscribe),
@@ -427,7 +394,7 @@ pub enum Request {
     ReplaceOrder(ReplaceOrder),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Response {
     // Control replies
     Pong(Pong),
@@ -462,8 +429,20 @@ pub enum Response {
     Bar(Candle),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum WireMessage {
     Request(Request),
     Response(Response),
+}
+
+/// Encode any serializable message to bytes
+pub fn encode<T: Serialize>(msg: &T) -> anyhow::Result<Vec<u8>> {
+    let buf = bincode::serialize(msg)?;
+    Ok(buf)
+}
+
+/// Decode bytes into a message
+pub fn decode<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> anyhow::Result<T> {
+    let msg = bincode::deserialize(bytes)?;
+    Ok(msg)
 }
