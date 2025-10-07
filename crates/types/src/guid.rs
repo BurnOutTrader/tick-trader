@@ -1,4 +1,3 @@
-use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
@@ -6,9 +5,6 @@ use std::str::FromStr;
 /// 16-byte globally unique identifier used for internal IDs.
 /// Stored as raw bytes for compact rkyv/serde representation.
 #[derive(
-    Archive,
-    RkyvDeserialize,
-    RkyvSerialize,
     Debug,
     Clone,
     Copy,

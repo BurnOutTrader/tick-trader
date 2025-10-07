@@ -27,7 +27,7 @@ impl Strategy for TestStrategy {
         // Subscribe to all hot and account topics so router delivers them
         s.insert(Topic::Ticks);
         s.insert(Topic::Quotes);
-        s.insert(Topic::Depth);
+        s.insert(Topic::MBP10);
         s.insert(Topic::Candles1s);
         s.insert(Topic::Orders);
         s.insert(Topic::Positions);

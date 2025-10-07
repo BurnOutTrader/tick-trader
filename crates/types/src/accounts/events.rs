@@ -1,13 +1,8 @@
-use crate::rkyv_types::DecimalDef;
 use crate::securities::symbols::Instrument;
-use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
 #[derive(
-    Archive,
-    RkyvDeserialize,
-    RkyvSerialize,
     Debug,
     Clone,
     PartialEq,
@@ -19,9 +14,6 @@ use serde::{Deserialize, Serialize};
 pub struct ProviderOrderId(pub String);
 
 #[derive(
-    Archive,
-    RkyvDeserialize,
-    RkyvSerialize,
     Debug,
     Clone,
     PartialEq,
@@ -40,9 +32,6 @@ impl ClientOrderId {
 }
 
 #[derive(
-    Archive,
-    RkyvDeserialize,
-    RkyvSerialize,
     Debug,
     Clone,
     PartialEq,
@@ -61,9 +50,6 @@ impl ExecId {
 }
 
 #[derive(
-    Archive,
-    RkyvDeserialize,
-    RkyvSerialize,
     Debug,
     Clone,
     Copy,
@@ -88,7 +74,7 @@ impl Side {
 }
 
 #[derive(
-    Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq, Serialize, Deserialize,
+    Debug, Clone, PartialEq, Serialize, Deserialize,
 )]
 pub struct OrderEvent {
     pub kind: OrderEventKind,
@@ -100,7 +86,7 @@ pub struct OrderEvent {
 }
 
 #[derive(
-    Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq, Serialize, Deserialize,
+    Debug, Clone, PartialEq, Serialize, Deserialize,
 )]
 pub enum OrderEventKind {
     NewAck {
@@ -119,7 +105,7 @@ pub enum OrderEventKind {
 }
 
 #[derive(
-    Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq, Serialize, Deserialize,
+    Debug, Clone, PartialEq, Serialize, Deserialize,
 )]
 pub struct ExecutionEvent {
     pub exec_id: ExecId,
@@ -127,9 +113,7 @@ pub struct ExecutionEvent {
     pub client_order_id: Option<ClientOrderId>,
     pub side: Side,
     pub qty: i64,
-    #[rkyv(with = DecimalDef)]
     pub price: Decimal,
-    #[rkyv(with = DecimalDef)]
     pub fee: Decimal,
     pub ts_ns: i64,
     pub provider_seq: Option<u64>,
@@ -137,7 +121,7 @@ pub struct ExecutionEvent {
 }
 
 #[derive(
-    Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq, Serialize, Deserialize,
+    Debug, Clone, PartialEq, Serialize, Deserialize,
 )]
 pub struct CorrectionEvent {
     pub exec_id_ref: ExecId,
@@ -146,7 +130,7 @@ pub struct CorrectionEvent {
 }
 
 #[derive(
-    Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq, Serialize, Deserialize,
+    Debug, Clone, PartialEq, Serialize, Deserialize,
 )]
 pub enum AdminEvent {
     SnapshotFromProvider,
@@ -155,17 +139,16 @@ pub enum AdminEvent {
 }
 
 #[derive(
-    Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq, Serialize, Deserialize,
+    Debug, Clone, PartialEq, Serialize, Deserialize,
 )]
 pub struct MarkEvent {
     pub instrument: Instrument,
-    #[rkyv(with = DecimalDef)]
     pub mark_px: Decimal,
     pub ts_ns: i64,
 }
 
 #[derive(
-    Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq, Serialize, Deserialize,
+    Debug, Clone, PartialEq, Serialize, Deserialize,
 )]
 pub enum AccountEvent {
     Order(OrderEvent),
@@ -177,7 +160,7 @@ pub enum AccountEvent {
 
 // Outbound projections
 #[derive(
-    Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq, Serialize, Deserialize,
+    Debug, Clone, PartialEq, Serialize, Deserialize,
 )]
 pub struct OrderUpdate {
     pub instrument: Instrument,
@@ -186,34 +169,28 @@ pub struct OrderUpdate {
     pub state_code: u8,
     pub leaves: i64,
     pub cum_qty: i64,
-    #[rkyv(with = DecimalDef)]
     pub avg_fill_px: Decimal,
     pub ts_ns: i64,
 }
 
 #[derive(
-    Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq, Serialize, Deserialize,
+    Debug, Clone, PartialEq, Serialize, Deserialize,
 )]
 pub struct PositionDelta {
     pub instrument: Instrument,
     pub net_qty_before: i64,
     pub net_qty_after: i64,
-    #[rkyv(with = DecimalDef)]
     pub realized_delta: Decimal,
-    #[rkyv(with = DecimalDef)]
     pub open_pnl: Decimal,
     pub ts_ns: i64,
 }
 
 #[derive(
-    Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq, Serialize, Deserialize,
+    Debug, Clone, PartialEq, Serialize, Deserialize,
 )]
 pub struct AccountDelta {
-    #[rkyv(with = DecimalDef)]
     pub equity: Decimal,
-    #[rkyv(with = DecimalDef)]
     pub day_realized_pnl: Decimal,
-    #[rkyv(with = DecimalDef)]
     pub open_pnl: Decimal,
     pub ts_ns: i64,
     pub can_trade: bool,

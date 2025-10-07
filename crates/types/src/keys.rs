@@ -2,21 +2,19 @@ use crate::accounts::account::AccountName;
 use crate::providers::ProviderKind;
 use crate::securities::symbols::Instrument;
 use once_cell::sync::Lazy;
-use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::sync::RwLock;
 
-#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq, Copy, Eq, Hash)]
-#[rkyv(compare(PartialEq), derive(Debug))]
+use serde::{Serialize, Deserialize};
+#[derive(Debug, Clone, PartialEq, Copy, Eq, Hash, Serialize, Deserialize)]
 pub struct TopicId(pub u8);
 
-#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq, Copy, Eq, Hash)]
-#[rkyv(compare(PartialEq), derive(Debug))]
+#[derive(Debug, Clone, PartialEq, Copy, Eq, Hash, Serialize, Deserialize)]
 pub enum Topic {
     Ticks = 1,
     Quotes = 2,
-    Depth = 3,
+    MBP10 = 3,
     Candles1s = 4,
     Candles1m = 5,
     Candles1h = 6,
@@ -32,7 +30,7 @@ impl Display for Topic {
         match self {
             Self::Ticks => write!(f, "Ticks"),
             Self::Quotes => write!(f, "Quotes"),
-            Self::Depth => write!(f, "Depth"),
+            Self::MBP10 => write!(f, "MBP10"),
             Self::Candles1s => write!(f, "Candles1s"),
             Self::Candles1m => write!(f, "Candles1m"),
             Self::Candles1h => write!(f, "Candles1h"),
@@ -48,13 +46,13 @@ impl Display for Topic {
 impl Topic {
     pub fn id(self) -> TopicId {
         use crate::keys::Topic::{
-            AccountEvt, Candles1d, Candles1h, Candles1m, Candles1s, Depth, Fills, Orders,
+            AccountEvt, Candles1d, Candles1h, Candles1m, Candles1s, MBP10, Fills, Orders,
             Positions, Quotes, Ticks,
         };
         let id = match self {
             Ticks => 1,
             Quotes => 2,
-            Depth => 3,
+            MBP10 => 3,
             Candles1s => 4,
             Candles1m => 5,
             Candles1h => 6,
@@ -68,13 +66,13 @@ impl Topic {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct KeyId(pub u32);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ProviderId(pub u16);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct BrokerId(pub u16);
 
 static INTERN: Lazy<RwLock<Interner>> = Lazy::new(|| RwLock::new(Interner::default()));
@@ -115,13 +113,13 @@ pub fn resolve_key(id: KeyId) -> Option<String> {
     g.resolve(id).map(|s| s.to_string())
 }
 
-#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SymbolKey {
     pub instrument: Instrument, // UPPER
     pub provider: ProviderKind, // provider kind (may include tenant/affiliation)
 }
 
-#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AccountKey {
     pub provider: ProviderKind,    // provider kind
     pub account_name: AccountName, // as-is

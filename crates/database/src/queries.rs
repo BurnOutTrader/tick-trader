@@ -10,7 +10,7 @@ use rust_decimal::Decimal;
 use serde_json::Value as JsonValue;
 use std::str::FromStr;
 use tt_types::data::models::{Resolution, Side};
-use tt_types::data::core::{Bbo, BookLevel, Candle, OrderBookSnapShot, Tick};
+use tt_types::data::core::{Bbo, Candle, Tick};
 use tt_types::keys::Topic;
 use tt_types::providers::ProviderKind;
 use tt_types::securities::symbols::{Exchange, Instrument, MarketType};
@@ -47,7 +47,7 @@ pub fn earliest_event_ts(
         Topic::Candles1s | Topic::Candles1m | Topic::Candles1h | Topic::Candles1d => {
             ("time_end_us", true)
         }
-        Topic::Depth => ("time", false), // still TIMESTAMP in your writer
+        Topic::MBP10 => ("time", false), // still TIMESTAMP in your writer
         _ => ("key_ts_utc_us", true),
     };
 
@@ -539,187 +539,6 @@ pub fn get_candles_from_date_to_latest(
     get_candles_in_range(conn, provider, instrument, resolution, start, latest_ts)
 }
 
-/// Get order-book snapshots for [start, end) using DuckDB over the *overlapping* parquet partitions.
-/// Ladders (bids/asks) are stored as JSON text for robustness; we parse in Rust.
-///
-/// Optional `depth`: truncate ladders to top-N after parsing.
-pub fn get_books_in_range(
-    conn: &Connection,
-    provider: &str,
-    symbol: &str,
-    start: DateTime<Utc>,
-    end: DateTime<Utc>,
-    depth: Option<usize>,
-) -> anyhow::Result<Vec<OrderBookSnapShot>> {
-    if start >= end {
-        return Ok(Vec::new());
-    }
-
-    let Some(dataset_id) = resolve_dataset_id(conn, provider, symbol, Topic::Depth)? else {
-        return Ok(Vec::new());
-    };
-
-    let paths = partition_paths_for_range(conn, dataset_id, start, end)?;
-    if paths.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let src = build_read_parquet_list(&paths)?;
-    // Project minimal columns, push down time predicate
-    let sql = format!(
-        r#"
-        select
-            symbol,
-            exchange,
-            epoch_ns(time) as t_ns,
-            bids_json,
-            asks_json
-        from {src}
-        where symbol = ?
-          and time >= to_timestamp(?)
-          and time <  to_timestamp(?)
-        order by t_ns asc
-        "#,
-        src = src
-    );
-
-    let mut stmt = conn.prepare(&sql)?;
-    let mut rows = stmt.query(params![symbol, start.to_rfc3339(), end.to_rfc3339()])?;
-
-    let mut out = Vec::new();
-    while let Some(r) = rows.next()? {
-        let sym: String = r.get(0)?;
-        let exch_str: String = r.get(1)?;
-        let t_ns: i64 = r.get(2)?;
-        let bids_txt: String = r.get(3)?;
-        let asks_txt: String = r.get(4)?;
-
-        let exchange = Exchange::from_str(&exch_str)
-            .ok_or_else(|| anyhow!("unknown exchange '{}' in parquet", exch_str))?;
-
-        let mut bids = parse_ladder_json(&bids_txt)?;
-        let mut asks = parse_ladder_json(&asks_txt)?;
-
-        if let Some(d) = depth {
-            if bids.len() > d {
-                bids.truncate(d);
-            }
-            if asks.len() > d {
-                asks.truncate(d);
-            }
-        }
-
-        out.push(OrderBookSnapShot {
-            symbol: sym.clone(),
-            instrument: Instrument::from_str(&sym)
-                .map_err(|_| anyhow!("invalid instrument '{}", sym))?,
-            bids: bids
-                .into_iter()
-                .map(|(p, v)| BookLevel {
-                    price: p,
-                    volume: v,
-                    level: 0,
-                })
-                .collect(),
-            asks: asks
-                .into_iter()
-                .map(|(p, v)| BookLevel {
-                    price: p,
-                    volume: v,
-                    level: 0,
-                })
-                .collect(),
-            time: epoch_ns_to_dt(t_ns),
-        });
-    }
-
-    Ok(out)
-}
-
-/// Convenience: latest snapshot at/after `hint` (or globally latest if `hint` is None).
-pub fn get_latest_book(
-    conn: &Connection,
-    provider: &str,
-    symbol: &str,
-    hint_from: Option<DateTime<Utc>>,
-    depth: Option<usize>,
-) -> anyhow::Result<Option<OrderBookSnapShot>> {
-    let Some(dataset_id) = resolve_dataset_id(conn, provider, symbol, Topic::Depth)? else {
-        return Ok(None);
-    };
-
-    // Use catalog to find newest partition; fall back to SQL max(time)
-    let (start, end) = if let Some(h) = hint_from {
-        (h, DateTime::<Utc>::MAX_UTC)
-    } else {
-        (DateTime::<Utc>::MIN_UTC, DateTime::<Utc>::MAX_UTC)
-    };
-
-    let paths = partition_paths_for_range(conn, dataset_id, start, end)?;
-    if paths.is_empty() {
-        return Ok(None);
-    }
-
-    let src = build_read_parquet_list(&paths)?;
-    let sql = format!(
-        r#"
-        select
-            symbol, exchange, epoch_ns(time) as t_ns, bids_json, asks_json
-        from {src}
-        where symbol = ?
-        order by t_ns desc
-        limit 1
-        "#,
-        src = src
-    );
-
-    let mut stmt = conn.prepare(&sql)?;
-    let mut rows = stmt.query(params![symbol])?;
-
-    if let Some(r) = rows.next()? {
-        let sym: String = r.get(0)?;
-        let t_ns: i64 = r.get(2)?;
-        let bids_txt: String = r.get(3)?;
-        let asks_txt: String = r.get(4)?;
-
-        let mut bids = parse_ladder_json(&bids_txt)?;
-        let mut asks = parse_ladder_json(&asks_txt)?;
-        if let Some(d) = depth {
-            if bids.len() > d {
-                bids.truncate(d);
-            }
-            if asks.len() > d {
-                asks.truncate(d);
-            }
-        }
-
-        return Ok(Some(OrderBookSnapShot {
-            symbol: sym.clone(),
-            instrument: Instrument::from_str(&sym)
-                .map_err(|_| anyhow!("invalid instrument '{}", sym))?,
-            bids: bids
-                .into_iter()
-                .map(|(p, v)| BookLevel {
-                    price: p,
-                    volume: v,
-                    level: 0,
-                })
-                .collect(),
-            asks: asks
-                .into_iter()
-                .map(|(p, v)| BookLevel {
-                    price: p,
-                    volume: v,
-                    level: 0,
-                })
-                .collect(),
-            time: epoch_ns_to_dt(t_ns),
-        }));
-    }
-
-    Ok(None)
-}
-
 /// Earliest available order-book snapshot (ts only).
 pub fn earliest_book_available(
     conn: &duckdb::Connection,
@@ -729,7 +548,7 @@ pub fn earliest_book_available(
     // If your generic earliest_available(kind) already exists, you can just:
     // return earliest_available(conn, provider, symbol, DataKind::Book, None).map(|o| o.map(|b| b.ts));
 
-    let Some(dataset_id) = resolve_dataset_id(conn, provider, symbol, Topic::Depth)? else {
+    let Some(dataset_id) = resolve_dataset_id(conn, provider, symbol, Topic::MBP10)? else {
         return Ok(None);
     };
 
@@ -753,7 +572,7 @@ pub fn latest_book_available(
     // If your generic latest_available(kind) already exists, you can just:
     // return latest_available(conn, provider, symbol, DataKind::Book, None).map(|o| o.map(|b| b.ts));
 
-    let Some(dataset_id) = resolve_dataset_id(conn, provider, symbol, Topic::Depth)? else {
+    let Some(dataset_id) = resolve_dataset_id(conn, provider, symbol, Topic::MBP10)? else {
         return Ok(None);
     };
 

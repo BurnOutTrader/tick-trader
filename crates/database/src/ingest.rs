@@ -13,10 +13,9 @@ use tt_types::securities::symbols::{Instrument, MarketType};
 
 use crate::models::{BboRow, CandleRow, TickRow};
 use crate::perist::{
-    persist_bbo_partition_zstd, persist_books_partition_duckdb, persist_candles_partition_zstd,
+    persist_bbo_partition_zstd, persist_candles_partition_zstd,
     persist_ticks_partition_zstd,
 };
-use tt_types::data::core::OrderBookSnapShot;
 
 fn month_from_u32(m: u32) -> Month {
     match m {
@@ -169,41 +168,6 @@ pub fn ingest_bbo(
             &scratch,
             data_root,
             zstd_level,
-        )?;
-        out_paths.push(p);
-    }
-    Ok(out_paths)
-}
-
-/// One-call ingestion for order books (monthly). Uses DuckDB COPY path for JSON ladders.
-pub fn ingest_books(
-    conn: &Connection,
-    provider: &ProviderKind,
-    instrument: &Instrument,
-    market_type: MarketType,
-    topic: Topic,
-    rows: &[OrderBookSnapShot],
-    data_root: &Path,
-) -> Result<Vec<PathBuf>> {
-    if rows.is_empty() {
-        return Err(anyhow!("ingest_books: empty batch"));
-    }
-    let buckets = group_by_year_month(rows, |b| b.time.timestamp_nanos_opt().unwrap_or(0))?;
-    let mut out_paths = Vec::with_capacity(buckets.len());
-    for ((_year, month), group) in buckets {
-        let mut scratch: Vec<OrderBookSnapShot> = Vec::with_capacity(group.len());
-        for r in group {
-            scratch.push(r.clone());
-        }
-        let p = persist_books_partition_duckdb(
-            conn,
-            provider,
-            market_type,
-            instrument,
-            topic,
-            month,
-            &scratch,
-            data_root,
         )?;
         out_paths.push(p);
     }

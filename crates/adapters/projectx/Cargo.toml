@@ -14,7 +14,6 @@ server = []
 tt-types = { path = "../../types" }
 tt-bus = { path = "../../bus", features = ["server"] }
 tt-shm = { path = "../../shm" }
-rkyv = { workspace = true }
 ahash = { workspace = true }
 anyhow = { workspace = true }
 chrono = { workspace = true }

@@ -139,7 +139,7 @@ pub fn ensure_writer(
 
 pub fn write_snapshot(topic: Topic, key: &SymbolKey, bytes: &[u8]) {
     let size = match topic {
-        Topic::Depth => DEFAULT_DEPTH_SNAPSHOT_SIZE,
+        Topic::MBP10 => DEFAULT_DEPTH_SNAPSHOT_SIZE,
         Topic::Quotes => DEFAULT_QUOTE_SNAPSHOT_SIZE,
         _ => DEFAULT_TICK_SNAPSHOT_SIZE,
     };

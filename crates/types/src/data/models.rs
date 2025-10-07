@@ -1,4 +1,3 @@
-use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use strum_macros::Display;
 use serde::{Deserialize, Serialize};
 use rust_decimal::Decimal;
@@ -17,8 +16,6 @@ pub type Volume = Decimal;
 /// - [`TickBars(u32)`] – Bars built from a fixed number of ticks.
 /// - [`Daily`] – One bar per trading day.
 /// - [`Weekly`] – One bar per trading week.
-#[derive(Archive, RkyvDeserialize, RkyvSerialize)]
-#[rkyv(compare(PartialEq), derive(Debug))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, Serialize, Deserialize)]
 pub enum Resolution {
     Seconds(u8),
@@ -69,8 +66,6 @@ impl Resolution {
 /// Trade direction.
 ///
 /// Indicates whether a trade or order was executed on the buy or sell side.
-#[derive(Archive, RkyvDeserialize, RkyvSerialize)]
-#[rkyv(compare(PartialEq), derive(Debug))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, Serialize, Deserialize)]
 pub enum Side {
     /// Buyer-initiated trade.
@@ -82,8 +77,6 @@ pub enum Side {
 }
 
 /// How the bar closed
-#[derive(Archive, RkyvDeserialize, RkyvSerialize)]
-#[rkyv(compare(PartialEq))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, Serialize, Deserialize)]
 pub enum BarClose {
     /// Close > Open

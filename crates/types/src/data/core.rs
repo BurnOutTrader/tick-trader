@@ -1,7 +1,6 @@
 pub use crate::securities::symbols::Exchange;
 use crate::securities::symbols::Instrument;
 pub use chrono::{DateTime, Utc};
-use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 pub use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use crate::data::models::{BarClose, Price, Resolution, Side, Volume};
@@ -11,9 +10,6 @@ use crate::data::models::{BarClose, Price, Resolution, Side, Volume};
 /// Represents the smallest atomic piece of trade data.
 /// Often used as input for tick charts or indicators.
 #[derive(
-    Archive,
-    RkyvDeserialize,
-    RkyvSerialize,
     Debug,
     Clone,
     PartialEq,
@@ -28,13 +24,10 @@ pub struct Tick {
     /// Symbol identifier (e.g. `"MNQZ5"`).
     pub instrument: Instrument,
     /// Trade price.
-    #[rkyv(with = crate::rkyv_types::DecimalDef)]
     pub price: Price,
     /// Trade size (quantity).
-    #[rkyv(with = crate::rkyv_types::DecimalDef)]
     pub volume: Volume,
     /// UTC timestamp of the trade.
-    #[rkyv(with = crate::rkyv_types::DateTimeUtcDef)]
     pub time: DateTime<Utc>,
     /// Whether the trade was buyer- or seller-initiated.
     pub side: Side,
@@ -46,9 +39,6 @@ pub struct Tick {
 ///
 /// Produced by consolidating ticks or vendor-provided candles.
 #[derive(
-    Archive,
-    RkyvDeserialize,
-    RkyvSerialize,
     Debug,
     Clone,
     PartialEq,
@@ -63,30 +53,21 @@ pub struct Candle {
     /// Symbol identifier (e.g. `"MNQZ5"`).
     pub instrument: Instrument,
     /// Start time of the candle (inclusive).
-    #[rkyv(with = crate::rkyv_types::DateTimeUtcDef)]
     pub time_start: DateTime<Utc>,
     /// End time of the candle (exclusive).
-    #[rkyv(with = crate::rkyv_types::DateTimeUtcDef)]
     pub time_end: DateTime<Utc>,
     /// Open price.
-    #[rkyv(with = crate::rkyv_types::DecimalDef)]
     pub open: Price,
     /// High price.
-    #[rkyv(with = crate::rkyv_types::DecimalDef)]
     pub high: Price,
     /// Low price.
-    #[rkyv(with = crate::rkyv_types::DecimalDef)]
     pub low: Price,
-    #[rkyv(with = crate::rkyv_types::DecimalDef)]
     pub close: Price,
     /// Total traded volume.
-    #[rkyv(with = crate::rkyv_types::DecimalDef)]
     pub volume: Volume,
     /// Volume executed at the ask.
-    #[rkyv(with = crate::rkyv_types::DecimalDef)]
     pub ask_volume: Volume,
     /// Volume executed at the bid.
-    #[rkyv(with = crate::rkyv_types::DecimalDef)]
     pub bid_volume: Volume,
     /// Resolution used to build this candle.
     pub resolution: Resolution,
@@ -115,9 +96,6 @@ impl Candle {
 }
 
 #[derive(
-    Archive,
-    RkyvDeserialize,
-    RkyvSerialize,
     Debug,
     Clone,
     PartialEq,
@@ -132,30 +110,21 @@ pub struct TickBar {
     /// Symbol identifier (e.g. `"MNQZ5"`).
     pub instrument: Instrument,
     /// Start time of the candle (inclusive).
-    #[rkyv(with = crate::rkyv_types::DateTimeUtcDef)]
     pub time_start: DateTime<Utc>,
     /// End time of the candle (exclusive).
-    #[rkyv(with = crate::rkyv_types::DateTimeUtcDef)]
     pub time_end: DateTime<Utc>,
     /// Open price.
-    #[rkyv(with = crate::rkyv_types::DecimalDef)]
     pub open: Price,
     /// High price.
-    #[rkyv(with = crate::rkyv_types::DecimalDef)]
     pub high: Price,
     /// Low price.
-    #[rkyv(with = crate::rkyv_types::DecimalDef)]
     pub low: Price,
-    #[rkyv(with = crate::rkyv_types::DecimalDef)]
     pub close: Price,
     /// Total traded volume.
-    #[rkyv(with = crate::rkyv_types::DecimalDef)]
     pub volume: Volume,
     /// Volume executed at the ask.
-    #[rkyv(with = crate::rkyv_types::DecimalDef)]
     pub ask_volume: Volume,
     /// Volume executed at the bid.
-    #[rkyv(with = crate::rkyv_types::DecimalDef)]
     pub bid_volume: Volume,
 }
 
@@ -163,9 +132,6 @@ pub struct TickBar {
 ///
 /// A lightweight snapshot of the top of the order book.
 #[derive(
-    Archive,
-    RkyvDeserialize,
-    RkyvSerialize,
     Debug,
     Clone,
     PartialEq,
@@ -179,15 +145,10 @@ pub struct Bbo {
     pub symbol: String,
     /// Symbol identifier (e.g. `"MNQZ5"`).
     pub instrument: Instrument,
-    #[rkyv(with = crate::rkyv_types::DecimalDef)]
     pub bid: Price,
-    #[rkyv(with = crate::rkyv_types::DecimalDef)]
     pub bid_size: Volume,
-    #[rkyv(with = crate::rkyv_types::DecimalDef)]
     pub ask: Price,
-    #[rkyv(with = crate::rkyv_types::DecimalDef)]
     pub ask_size: Volume,
-    #[rkyv(with = crate::rkyv_types::DateTimeUtcDef)]
     pub time: DateTime<Utc>, // normalized event time
 
     // ---- Optional cross-vendor metadata ----

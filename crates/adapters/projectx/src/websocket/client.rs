@@ -902,7 +902,7 @@ impl PxWebSocketClient {
                                                         rkyv::to_bytes::<rkyv::rancor::Error>(&ob)
                                                             .unwrap_or_default();
                                                     tt_shm::write_snapshot(
-                                                        Topic::Depth,
+                                                        Topic::MBP10,
                                                         &key,
                                                         &bytes,
                                                     );

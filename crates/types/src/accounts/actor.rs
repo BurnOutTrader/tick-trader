@@ -1,21 +1,16 @@
 use super::events::*;
 use super::order::{Order, OrderState};
 use super::position::PositionLedger;
-use crate::rkyv_types::DecimalDef;
 use crate::securities::symbols::Instrument;
 use ahash::{AHashMap, AHashSet};
-use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use rust_decimal::Decimal;
 use rust_decimal::prelude::FromPrimitive;
 use tokio::sync::mpsc;
 
-#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct AccountState {
-    #[rkyv(with = DecimalDef)]
     pub equity: Decimal,
-    #[rkyv(with = DecimalDef)]
     pub day_realized_pnl: Decimal,
-    #[rkyv(with = DecimalDef)]
     pub open_pnl: Decimal,
 }
 
@@ -59,23 +54,8 @@ impl AccountActor {
         (AccountActorHandle { tx }, task)
     }
 
-    fn append_wal(&mut self, ev: &AccountEvent) {
-        // Serialize an event using rkyv into an aligned byte buffer and store in-memory.
-        // In a full implementation this would be persisted to disk as a WAL.
-        match rkyv::to_bytes::<rkyv::rancor::BoxedError>(ev) {
-            Ok(buf) => {
-                // AlignedVec -> Vec<u8>
-                self.wal.push(buf.as_ref().to_vec());
-            }
-            Err(_) => {
-                // On serialization failure, skip WAL append in minimal impl.
-            }
-        }
-    }
-
     fn apply(&mut self, ev: AccountEvent) {
         // Append to WAL first, then apply side effects.
-        self.append_wal(&ev);
         match ev {
             AccountEvent::Order(oe) => self.apply_order_event(oe),
             AccountEvent::Exec(exe) => self.apply_exec(exe),

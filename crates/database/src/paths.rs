@@ -17,7 +17,7 @@ pub fn topic_to_db_string(topic: Topic) -> String {
     match topic {
         Topic::Ticks => "ticks".to_string(),
         Topic::Quotes => "quotes".to_string(),
-        Topic::Depth => "depth".to_string(),
+        Topic::MBP10 => "depth".to_string(),
         Topic::Candles1s => "candles1s".to_string(),
         Topic::Candles1m => "candles1m".to_string(),
         Topic::Candles1h => "candles1h".to_string(),

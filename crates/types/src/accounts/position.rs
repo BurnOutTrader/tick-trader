@@ -1,29 +1,23 @@
 use super::events::Side;
-use crate::rkyv_types::DecimalDef;
 use crate::securities::symbols::Instrument;
 use ahash::AHashMap;
-use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use rust_decimal::Decimal;
 use rust_decimal::prelude::FromPrimitive;
 
-#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct Lot {
     pub qty: i64,
-    #[rkyv(with = DecimalDef)]
     pub price: Decimal,
 }
 
-#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct PositionSegment {
     pub id: u64,
     pub side: Side,
     pub open_qty: i64,
     pub net_qty: i64,
-    #[rkyv(with = DecimalDef)]
     pub open_vwap_px: Decimal,
-    #[rkyv(with = DecimalDef)]
     pub realized_pnl: Decimal,
-    #[rkyv(with = DecimalDef)]
     pub fees: Decimal,
     pub lots_open: Vec<Lot>,
 }

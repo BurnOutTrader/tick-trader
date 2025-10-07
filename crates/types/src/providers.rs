@@ -1,11 +1,9 @@
-use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 use std::hash::Hash;
 use strum_macros::Display;
 
-#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
-#[rkyv(compare(PartialEq), derive(Debug))]
+#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, Serialize, Deserialize)]
 pub enum ProjectXTenant {
     Topstep,
     AlphaFutures,
@@ -122,11 +120,7 @@ impl RithmicCredentials {
     Ord,
     Display,
     Copy,
-    Archive,
-    RkyvDeserialize,
-    RkyvSerialize,
 )]
-#[rkyv(compare(PartialEq), derive(Debug))]
 pub enum RithmicSystem {
     #[strum(serialize = "Rithmic 04 Colo")]
     Rithmic04Colo,
@@ -199,11 +193,7 @@ impl RithmicSystem {
     PartialOrd,
     Ord,
     Display,
-    Archive,
-    RkyvDeserialize,
-    RkyvSerialize,
 )]
-#[rkyv(compare(PartialEq), derive(Debug))]
 pub enum RithmicServer {
     Chicago,
     Sydney,
@@ -220,8 +210,7 @@ pub enum RithmicServer {
     Test,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
-#[rkyv(compare(PartialEq), derive(Debug))]
+#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, Serialize, Deserialize)]
 pub enum ProviderKind {
     ProjectX(ProjectXTenant),
     Rithmic(RithmicSystem),

@@ -190,7 +190,7 @@ async fn run_download(
     let resolution = match req.topic {
         Topic::Ticks => None,
         Topic::Quotes => None,
-        Topic::Depth => None,
+        Topic::MBP10 => None,
         Topic::Candles1s => Some(Resolution::Seconds(1)),
         Topic::Candles1m => Some(Resolution::Minutes(1)),
         Topic::Candles1h => Some(Resolution::Hours(1)),
@@ -332,7 +332,7 @@ async fn run_download(
                     }
                 }
                 HistoryEvent::OrderBook(ob) => {
-                    if matches!(req.topic, Topic::Depth) {
+                    if matches!(req.topic, Topic::MBP10) {
                         let ts = ob.time;
                         max_ts = Some(max_ts.map_or(ts, |m| m.max(ts)));
                         books.push(ob);
@@ -399,7 +399,7 @@ async fn run_download(
                     tracing::debug!(start=%cursor, end=%end, "no candles returned");
                 }
             }
-            Topic::Depth => {
+            Topic::MBP10 => {
                 if !books.is_empty() {
                     let out_paths = ingest_books(
                         &connection,

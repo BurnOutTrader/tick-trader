@@ -1,19 +1,14 @@
 use chrono::{Datelike, NaiveDate};
-use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 use std::str::FromStr;
 use strum_macros::Display;
 
-#[derive(Archive, RkyvDeserialize, RkyvSerialize)]
-#[rkyv(compare(PartialEq), derive(Debug))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SecurityType {
     Future,
 }
 
-#[derive(Archive, RkyvDeserialize, RkyvSerialize)]
-#[rkyv(compare(PartialEq), derive(Debug))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, PartialOrd)]
 pub enum Exchange {
     CME,
@@ -118,8 +113,7 @@ impl Currency {
 }
 
 ///Example: `MNQZ5`
-#[derive(Archive, RkyvDeserialize, RkyvSerialize)]
-#[rkyv(compare(PartialEq), derive(Debug))]
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Instrument(String);
 impl Instrument {

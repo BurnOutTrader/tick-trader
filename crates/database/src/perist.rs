@@ -20,7 +20,6 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
-use tt_types::data::core::OrderBookSnapShot;
 use tt_types::keys::Topic;
 use tt_types::providers::ProviderKind;
 use tt_types::securities::symbols::{Instrument, MarketType};
@@ -326,30 +325,6 @@ pub fn persist_bbo_partition_zstd(
     )?;
 
     Ok(target_path)
-}
-
-// ------------------------------
-// ORDER BOOKS (JSON ladders)
-// ------------------------------
-//
-// If you already added `write_orderbooks_partition(...)` that writes and
-// registers, you can keep that. If you prefer symmetry with the others,
-// here is a similar writer that uses DuckDB COPY over a temp table.
-pub fn persist_books_partition_duckdb(
-    conn: &duckdb::Connection,
-    provider: &ProviderKind,
-    market_type: MarketType,
-    instrument: &Instrument,
-    topic: Topic,
-    month: Month,
-    snapshots: &[OrderBookSnapShot],
-    data_root: &std::path::Path,
-) -> anyhow::Result<std::path::PathBuf> {
-    if snapshots.is_empty() {
-        anyhow::bail!("persist_books_partition_duckdb: empty batch");
-    }
-
-    todo!("persist_books_partition_duckdb: not implemented");
 }
 
 #[inline]

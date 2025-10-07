@@ -271,7 +271,7 @@ impl MarketDataProvider for PXClient {
 
     fn supports(&self, topic: Topic) -> bool {
         match topic {
-            Topic::Ticks | Topic::Quotes | Topic::Depth => true,
+            Topic::Ticks | Topic::Quotes | Topic::MBP10 => true,
             _ => false,
         }
     }
@@ -306,7 +306,7 @@ impl MarketDataProvider for PXClient {
                     .subscribe_contract_quotes(instrument.as_str())
                     .await
             }
-            Topic::Depth => {
+            Topic::MBP10 => {
                 self.websocket
                     .subscribe_contract_market_depth(instrument.as_str())
                     .await
@@ -328,7 +328,7 @@ impl MarketDataProvider for PXClient {
                     .unsubscribe_contract_quotes(instrument.as_str())
                     .await
             }
-            Topic::Depth => {
+            Topic::MBP10 => {
                 self.websocket
                     .unsubscribe_contract_market_depth(instrument.as_str())
                     .await
@@ -375,7 +375,7 @@ impl MarketDataProvider for PXClient {
         let mut map = AHashMap::new();
         map.insert(Topic::Ticks, ticks);
         map.insert(Topic::Quotes, quotes);
-        map.insert(Topic::Depth, depth);
+        map.insert(Topic::MBP10, depth);
         map
     }
 

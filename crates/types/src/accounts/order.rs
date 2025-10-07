@@ -1,10 +1,8 @@
 use super::events::{ClientOrderId, ProviderOrderId, Side};
-use crate::rkyv_types::DecimalDef;
 use crate::securities::symbols::Instrument;
-use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use rust_decimal::Decimal;
 
-#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OrderState {
     New,
     Acknowledged,
@@ -28,7 +26,7 @@ impl OrderState {
     }
 }
 
-#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct Order {
     pub provider_order_id: Option<ProviderOrderId>,
     pub client_order_id: Option<ClientOrderId>,
@@ -40,7 +38,6 @@ pub struct Order {
     pub qty: i64,
     pub leaves: i64,
     pub cum_qty: i64,
-    #[rkyv(with = DecimalDef)]
     pub avg_fill_px: Decimal,
 }
 
