@@ -201,42 +201,22 @@ impl MarketHours {
     pub fn is_open_extended(&self, t: DateTime<Utc>) -> bool {
         self.is_open_with(t, SessionKind::Extended)
     }
-    /// Next bar end strictly after `now_utc`, skipping closed periods.
+    /// This is used to calculate the current bars closing time, based on its open time
+    /// Inclusive bar close given its UTC open and resolution.
     pub fn bar_end(&self, open_time: DateTime<Utc>, res: Resolution) -> DateTime<Utc> {
         match res {
-            Resolution::Seconds(s) | Resolution::Minutes(s) | Resolution::Hours(s) => {
-                // Normalize to step seconds
-                let step_secs: i64 = match res {
-                    Resolution::Seconds(n) => n as i64,
-                    Resolution::Minutes(n) => (n as i64) * 60,
-                    Resolution::Hours(n) => (n as i64) * 3600,
-                    _ => unreachable!(),
-                };
-                let secs = open_time.timestamp();
-                let mut next = secs - (secs.rem_euclid(step_secs)) + step_secs;
-                let mut next_dt = Utc.timestamp_opt(next, 0).single().unwrap_or(open_time);
-                if self.is_open(next_dt) {
-                    return next_dt;
-                }
-                // If the immediate boundary is in a closed window, jump to the next session open
-                let open = next_session_open_after(self, open_time);
-                // Align to the first boundary strictly after the open
-                let open_secs = open.timestamp();
-                let aligned = open_secs - (open_secs.rem_euclid(step_secs)) + step_secs;
-                let aligned_dt = Utc.timestamp_opt(aligned, 0).single().unwrap_or(open);
-                if aligned_dt > open {
-                    aligned_dt
-                } else {
-                    // Fallback safety: add one step
-                    Utc.timestamp_opt(aligned + step_secs, 0)
-                        .single()
-                        .unwrap_or(open + chrono::Duration::seconds(step_secs))
-                }
-            }
-            Resolution::Daily | Resolution::Weekly => {
-                // Use session bounds so “daily” ends at session close, not midnight
+            Resolution::Seconds(s) => open_time + chrono::Duration::seconds(s as i64) - chrono::Duration::nanoseconds(1),
+            Resolution::Minutes(m) => open_time + chrono::Duration::minutes(m as i64) - chrono::Duration::nanoseconds(1),
+            Resolution::Hours(h)   => open_time + chrono::Duration::hours(h as i64)   - chrono::Duration::nanoseconds(1),
+            Resolution::Daily => {
+                // End at that session’s close (already inclusive in your model)
                 let (_open, close) = session_bounds(self, open_time);
                 close
+            }
+            Resolution::Weekly => {
+                // Prefer a proper “week bounds” helper; placeholder shown:
+                let (_wopen, wclose) = week_session_bounds(self, open_time);
+                wclose
             }
         }
     }
@@ -744,6 +724,67 @@ pub fn session_bounds(hours: &MarketHours, t: DateTime<Utc>) -> (DateTime<Utc>, 
     session_bounds_with(SessionKind::Both, hours, t)
 }
 
+/// Compute week-level session bounds in UTC that contain the instant `t`.
+///
+/// Semantics:
+/// - If the exchange has a true weekend close (`has_weekend_close = true`):
+///   The weekly window is **[Mon 00:00 local, next Mon 00:00 local)**.
+/// - Otherwise (continuous products without a true weekend close):
+///   The weekly window is **[Sun 17:00 local, next Sun 17:00 local)**,
+///   which matches common futures "Sunday evening" reopen conventions.
+///
+/// Returns `(week_open_utc, week_close_utc)`.
+pub fn week_session_bounds(
+    hours: &MarketHours,
+    t: DateTime<Utc>,
+) -> (DateTime<Utc>, DateTime<Utc>) {
+    let tz = hours.tz;
+    let local = t.with_timezone(&tz);
+    let day = local.date_naive();
+
+    if hours.has_weekend_close {
+        // Start at Monday 00:00 local of the week containing `t`
+        let dow_idx_from_mon = day.weekday().num_days_from_monday() as i64; // Mon=0..Sun=6
+        let mon_date = day - chrono::Duration::days(dow_idx_from_mon);
+        let week_open_local = tz
+            .with_ymd_and_hms(mon_date.year(), mon_date.month(), mon_date.day(), 0, 0, 0)
+            .earliest()
+            .unwrap()
+            .with_timezone(&Utc);
+        let next_mon = mon_date + chrono::Duration::days(7);
+        let week_close_local = tz
+            .with_ymd_and_hms(next_mon.year(), next_mon.month(), next_mon.day(), 0, 0, 0)
+            .earliest()
+            .unwrap()
+            .with_timezone(&Utc);
+        (week_open_local, week_close_local)
+    } else {
+        // Start at most-recent Sunday 17:00 local prior to `t`
+        use chrono::Weekday;
+        let wd = day.weekday();
+        let days_since_sun = wd.num_days_from_sunday() as i64; // Sun=0..Sat=6
+        let mut sun_date = day - chrono::Duration::days(days_since_sun);
+        // If it's Sunday but before 17:00 local, the "most-recent Sunday 17:00" is last week
+        let secs = local.time().num_seconds_from_midnight();
+        if wd == Weekday::Sun && secs < 17 * 3600 {
+            sun_date = sun_date - chrono::Duration::days(7);
+        }
+
+        let week_open_local = tz
+            .with_ymd_and_hms(sun_date.year(), sun_date.month(), sun_date.day(), 17, 0, 0)
+            .earliest()
+            .unwrap()
+            .with_timezone(&Utc);
+        let next_sun = sun_date + chrono::Duration::days(7);
+        let week_close_local = tz
+            .with_ymd_and_hms(next_sun.year(), next_sun.month(), next_sun.day(), 17, 0, 0)
+            .earliest()
+            .unwrap()
+            .with_timezone(&Utc);
+        (week_open_local, week_close_local)
+    }
+}
+
 /// Next session bounds strictly after `end_excl` (searches forward, skipping holidays).
 pub fn next_session_after_with(
     kind: SessionKind,
@@ -898,9 +939,7 @@ pub mod mh_tests {
     use chrono_tz::Tz;
     use chrono_tz::US::Central;
     use crate::base_data::{Exchange, Resolution};
-    use crate::securities::market_hours::{
-        hours_for_exchange, next_session_after, next_session_open_after, session_bounds,
-    };
+    use crate::securities::market_hours::{hours_for_exchange, next_session_after, next_session_open_after, session_bounds, week_session_bounds};
     use crate::securities::market_hours::{candle_end, next_session_after_with, time_end_of_day, SessionKind};
 
     fn utc(y: i32, m: u32, d: u32, hh: u32, mm: u32, ss: u32) -> chrono::DateTime<Utc> {
@@ -1034,21 +1073,6 @@ pub mod mh_tests {
     }
 
     #[test]
-    fn test_next_bar_end_skips_maintenance_reopens_correctly() {
-        let mh = hours_for_exchange(Exchange::CME);
-        // 15:59:50 CT (20:59:50 UTC) – intraday boundary at 21:00:00 UTC is CLOSED, so skip to reopen
-        let t = utc(2023, 6, 5, 20, 59, 50);
-        // Step of 10 seconds
-        let mut next = mh.bar_end(t, Resolution::Seconds(10));
-        // Next session opens 22:00:00 UTC; first 10s boundary strictly after open is 22:00:10
-        assert_eq!(next, utc(2023, 6, 5, 22, 0, 10));
-
-        // If we ask again from exactly the previous result (which is in an open session), we step normally
-        next = mh.bar_end(next, Resolution::Seconds(10));
-        assert_eq!(next, utc(2023, 6, 5, 22, 0, 20));
-    }
-
-    #[test]
     fn test_extended_is_open_between_1515_and_1600_ct() {
         let mh = hours_for_exchange(Exchange::CME);
         // 15:20 CT on 2023-06-05 -> 20:20 UTC: must be CLOSED (15:15–15:30 halt)
@@ -1118,17 +1142,6 @@ pub mod mh_tests {
         let _ = t_utc.with_timezone(&london);
         let _ = t_utc.with_timezone(&tokyo);
         assert!(mh.is_open(t_utc));
-    }
-
-    #[test]
-    fn test_next_bar_end_intraday_skips_closed() {
-        let mh = hours_for_exchange(Exchange::CME);
-        // 15:59:30 CT on Jun 5, 2023 => 20:59:30 UTC, next 1m boundary is 21:00:00 UTC which is in maintenance (closed)
-        // Should jump to next open at 17:00 CT => 22:00:00 UTC
-        let t = utc(2023, 6, 5, 20, 59, 30);
-        let next = mh.bar_end(t, Resolution::Minutes(1));
-        // next_bar_end returns the next bar boundary strictly after now (not the next open)
-        assert_eq!(next, utc(2023, 6, 5, 22, 1, 0));
     }
 
     #[test]
@@ -1227,5 +1240,117 @@ pub mod mh_tests {
         assert_eq!(open, utc(2023, 6, 5, 22, 0, 0));
     }
 
+    #[test]
+    fn test_extended_window_edges_1530_open_1600_close() {
+        // CME: extended mini-window 15:30–16:00 CT (20:30–21:00 UTC)
+        let mh = hours_for_exchange(Exchange::CME);
+        // Exactly at 15:30 CT -> 20:30 UTC should be OPEN
+        let open_edge = utc(2023, 6, 5, 20, 30, 0);
+        assert!(mh.is_open_extended(open_edge), "15:30 CT should be open (extended)");
 
+        // Just before 16:00 CT -> 20:59:59 UTC should still be OPEN
+        let just_before_close = utc(2023, 6, 5, 20, 59, 59);
+        assert!(mh.is_open_extended(just_before_close));
+
+        // Exactly at 16:00 CT -> 21:00 UTC should be CLOSED (maintenance window begins)
+        let close_edge = utc(2023, 6, 5, 21, 0, 0);
+        assert!(!mh.is_open_extended(close_edge));
+        assert!(!mh.is_open(close_edge));
+    }
+
+    #[test]
+    fn test_overnight_edge_1700_ct_open() {
+        // CME: Overnight opens at 17:00 CT (22:00 UTC) on Sun + Mon–Thu
+        let mh = hours_for_exchange(Exchange::CME);
+
+        // One second before 17:00 CT (21:59:59 UTC) is CLOSED
+        let before = utc(2023, 6, 5, 21, 59, 59);
+        assert!(!mh.is_open(before));
+
+        // Exactly at 17:00 CT -> 22:00 UTC should be OPEN
+        let at_open = utc(2023, 6, 5, 22, 0, 0);
+        assert!(mh.is_open(at_open));
+    }
+
+    #[test]
+    fn test_week_session_bounds_weekend_close_true() {
+        // With a true weekend close, weekly bounds are Mon 00:00 local .. next Mon 00:00 local
+        let mh = hours_for_exchange(Exchange::CME);
+        // Pick a time mid-week
+        let t = utc(2023, 6, 7, 12, 0, 0); // Wed
+        let (wopen, wclose) = week_session_bounds(&mh, t);
+
+        // Expected: Mon 2023-06-05 00:00 Central -> 05:00 UTC (CDT),
+        //           Mon 2023-06-12 00:00 Central -> 05:00 UTC.
+        let expected_open = chrono_tz::US::Central
+            .with_ymd_and_hms(2023, 6, 5, 0, 0, 0).single().unwrap()
+            .with_timezone(&Utc);
+        let expected_close = chrono_tz::US::Central
+            .with_ymd_and_hms(2023, 6, 12, 0, 0, 0).single().unwrap()
+            .with_timezone(&Utc);
+
+        assert_eq!(wopen, expected_open);
+        assert_eq!(wclose, expected_close);
+    }
+
+    #[test]
+    fn test_week_session_bounds_continuous_products() {
+        // For continuous products (no true weekend close), use Sun 17:00 local week windows.
+        let mut mh = hours_for_exchange(Exchange::CME);
+        mh.has_weekend_close = false; // simulate a continuous product profile on CME tz/rules
+
+        let t = utc(2023, 6, 7, 12, 0, 0); // Wed
+        let (wopen, wclose) = week_session_bounds(&mh, t);
+
+        // Expect the window to be Sun 2023-06-04 17:00 Central -> 22:00 UTC,
+        // then Sun 2023-06-11 17:00 Central -> 22:00 UTC.
+        let expected_open = chrono_tz::US::Central
+            .with_ymd_and_hms(2023, 6, 4, 17, 0, 0).single().unwrap()
+            .with_timezone(&Utc);
+        let expected_close = chrono_tz::US::Central
+            .with_ymd_and_hms(2023, 6, 11, 17, 0, 0).single().unwrap()
+            .with_timezone(&Utc);
+
+        assert_eq!(wopen, expected_open);
+        assert_eq!(wclose, expected_close);
+    }
+
+    #[test]
+    fn test_next_session_after_prefers_earliest_after_gap() {
+        // Retail profile: no 15:30–16:00 mini-window; after the 15:15–16:00 break,
+        // the next session open is the 17:00 CT overnight (22:00 UTC).
+        let mh = hours_for_exchange(Exchange::CME);
+        // 15:20 CT -> 20:20 UTC
+        let t = utc(2023, 6, 5, 20, 20, 0);
+        let (o, c) = next_session_after(&mh, t);
+        assert_eq!(o, utc(2023, 6, 5, 22, 0, 0));
+        // Overnight wraps and closes at 08:30 CT next day -> 13:30 UTC on Tue 6th
+        assert_eq!(c, utc(2023, 6, 6, 13, 30, 0));
+    }
+
+    #[test]
+    fn test_is_closed_all_day_utc_vs_local_calendars() {
+        let mh = hours_for_exchange(Exchange::CME);
+        // UTC Sunday has trading at 22:00; therefore not closed all day in UTC calendar.
+        let sun = chrono::NaiveDate::from_ymd_opt(2023, 6, 11).unwrap();
+        assert!(!mh.is_closed_all_day_in_calendar(sun, chrono_tz::UTC, SessionKind::Both));
+
+        // But Saturday is closed in both calendars.
+        let sat = chrono::NaiveDate::from_ymd_opt(2023, 6, 10).unwrap();
+        assert!(mh.is_closed_all_day_in_calendar(sat, chrono_tz::UTC, SessionKind::Both));
+        assert!(mh.is_closed_all_day_in_calendar(sat, chrono_tz::US::Central, SessionKind::Both));
+    }
+
+    #[test]
+    fn test_session_bounds_yesterday_wrap_capture() {
+        // Early morning inside the overnight wrap should attribute to the prior day's open
+        let mh = hours_for_exchange(Exchange::CME);
+        // Tue 2023-06-06 02:00 CT = 07:00 UTC
+        let t = utc(2023, 6, 6, 7, 0, 0);
+        let (o, c) = session_bounds(&mh, t);
+        // Open should be Mon 17:00 CT -> 22:00 UTC
+        assert_eq!(o, utc(2023, 6, 5, 22, 0, 0));
+        // Close should be Tue 08:30 CT -> 13:30 UTC
+        assert_eq!(c, utc(2023, 6, 6, 13, 30, 0));
+    }
 }
