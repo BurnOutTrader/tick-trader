@@ -874,7 +874,9 @@ impl EngineRuntime {
                     Response::BarBatch(BarBatch { bars, .. }) => {
                         for b in bars { let mut strat = strategy_for_task.lock().await; strat.on_bar(b).await; }
                     }
-                    Response::MBP10(ob) => { let mut strat = strategy_for_task.lock().await; strat.on_mbp10(ob.event).await; }
+                    Response::MBP10(ob) => {
+                        let mut strat = strategy_for_task.lock().await; strat.on_mbp10(ob.event).await;
+                    }
                     Response::OrdersBatch(ob) => {
                         { let mut st = state.lock().await; st.last_orders = Some(ob.clone()); }
                         { let mut strat = strategy_for_task.lock().await; strat.on_orders_batch(ob.clone()).await; }
@@ -929,3 +931,76 @@ impl EngineRuntime {
         st.last_accounts.clone()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::str::FromStr;
+    use tokio::time::{sleep, Duration, Instant as TokioInstant};
+    use tt_types::providers::{ProjectXTenant, ProviderKind};
+    use tt_types::keys::SymbolKey;
+    use tt_types::wire::{Request, SubscribeKey};
+
+    // This test requires a running router/backend and valid PX credentials.
+    // It does NOT use EngineRuntime or any Strategy. It drives the ClientMessageBus directly.
+    #[tokio::test]
+    #[ignore]
+    async fn subscribe_and_print_mbp10_no_strategy() -> anyhow::Result<()> {
+        // Enable logs if RUST_LOG is set
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .try_init();
+
+        let addr = std::env::var("TT_BUS_ADDR").unwrap_or_else(|_| "/tmp/tick-trader.sock".to_string());
+        let bus = ClientMessageBus::connect(&addr).await?;
+
+        // Register a client and get a sub_id to receive Responses
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<tt_types::wire::Response>(1024);
+        let sub_id = bus.add_client(tx).await;
+
+        // Build the key and send a SubscribeKey directly over the bus
+        let key = SymbolKey::new(
+            Instrument::from_str("MNQZ25").unwrap(),
+            ProviderKind::ProjectX(ProjectXTenant::Topstep),
+        );
+        bus.handle_request(
+            &sub_id,
+            Request::SubscribeKey(SubscribeKey { topic: Topic::MBP10, key, latest_only: false, from_seq: 0 })
+        ).await?;
+
+        let mut got_data = false;
+        // Drain responses for a short period and print MBP10 events
+        let deadline = TokioInstant::now() + Duration::from_secs(15);
+        while TokioInstant::now() < deadline {
+            tokio::select! {
+                Some(resp) = rx.recv() => {
+                    match resp {
+                        tt_types::wire::Response::SubscribeResponse { topic, instrument, success } => {
+                            println!("Subscribed: topic={:?} instrument={} success={}", topic, instrument, success);
+                        }
+                        tt_types::wire::Response::AnnounceShm(ann) => {
+                            println!("AnnounceShm: topic={:?} key={:?}", ann.topic, ann.key);
+                        }
+                        tt_types::wire::Response::MBP10(batch) => {
+                            let e = batch.event;
+                            println!(
+                                "Mbp10: action={:?} side={:?} px={} sz={} flags={:?} ts_event={} ts_recv={}",
+                                e.action, e.side, e.price, e.size, e.flags, e.ts_event, e.ts_recv
+                            );
+                            got_data = true;
+                        }
+                        other => {
+                            // Uncomment for debugging
+                            // println!("Other response: {:?}", other);
+                        }
+                    }
+                }
+                _ = sleep(Duration::from_millis(50)) => {}
+            }
+        }
+        assert!(got_data);
+        // Drop rx to detach; router will clean up when client disconnects
+        Ok(())
+    }
+}
+

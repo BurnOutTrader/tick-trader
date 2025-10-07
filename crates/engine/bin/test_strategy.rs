@@ -1,21 +1,128 @@
+use std::collections::BTreeMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
+use rust_decimal::Decimal;
 use tokio::sync::Mutex;
 use tokio::time::sleep;
 use tracing::info;
 use tt_bus::ClientMessageBus;
 use tt_engine::engine::{EngineRuntime, EngineHandle, Strategy};
 use tt_types::accounts::events::AccountDelta;
-use tt_types::data::mbp10::Mbp10;
+use tt_types::data::mbp10::{Action as MbpAction, BookLevels, BookSide as MbpSide, Mbp10};
 use tt_types::keys::{SymbolKey, Topic};
 use tt_types::providers::{ProjectXTenant, ProviderKind};
 use tt_types::securities::symbols::Instrument;
 use tt_types::wire;
 
+#[derive(Default, Debug, Clone)]
+struct LastTrade {
+    price: Option<Decimal>,
+    size: Option<u32>,
+}
+
+#[derive(Default, Debug, Clone)]
+struct OrderBook {
+    bids: BTreeMap<Decimal, u32>,
+    asks: BTreeMap<Decimal, u32>,
+    last_trade: LastTrade,
+}
+
+impl OrderBook {
+    fn clear(&mut self) {
+        self.bids.clear();
+        self.asks.clear();
+    }
+
+    fn seed_from_snapshot(&mut self, book: &BookLevels) {
+        self.clear();
+        for (i, px) in book.bid_px.iter().enumerate() {
+            let sz = *book.bid_sz.get(i).unwrap_or(&0);
+            if sz > 0 {
+                self.bids.insert(px.clone(), sz);
+            }
+        }
+        for (i, px) in book.ask_px.iter().enumerate() {
+            let sz = *book.ask_sz.get(i).unwrap_or(&0);
+            if sz > 0 {
+                self.asks.insert(px.clone(), sz);
+            }
+        }
+    }
+
+    fn apply_modify(&mut self, side: MbpSide, price: Decimal, size: u32) {
+        match side {
+            MbpSide::Bid => {
+                if size == 0 {
+                    self.bids.remove(&price);
+                } else {
+                    self.bids.insert(price, size);
+                }
+            }
+            MbpSide::Ask => {
+                if size == 0 {
+                    self.asks.remove(&price);
+                } else {
+                    self.asks.insert(price, size);
+                }
+            }
+            MbpSide::None => {}
+        }
+    }
+
+    fn note_trade(&mut self, price: Decimal, size: u32) {
+        self.last_trade.price = Some(price);
+        self.last_trade.size = Some(size);
+    }
+
+    fn best_bid(&self) -> Option<(Decimal, u32)> {
+        self.bids.iter().next_back().map(|(p, s)| (p.clone(), *s))
+    }
+    fn best_ask(&self) -> Option<(Decimal, u32)> {
+        self.asks.iter().next().map(|(p, s)| (p.clone(), *s))
+    }
+
+    fn print_top_n(&self, n: usize) {
+        let mut bids: Vec<(Decimal, u32)> = self
+            .bids
+            .iter()
+            .rev()
+            .take(n)
+            .map(|(p, s)| (p.clone(), *s))
+            .collect();
+        let asks: Vec<(Decimal, u32)> = self
+            .asks
+            .iter()
+            .take(n)
+            .map(|(p, s)| (p.clone(), *s))
+            .collect();
+
+        println!("-- ORDER BOOK (top {}) --", n);
+        if let (Some((bb_px, bb_sz)), Some((ba_px, ba_sz))) = (self.best_bid(), self.best_ask()) {
+            println!("BBO: bid {} x {} | ask {} x {}", bb_sz, bb_px, ba_px, ba_sz);
+        } else {
+            println!("BBO: unavailable");
+        }
+        if let Some(p) = self.last_trade.price.clone() {
+            println!("Last trade: {} @ {:?}", p, self.last_trade.size);
+        }
+        println!("BIDS:");
+        for (px, sz) in bids.drain(..) {
+            println!("  {} x {}", sz, px);
+        }
+        println!("ASKS:");
+        for (px, sz) in asks {
+            println!("  {} x {}", sz, px);
+        }
+    }
+}
+
 #[derive(Default)]
 struct TestStrategy {
     engine: Option<EngineHandle>,
+    // Since MBP10 events don't carry the instrument explicitly in the payload routed to strategies,
+    // and this test subscribes to a single instrument, keep a single rolling book.
+    books: OrderBook,
 }
 
 #[async_trait::async_trait]
@@ -23,14 +130,22 @@ impl Strategy for TestStrategy {
     fn desired_topics(&mut self) -> std::collections::HashSet<Topic> {
         use std::collections::HashSet;
         let mut s = HashSet::new();
-        // Subscribe to all hot and account topics so router delivers them
+        // Keep legacy topic subscribe light; exact key subscribe happens in on_start
         s.insert(Topic::Ticks);
         s
     }
 
     async fn on_start(&mut self, h: EngineHandle) {
         info!("strategy start");
-        h.subscribe_key(Topic::MBP10, SymbolKey::new(Instrument::from_str("MNQZ25").unwrap(), ProviderKind::ProjectX(ProjectXTenant::Topstep))).await.unwrap();
+        h.subscribe_key(
+            Topic::MBP10,
+            SymbolKey::new(
+                Instrument::from_str("MNQZ25").unwrap(),
+                ProviderKind::ProjectX(ProjectXTenant::Topstep),
+            ),
+        )
+        .await
+        .unwrap();
         self.engine = Some(h);
     }
     async fn on_stop(&mut self) {
@@ -43,22 +158,46 @@ impl Strategy for TestStrategy {
         println!("{:?}", q);
     }
     async fn on_bar(&mut self, _b: tt_types::data::core::Candle) {}
+
     async fn on_mbp10(&mut self, d: Mbp10) {
-        println!("{:?}", d);
+        let ob = &mut self.books;
+
+        if let Some(ref book) = d.book {
+            ob.seed_from_snapshot(book);
+        }
+
+        match d.action {
+            MbpAction::Clear => ob.clear(),
+            MbpAction::Modify | MbpAction::Add | MbpAction::Cancel => {
+                ob.apply_modify(d.side, d.price, d.size);
+            }
+            MbpAction::Trade | MbpAction::Fill => ob.note_trade(d.price, d.size),
+            MbpAction::None => {}
+        }
+
+        println!(
+            "MBP10 evt: action={:?} side={:?} px={} sz={} flags={:?} ts_event={} ts_recv={}",
+            d.action, d.side, d.price, d.size, d.flags, d.ts_event, d.ts_recv
+        );
+        ob.print_top_n(10);
     }
+
     async fn on_orders_batch(&mut self, b: wire::OrdersBatch) {
         println!("{:?}", b);
     }
     async fn on_positions_batch(&mut self, b: wire::PositionsBatch) {
         println!("{:?}", b);
     }
-    async fn on_account_delta(&mut self, accounts: Vec<AccountDelta>,) {
+    async fn on_account_delta(&mut self, accounts: Vec<AccountDelta>) {
         for account_delta in accounts {
             println!("{:?}", account_delta);
         }
     }
     async fn on_subscribe(&mut self, instrument: Instrument, topic: Topic, success: bool) {
-        println!("Subscribed to {} on topic {:?}: Success: {}", instrument, topic, success);
+        println!(
+            "Subscribed to {} on topic {:?}: Success: {}",
+            instrument, topic, success
+        );
     }
     async fn on_unsubscribe(&mut self, _instrument: Instrument, topic: Topic) {
         println!("{:?}", topic);
@@ -67,24 +206,19 @@ impl Strategy for TestStrategy {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Load .env if available
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
-    // Prepare client bus and connect to server
+
     let addr = std::env::var("TT_BUS_ADDR").unwrap_or_else(|_| "/tmp/tick-trader.sock".to_string());
     let bus = ClientMessageBus::connect(&addr).await?;
 
-    // Start engine runtime with our test strategy
     let mut engine = EngineRuntime::new(bus.clone());
     let strategy = Arc::new(Mutex::new(TestStrategy::default()));
     let _handle = engine.start(strategy.clone()).await?;
 
-    // Keep running for a bit to receive live data
     sleep(Duration::from_secs(60)).await;
 
-    // Graceful shutdown
     engine.stop().await;
-
     Ok(())
 }

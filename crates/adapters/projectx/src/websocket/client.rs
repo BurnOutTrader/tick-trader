@@ -30,6 +30,9 @@ use tt_types::providers::ProjectXTenant;
 use tt_types::securities::futures_helpers::{extract_month_year, extract_root, sanitize_code};
 use tt_types::securities::symbols::Instrument;
 use tt_types::wire::{encode, AccountDeltaBatch, OrdersBatch, PositionsBatch};
+// Map ProjectX depth items to MBP10 incremental updates and publish individually
+use tt_types::data::mbp10::{Mbp10, Action as MbpAction, BookSide as MbpSide, Flags as MbpFlags, BookLevels};
+use rust_decimal::prelude::FromPrimitive as _;
 
 #[allow(unused)]
 /// Realtime client scaffold for ProjectX hubs
@@ -778,10 +781,6 @@ impl PxWebSocketClient {
                                             if items.is_empty() {
                                                 return;
                                             }
-
-                                            // Map ProjectX depth items to MBP10 incremental updates and publish individually
-                                            use tt_types::data::mbp10::{Mbp10, Action as MbpAction, BookSide as MbpSide, Flags as MbpFlags, BookLevels};
-                                            use rust_decimal::prelude::FromPrimitive as _;
 
                                             // If we received a batch array, opportunistically compose an aggregated top-10 book snapshot
                                             // from the batch to align with Databento optional book levels.

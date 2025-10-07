@@ -18,6 +18,7 @@ tt-types = { path = "../types" }
 tt-bus = { path = "../bus" }
 dashmap = { workspace = true }
 duckdb = {workspace = true}
+rust_decimal = {workspace = true}
 
 [[bin]]
 name = "tt-engine-test_strategy"

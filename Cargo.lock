@@ -2912,6 +2912,7 @@ dependencies = [
  "dotenvy",
  "duckdb",
  "futures-util",
+ "rust_decimal",
  "tokio",
  "tokio-util",
  "tracing",
