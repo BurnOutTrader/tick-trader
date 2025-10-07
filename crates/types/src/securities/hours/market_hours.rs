@@ -939,8 +939,8 @@ pub mod mh_tests {
     use chrono_tz::Tz;
     use chrono_tz::US::Central;
     use crate::base_data::{Exchange, Resolution};
-    use crate::securities::market_hours::{hours_for_exchange, next_session_after, next_session_open_after, session_bounds, week_session_bounds};
-    use crate::securities::market_hours::{candle_end, next_session_after_with, time_end_of_day, SessionKind};
+    use crate::securities::hours::market_hours::{hours_for_exchange, next_session_after, next_session_open_after, session_bounds, week_session_bounds};
+    use crate::securities::hours::market_hours::{candle_end, next_session_after_with, time_end_of_day, SessionKind};
 
     fn utc(y: i32, m: u32, d: u32, hh: u32, mm: u32, ss: u32) -> chrono::DateTime<Utc> {
         Utc.with_ymd_and_hms(y, m, d, hh, mm, ss).single().unwrap()

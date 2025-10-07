@@ -16,7 +16,7 @@ use tt_database::init::init_db;
 use tt_types::base_data::{OrderBook, Resolution, Side};
 use tt_types::history::{HistoricalRequest, HistoryEvent};
 use tt_types::providers::ProviderKind;
-use tt_types::securities::market_hours::{
+use tt_types::securities::hours::market_hours::{
     MarketHours, SessionKind, hours_for_exchange, next_session_open_after,
 };
 use tt_types::securities::symbols::{Instrument, exchange_market_type};

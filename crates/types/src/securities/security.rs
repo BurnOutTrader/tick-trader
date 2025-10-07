@@ -2,7 +2,7 @@ use crate::providers::ProviderKind;
 use crate::securities::futures_helpers::{
     activation_ns_default, extract_root, parse_expiry_from_instrument,
 };
-use crate::securities::market_hours::{MarketHours, hours_for_exchange};
+use crate::securities::hours::market_hours::{MarketHours, hours_for_exchange};
 use crate::securities::symbols::{Currency, Exchange, Instrument, SecurityType, get_symbol_info};
 use chrono::{DateTime, NaiveDate, Utc};
 use rust_decimal::Decimal;

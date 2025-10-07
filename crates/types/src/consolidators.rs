@@ -1,5 +1,5 @@
 use crate::base_data::{Bbo, Candle, Resolution, Side, Tick, TickBar};
-use crate::securities::market_hours::{MarketHours, next_session_after, session_bounds};
+use crate::securities::hours::market_hours::{MarketHours, next_session_after, session_bounds};
 use crate::securities::symbols::Instrument;
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use rust_decimal::{Decimal, dec};

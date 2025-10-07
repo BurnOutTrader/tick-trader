@@ -12,7 +12,7 @@ use tt_database::queries::{get_candles_from_date_to_latest, get_candles_in_range
 use tt_types::base_data::{Candle, Exchange, Resolution};
 use tt_types::keys::Topic;
 use tt_types::providers::{ProjectXTenant, ProviderKind};
-use tt_types::securities::market_hours::{MarketHours, hours_for_exchange, next_session_after};
+use tt_types::securities::hours::market_hours::{MarketHours, hours_for_exchange, next_session_after};
 use tt_types::securities::symbols::Instrument;
 
 const GAP_TOLERANCE_BARS: i64 = 200; // ignore gaps of 3 bars (minutes) or fewer
