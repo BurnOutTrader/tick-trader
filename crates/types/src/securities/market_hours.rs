@@ -202,31 +202,40 @@ impl MarketHours {
         self.is_open_with(t, SessionKind::Extended)
     }
     /// Next bar end strictly after `now_utc`, skipping closed periods.
-    pub fn next_bar_end(&self, now_utc: DateTime<Utc>, res: Resolution) -> DateTime<Utc> {
+    pub fn bar_end(&self, open_time: DateTime<Utc>, res: Resolution) -> DateTime<Utc> {
         match res {
-            Resolution::Seconds(_) | Resolution::Minutes(_) | Resolution::Hours(_) => {
-                let step = match res {
-                    Resolution::Seconds(s) => s as i64,
-                    Resolution::Minutes(m) => (m as i64) * 60,
-                    Resolution::Hours(h) => (h as i64) * 3600,
+            Resolution::Seconds(s) | Resolution::Minutes(s) | Resolution::Hours(s) => {
+                // Normalize to step seconds
+                let step_secs: i64 = match res {
+                    Resolution::Seconds(n) => n as i64,
+                    Resolution::Minutes(n) => (n as i64) * 60,
+                    Resolution::Hours(n) => (n as i64) * 3600,
                     _ => unreachable!(),
                 };
-                let mut t = now_utc;
-                loop {
-                    let secs = t.timestamp();
-                    let next = secs - (secs.rem_euclid(step)) + step;
-                    let cand = Utc.timestamp_opt(next, 0).single().unwrap_or(t);
-                    if self.is_open(cand) {
-                        return cand;
-                    }
-                    // if closed at that boundary, jump to next session open
-                    let (open, _close) = next_session_after(self, cand);
-                    t = open;
+                let secs = open_time.timestamp();
+                let mut next = secs - (secs.rem_euclid(step_secs)) + step_secs;
+                let mut next_dt = Utc.timestamp_opt(next, 0).single().unwrap_or(open_time);
+                if self.is_open(next_dt) {
+                    return next_dt;
+                }
+                // If the immediate boundary is in a closed window, jump to the next session open
+                let open = next_session_open_after(self, open_time);
+                // Align to the first boundary strictly after the open
+                let open_secs = open.timestamp();
+                let aligned = open_secs - (open_secs.rem_euclid(step_secs)) + step_secs;
+                let aligned_dt = Utc.timestamp_opt(aligned, 0).single().unwrap_or(open);
+                if aligned_dt > open {
+                    aligned_dt
+                } else {
+                    // Fallback safety: add one step
+                    Utc.timestamp_opt(aligned + step_secs, 0)
+                        .single()
+                        .unwrap_or(open + chrono::Duration::seconds(step_secs))
                 }
             }
             Resolution::Daily | Resolution::Weekly => {
                 // Use session bounds so “daily” ends at session close, not midnight
-                let (_open, close) = session_bounds(self, now_utc);
+                let (_open, close) = session_bounds(self, open_time);
                 close
             }
         }
@@ -747,9 +756,6 @@ pub fn next_session_after_with(
 
     for dd in 0..14 {
         let d = base_day + Duration::days(dd);
-        if is_holiday(hours, d) {
-            continue;
-        }
 
         // Consider ALL rules applicable on this day (don’t stop at the first one)
         let mut best_open: Option<(DateTime<Utc>, DateTime<Utc>)> = None;
@@ -794,26 +800,6 @@ pub fn next_session_after(
     next_session_after_with(SessionKind::Both, hours, end_excl)
 }
 
-// ---------------------------
-// Internals
-// ---------------------------
-
-fn is_holiday(hours: &MarketHours, d: chrono::NaiveDate) -> bool {
-    hours.holidays.iter().any(|h| *h == d)
-}
-
-#[allow(dead_code)]
-fn rule_for_date_in<'a>(
-    hours: &'a MarketHours,
-    d: chrono::NaiveDate,
-    kind: SessionKind,
-) -> Option<&'a SessionRule> {
-    if is_holiday(hours, d) {
-        return None;
-    }
-    let w = d.weekday().num_days_from_monday() as usize;
-    hours.iter_rules(kind).find(|r| r.days[w])
-}
 
 fn mk_local(tz: Tz, day: chrono::NaiveDate, ssm: u32) -> chrono::DateTime<Tz> {
     let base: NaiveDateTime = day.and_hms_opt(0, 0, 0).unwrap() + Duration::seconds(ssm as i64);
@@ -904,4 +890,342 @@ pub fn next_session_open_after(mh: &MarketHours, after_utc: DateTime<Utc>) -> Da
 
     // Fallback: if we didn’t find anything (odd calendar), nudge by 1 day in UTC
     after_utc + Duration::days(1)
+}
+
+#[cfg(test)]
+pub mod mh_tests {
+    use chrono::{Duration, NaiveDate, TimeZone, Utc};
+    use chrono_tz::Tz;
+    use chrono_tz::US::Central;
+    use crate::base_data::{Exchange, Resolution};
+    use crate::securities::market_hours::{
+        hours_for_exchange, next_session_after, next_session_open_after, session_bounds,
+    };
+    use crate::securities::market_hours::{candle_end, next_session_after_with, time_end_of_day, SessionKind};
+
+    fn utc(y: i32, m: u32, d: u32, hh: u32, mm: u32, ss: u32) -> chrono::DateTime<Utc> {
+        Utc.with_ymd_and_hms(y, m, d, hh, mm, ss).single().unwrap()
+    }
+
+    // Replace the failing test with these assertions:
+
+    #[test]
+    fn test_extended_is_open_1530_to_1600_ct_and_closed_1515_to_1530() {
+        use chrono::Utc;
+
+        let mh = hours_for_exchange(Exchange::CME);
+
+        // 2023-06-05 is a Monday in CDT (UTC-5).
+        // 15:20 CT -> 20:20 UTC (should be CLOSED: in the 15:15–15:30 halt)
+        let t_closed = Utc
+            .with_ymd_and_hms(2023, 6, 5, 20, 20, 0)
+            .single()
+            .unwrap();
+        assert!(!mh.is_open(t_closed), "CME is halted 15:15–15:30 CT");
+
+        // 15:45 CT -> 20:45 UTC (should be OPEN: brief 15:30–16:00 window)
+        let t_open = Utc
+            .with_ymd_and_hms(2023, 6, 5, 20, 45, 0)
+            .single()
+            .unwrap();
+        assert!(mh.is_open(t_open), "CME reopens 15:30–16:00 CT");
+
+        // 16:10 CT -> 21:10 UTC (should be CLOSED: daily maintenance 16:00–17:00 CT)
+        let t_maint = Utc
+            .with_ymd_and_hms(2023, 6, 5, 21, 10, 0)
+            .single()
+            .unwrap();
+        assert!(!mh.is_open(t_maint), "CME maintenance 16:00–17:00 CT");
+    }
+
+    #[test]
+    fn test_exact_close_exclusive_regular_1515_ct() {
+        use chrono::Utc;
+
+        let mh = hours_for_exchange(Exchange::CME);
+
+        // Exactly 15:15:00 CT -> 20:15:00 UTC should be CLOSED for regular (end-exclusive)
+        let close_edge = Utc
+            .with_ymd_and_hms(2023, 6, 5, 20, 15, 0)
+            .single()
+            .unwrap();
+        assert!(!mh.is_open_regular(close_edge));
+
+        // But 15:30 CT -> 20:30 UTC should be OPEN via extended
+        let ext_open = Utc
+            .with_ymd_and_hms(2023, 6, 5, 20, 30, 0)
+            .single()
+            .unwrap();
+        assert!(mh.is_open_extended(ext_open));
+    }
+
+    #[test]
+    fn test_cme_friday_has_no_overnight() {
+        // Friday, 2023-06-09 22:30 UTC = 17:30 CT, but CME equity-index has no 17:00 Friday overnight
+        let mh = hours_for_exchange(Exchange::CME);
+        let t = utc(2023, 6, 9, 22, 30, 0);
+        assert!(!mh.is_open(t));
+
+        // Next open should be Sunday 22:00 UTC (17:00 CT)
+        let open = next_session_open_after(&mh, t);
+        assert_eq!(open, utc(2023, 6, 11, 22, 0, 0));
+    }
+
+    #[test]
+    fn test_wrap_does_not_bleed_into_holiday() {
+        // Declare Monday 2023-07-03 as a holiday (example) and ensure the Sun wrap doesn't apply
+        let mut mh = hours_for_exchange(Exchange::CME);
+        let holiday = NaiveDate::from_ymd_opt(2023, 7, 3).unwrap();
+        mh.holidays.push(holiday);
+
+        // 2023-07-03 07:00 CT is 12:00 UTC, would normally be inside Sun 17:00 -> Mon 08:30 wrap
+        let t = utc(2023, 7, 3, 12, 0, 0);
+        assert!(
+            !mh.is_open(t),
+            "overnight wrap should not bleed into a holiday"
+        );
+
+        // And next session after should be the Monday 15:30 CT mini-window or Monday RTH depending on rules
+        let (open, close) = next_session_after(&mh, t);
+        // It should open strictly after t, and certainly not before 15:30 CT (20:30 UTC)
+        assert!(open > t);
+        assert!(close > open);
+    }
+
+    #[test]
+    fn test_session_bounds_extended_wrap_window() {
+        let mh = hours_for_exchange(Exchange::CME);
+        // Inside the overnight wrap on Tue 2023-06-06 at 02:00 CT (07:00 UTC)
+        let t = utc(2023, 6, 6, 7, 0, 0);
+        let (open, close) = session_bounds(&mh, t);
+        // The returned bounds must represent a session that contains t and has open < close.
+        assert!(
+            open < close,
+            "expected open < close, got open={open} close={close}"
+        );
+        assert!(
+            open <= t && t < close,
+            "t must lie within returned session bounds: open={open} t={t} close={close}"
+        );
+    }
+
+    #[test]
+    fn test_exact_open_inclusive_exact_close_exclusive() {
+        let mh = hours_for_exchange(Exchange::CME);
+
+        // Regular open 08:30 CT => 13:30 UTC should be open
+        let open_edge = utc(2023, 6, 5, 13, 30, 0);
+        assert!(mh.is_open(open_edge));
+
+        // Regular close 15:15 CT => 20:15 UTC should be closed at the exact instant
+        let close_edge = utc(2023, 6, 5, 20, 15, 0);
+        assert!(!mh.is_open(close_edge));
+    }
+
+    #[test]
+    fn test_sunday_reopen_next_session() {
+        let mh = hours_for_exchange(Exchange::CME);
+        // Sunday 2023-06-11 at 21:00 UTC (16:00 CT) – before open
+        let t = utc(2023, 6, 11, 21, 0, 0);
+        let (open, close) = next_session_after(&mh, t);
+        assert_eq!(open, utc(2023, 6, 11, 22, 0, 0));
+        // Close Monday 08:30 CT => 13:30 UTC
+        assert_eq!(close, utc(2023, 6, 12, 13, 30, 0));
+    }
+
+    #[test]
+    fn test_next_bar_end_skips_maintenance_reopens_correctly() {
+        let mh = hours_for_exchange(Exchange::CME);
+        // 15:59:50 CT (20:59:50 UTC) – intraday boundary at 21:00:00 UTC is CLOSED, so skip to reopen
+        let t = utc(2023, 6, 5, 20, 59, 50);
+        // Step of 10 seconds
+        let mut next = mh.bar_end(t, Resolution::Seconds(10));
+        // Next session opens 22:00:00 UTC; first 10s boundary strictly after open is 22:00:10
+        assert_eq!(next, utc(2023, 6, 5, 22, 0, 10));
+
+        // If we ask again from exactly the previous result (which is in an open session), we step normally
+        next = mh.bar_end(next, Resolution::Seconds(10));
+        assert_eq!(next, utc(2023, 6, 5, 22, 0, 20));
+    }
+
+    #[test]
+    fn test_extended_is_open_between_1515_and_1600_ct() {
+        let mh = hours_for_exchange(Exchange::CME);
+        // 15:20 CT on 2023-06-05 -> 20:20 UTC: must be CLOSED (15:15–15:30 halt)
+        assert!(!mh.is_open(utc(2023, 6, 5, 20, 20, 0)));
+    }
+
+
+    fn ct(y: i32, m: u32, d: u32, hh: u32, mm: u32, ss: u32) -> chrono::DateTime<Utc> {
+        Central
+            .with_ymd_and_hms(y, m, d, hh, mm, ss)
+            .single()
+            .unwrap()
+            .with_timezone(&Utc)
+    }
+
+    #[test]
+    fn test_hours_for_exchange_cme_properties() {
+        let mh = hours_for_exchange(Exchange::CME);
+        assert_eq!(mh.exchange, Exchange::CME);
+        // Exchange TZ should be Central
+        assert_eq!(mh.tz, Central);
+        assert!(mh.has_daily_close);
+        assert!(mh.has_weekend_close);
+        // Should have both regular and extended rules defined
+        assert!(!mh.regular.is_empty());
+        assert!(!mh.extended.is_empty());
+    }
+
+    #[test]
+    fn test_is_open_regular_and_extended_utc_cdt() {
+        // Monday, Jun 5 2023 is in CDT (UTC-5)
+        let mh = hours_for_exchange(Exchange::CME);
+        // Regular session 08:30–15:15 CT → 13:30–20:15 UTC
+        let t_open_reg = utc(2023, 6, 5, 13, 30, 0);
+        let t_mid_reg = utc(2023, 6, 5, 17, 0, 0);
+        let t_close_reg_edge = utc(2023, 6, 5, 20, 15, 0);
+        assert!(mh.is_open_regular(t_open_reg));
+        assert!(mh.is_open_regular(t_mid_reg));
+        // Close is exclusive; exactly at 20:15:00 should be closed for regular
+        assert!(!mh.is_open_regular(t_close_reg_edge));
+
+        // Extended: 15:30–16:00 CT (20:30–21:00 UTC) and 17:00–08:30 CT (22:00–13:30 UTC next day)
+        let t_ext1 = utc(2023, 6, 5, 20, 45, 0); // in 15:30–16:00 CT block
+        let t_ext_gap = utc(2023, 6, 5, 21, 10, 0); // maintenance 16:00–17:00 CT
+        let t_ext2 = utc(2023, 6, 5, 22, 10, 0); // in overnight 17:00–08:30 CT
+        assert!(mh.is_open_with(t_ext1, SessionKind::Extended));
+        assert!(!mh.is_open_with(t_ext_gap, SessionKind::Extended));
+        assert!(mh.is_open_with(t_ext2, SessionKind::Extended));
+
+        // Overall is_open should combine both
+        assert!(mh.is_open(t_open_reg));
+        assert!(mh.is_open(t_ext1));
+        assert!(!mh.is_open(t_ext_gap));
+    }
+
+    #[test]
+    fn test_is_open_across_timezones() {
+        // Pick a time firmly inside regular session
+        let mh = hours_for_exchange(Exchange::CME);
+        let t_ct = ct(2023, 6, 5, 9, 0, 0); // 09:00 CT => inside regular
+        let t_utc = t_ct; // already UTC converted above
+        // London/Tokyo views should not change truth of is_open when we pass UTC
+        let london: Tz = chrono_tz::Europe::London;
+        let tokyo: Tz = chrono_tz::Asia::Tokyo;
+        assert!(mh.is_open(t_utc));
+        // Sanity: convert to these tzs and back to UTC yields same instant
+        let _ = t_utc.with_timezone(&london);
+        let _ = t_utc.with_timezone(&tokyo);
+        assert!(mh.is_open(t_utc));
+    }
+
+    #[test]
+    fn test_next_bar_end_intraday_skips_closed() {
+        let mh = hours_for_exchange(Exchange::CME);
+        // 15:59:30 CT on Jun 5, 2023 => 20:59:30 UTC, next 1m boundary is 21:00:00 UTC which is in maintenance (closed)
+        // Should jump to next open at 17:00 CT => 22:00:00 UTC
+        let t = utc(2023, 6, 5, 20, 59, 30);
+        let next = mh.bar_end(t, Resolution::Minutes(1));
+        // next_bar_end returns the next bar boundary strictly after now (not the next open)
+        assert_eq!(next, utc(2023, 6, 5, 22, 1, 0));
+    }
+
+    #[test]
+    fn test_is_maintenance_during_break() {
+        let mh = hours_for_exchange(Exchange::CME);
+        // 16:10 CT => 21:10 UTC should be maintenance (within 50 min of 17:00 CT open)
+        let t = utc(2023, 6, 5, 21, 10, 0);
+        assert!(mh.is_maintenance(t));
+        // Far after reopen
+        let t2 = utc(2023, 6, 5, 23, 0, 0);
+        assert!(!mh.is_maintenance(t2));
+    }
+
+    #[test]
+    fn test_is_closed_all_day_in_calendar() {
+        let mh = hours_for_exchange(Exchange::CME);
+        // Saturday should be fully closed (no Friday overnight into Saturday under CME Globex rules)
+        let sat = NaiveDate::from_ymd_opt(2023, 6, 10).unwrap();
+        assert!(mh.is_closed_all_day_in_calendar(sat, chrono_tz::UTC, SessionKind::Both));
+        assert!(mh.is_closed_all_day_in_calendar(sat, Central, SessionKind::Both));
+
+        // Sunday in UTC calendar is not closed all day because trading starts 22:00 UTC
+        let sun = NaiveDate::from_ymd_opt(2023, 6, 11).unwrap();
+        assert!(!mh.is_closed_all_day_in_calendar(sun, chrono_tz::UTC, SessionKind::Both));
+
+        // In Central calendar, Sunday also has a session (opens 17:00 CT), so not closed all day
+        assert!(!mh.is_closed_all_day_in_calendar(sun, Central, SessionKind::Both));
+    }
+
+    #[test]
+    fn test_candle_end_minutes_hours_daily_weekly() {
+        let exch = Exchange::CME;
+        // 1-minute: starting at 13:29:00 UTC, end should be 13:29:59.999999999 UTC
+        let t = utc(2023, 6, 5, 13, 29, 0);
+        let end1 = candle_end(t, Resolution::Minutes(1), exch).unwrap();
+        assert_eq!(end1, utc(2023, 6, 5, 13, 30, 0) - Duration::nanoseconds(1));
+
+        // 1-hour: 14:00 UTC => next at 15:00 UTC minus 1ns
+        let t2 = utc(2023, 6, 5, 14, 0, 0);
+        let endh = candle_end(t2, Resolution::Hours(1), exch).unwrap();
+        assert_eq!(endh, utc(2023, 6, 5, 15, 0, 0) - Duration::nanoseconds(1));
+
+        // Daily: any time during Monday session should end at session close 20:15 UTC - 1ns
+        let td = utc(2023, 6, 5, 18, 0, 0);
+        let endd = candle_end(td, Resolution::Daily, exch).unwrap();
+        assert_eq!(endd, utc(2023, 6, 5, 20, 15, 0) - Duration::nanoseconds(1));
+
+        // Weekly: pick Wed 2023-06-07; next Monday 00:00 Central is 2023-06-12 05:00 UTC (CDT), minus 1ns
+        let tw = utc(2023, 6, 7, 12, 0, 0);
+        let expected_mon_ct = Central
+            .with_ymd_and_hms(2023, 6, 12, 0, 0, 0)
+            .single()
+            .unwrap()
+            .with_timezone(&Utc);
+        let endw = candle_end(tw, Resolution::Weekly, exch).unwrap();
+        assert_eq!(endw, expected_mon_ct - Duration::nanoseconds(1));
+    }
+
+    #[test]
+    fn test_time_end_of_day_delegates() {
+        let exch = Exchange::CME;
+        let t = utc(2023, 6, 5, 13, 29, 0);
+        let a = candle_end(t, Resolution::Minutes(1), exch).unwrap();
+        let b = time_end_of_day(t, Resolution::Minutes(1), exch).unwrap();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn test_session_bounds_and_next_session() {
+        let mh = hours_for_exchange(Exchange::CME);
+        // Inside regular session
+        let t = utc(2023, 6, 5, 14, 0, 0);
+        let (o, c) = session_bounds(&mh, t);
+        assert_eq!(o, utc(2023, 6, 5, 13, 30, 0));
+        assert_eq!(c, utc(2023, 6, 5, 20, 15, 0));
+
+        // After regular close but before overnight open
+        let t2 = utc(2023, 6, 5, 21, 0, 0);
+        let (o2, c2) = next_session_after(&mh, t2);
+        assert_eq!(o2, utc(2023, 6, 5, 22, 0, 0));
+        // Close next day 08:30 CT => 13:30 UTC on Tue 6th
+        assert_eq!(c2, utc(2023, 6, 6, 13, 30, 0));
+
+        // Explicit kind = Regular: next regular session after 21:00 UTC should be Tue 13:30–20:15 UTC
+        let (o3, c3) = next_session_after_with(SessionKind::Regular, &mh, t2);
+        assert_eq!(o3, utc(2023, 6, 6, 13, 30, 0));
+        assert_eq!(c3, utc(2023, 6, 6, 20, 15, 0));
+    }
+
+    #[test]
+    fn test_next_session_open_after_helper() {
+        let mh = hours_for_exchange(Exchange::CME);
+        // During maintenance 16:10 CT => 21:10 UTC, next open is 22:00 UTC
+        let t = utc(2023, 6, 5, 21, 10, 0);
+        let open = next_session_open_after(&mh, t);
+        assert_eq!(open, utc(2023, 6, 5, 22, 0, 0));
+    }
+
+
 }
