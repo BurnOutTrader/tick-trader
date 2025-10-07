@@ -13,7 +13,8 @@ use tt_types::securities::symbols::{Instrument, MarketType};
 
 use crate::models::{BboRow, CandleRow, TickRow};
 use crate::perist::{
-    persist_bbo_partition_zstd, persist_candles_partition_zstd, persist_ticks_partition_zstd, persist_books_partition_duckdb,
+    persist_bbo_partition_zstd, persist_books_partition_duckdb, persist_candles_partition_zstd,
+    persist_ticks_partition_zstd,
 };
 use tt_types::base_data::OrderBook;
 
@@ -173,7 +174,6 @@ pub fn ingest_bbo(
     }
     Ok(out_paths)
 }
-
 
 /// One-call ingestion for order books (monthly). Uses DuckDB COPY path for JSON ladders.
 pub fn ingest_books(

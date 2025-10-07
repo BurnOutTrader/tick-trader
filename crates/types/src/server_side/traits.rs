@@ -1,8 +1,3 @@
-use ahash::AHashMap;
-use async_trait::async_trait;
-use dotenvy::dotenv;
-use std::collections::HashMap;
-use std::time::Instant;
 use crate::accounts::account::AccountSnapShot;
 use crate::base_data::{DateTime, Utc};
 use crate::history::{HistoricalRequest, HistoryEvent};
@@ -11,6 +6,11 @@ use crate::providers::{ProjectXTenant, ProviderKind, RithmicSystem};
 use crate::securities::security::FuturesContract;
 use crate::securities::symbols::Instrument;
 use crate::wire::{CancelOrder, PlaceOrder, ReplaceOrder};
+use ahash::AHashMap;
+use async_trait::async_trait;
+use dotenvy::dotenv;
+use std::collections::HashMap;
+use std::time::Instant;
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum ConnectionState {
@@ -186,21 +186,13 @@ pub trait MarketDataProvider: Send + Sync {
     async fn unsubscribe_md(&self, topic: Topic, key: &SymbolKey) -> anyhow::Result<()>;
     async fn active_md_subscriptions(&self) -> AHashMap<Topic, Vec<SymbolKey>>;
     /// Optional: list instruments available on this market data provider. Default empty.
-    async fn list_instruments(
-        &self,
-        _pattern: Option<String>,
-    ) -> anyhow::Result<Vec<Instrument>> {
+    async fn list_instruments(&self, _pattern: Option<String>) -> anyhow::Result<Vec<Instrument>> {
         Ok(Vec::new())
     }
     /// Optional: full instruments map (Instrument -> FuturesContract). Default empty.
     async fn instruments_map(
         &self,
-    ) -> anyhow::Result<
-        ahash::AHashMap<
-            Instrument,
-            FuturesContract,
-        >,
-    > {
+    ) -> anyhow::Result<ahash::AHashMap<Instrument, FuturesContract>> {
         Ok(ahash::AHashMap::new())
     }
     async fn auto_update(&self) -> anyhow::Result<()>;
@@ -229,9 +221,7 @@ pub trait ExecutionProvider: Send + Sync {
     async fn unsubscribe_positions(&self, account_key: &AccountKey) -> anyhow::Result<()>;
     async fn active_account_subscriptions(&self) -> Vec<AccountKey>;
     /// Optional: list accounts available on this execution provider. Default empty.
-    async fn list_accounts(
-        &self,
-    ) -> anyhow::Result<Vec<AccountSnapShot>> {
+    async fn list_accounts(&self) -> anyhow::Result<Vec<AccountSnapShot>> {
         Ok(Vec::new())
     }
 
@@ -261,17 +251,18 @@ pub trait HistoricalDataProvider: Send + Sync {
 
     /// The job of this function is to return any data within the period, for the specifications,
     /// how your function does that doesnt matter, as long as you return all data available for the period
-    async fn fetch(
-        &self,
-        req: HistoricalRequest,
-    ) -> anyhow::Result<Vec<HistoryEvent>>;
+    async fn fetch(&self, req: HistoricalRequest) -> anyhow::Result<Vec<HistoryEvent>>;
 
     /// Feature flags help the router pick/shape requests.
     fn supports(&self, _topic: Topic) -> bool {
         true
     }
 
-    async fn earliest_available(&self, instrument: Instrument, topic: Topic)  -> anyhow::Result<Option<DateTime<Utc>>> ;
+    async fn earliest_available(
+        &self,
+        instrument: Instrument,
+        topic: Topic,
+    ) -> anyhow::Result<Option<DateTime<Utc>>>;
 }
 
 #[derive(Debug, Clone)]

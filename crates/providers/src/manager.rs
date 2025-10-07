@@ -1,3 +1,4 @@
+use crate::download_manager::DownloadManager;
 use crate::worker::ProviderWorker;
 use anyhow::Result;
 use dashmap::DashMap;
@@ -6,8 +7,9 @@ use tt_bus::Router;
 use tt_bus::UpstreamManager;
 use tt_types::history::{HistoricalRequest, HistoryEvent};
 use tt_types::providers::ProviderKind;
-use tt_types::server_side::traits::{ExecutionProvider, HistoricalDataProvider, MarketDataProvider, ProviderSessionSpec};
-use crate::download_manager::DownloadManager;
+use tt_types::server_side::traits::{
+    ExecutionProvider, HistoricalDataProvider, MarketDataProvider, ProviderSessionSpec,
+};
 
 /// Minimal ProviderManager that ensures a provider pair exists for a given ProviderKind.
 /// For this initial pass, it uses the ProjectX in-process adapter and returns dyn traits.
@@ -196,19 +198,29 @@ impl UpstreamManager for ProviderManager {
         self.ensure_clients(req.provider_kind).await?;
         if let Some(client) = self.hist.get(&req.provider_kind) {
             if !client.supports(req.topic) {
-                return Err(anyhow::anyhow!("Unsupported topic: {:?} for historical data provider: {:?}", req.provider_kind, req.topic));
+                return Err(anyhow::anyhow!(
+                    "Unsupported topic: {:?} for historical data provider: {:?}",
+                    req.provider_kind,
+                    req.topic
+                ));
             }
-            return client.fetch(req).await
+            return client.fetch(req).await;
         }
-        Err(anyhow::anyhow!("Unsupported historical data provider: {:?}", req.provider_kind))
+        Err(anyhow::anyhow!(
+            "Unsupported historical data provider: {:?}",
+            req.provider_kind
+        ))
     }
 
     async fn update_historical_database(&self, req: HistoricalRequest) -> anyhow::Result<()> {
-
         self.ensure_clients(req.provider_kind).await?;
         if let Some(client) = self.hist.get(&req.provider_kind) {
             if !client.supports(req.topic) {
-                return Err(anyhow::anyhow!("Unsupported topic: {:?} for historical data provider: {:?}", req.provider_kind, req.topic));
+                return Err(anyhow::anyhow!(
+                    "Unsupported topic: {:?} for historical data provider: {:?}",
+                    req.provider_kind,
+                    req.topic
+                ));
             }
             let dm = &self.download_manager;
             if let Some(handle) = dm.request_update(client.clone(), req.clone()).await? {
@@ -222,7 +234,10 @@ impl UpstreamManager for ProviderManager {
                 return Ok(());
             }
         }
-        Err(anyhow::anyhow!("Unsupported historical data provider: {:?}", req.provider_kind))
+        Err(anyhow::anyhow!(
+            "Unsupported historical data provider: {:?}",
+            req.provider_kind
+        ))
     }
 }
 
@@ -286,7 +301,9 @@ impl ProviderManager {
     pub async fn ensure_clients(&self, kind: ProviderKind) -> anyhow::Result<()> {
         match kind {
             ProviderKind::ProjectX(_) => {
-                if let (Some(_m), Some(_e), Some(_h)) = (self.md.get(&kind), self.ex.get(&kind), self.hist.get(&kind)) {
+                if let (Some(_m), Some(_e), Some(_h)) =
+                    (self.md.get(&kind), self.ex.get(&kind), self.hist.get(&kind))
+                {
                     return Ok(());
                 }
                 let (md, ex, hist) = projectx::factory::create_provider_pair(

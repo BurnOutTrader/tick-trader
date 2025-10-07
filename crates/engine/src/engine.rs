@@ -4,7 +4,6 @@ use crate::models::{
 use async_trait::async_trait;
 use dashmap::DashMap;
 use duckdb::Connection;
-use tt_types::server_side::traits::{MarketDataProvider, ProbeStatus, ProviderParams};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
 use std::sync::Arc;
@@ -18,6 +17,7 @@ use tt_types::base_data::{Bbo, Candle, OrderBook, Tick};
 use tt_types::keys::{AccountKey, SymbolKey, Topic};
 use tt_types::providers::ProviderKind;
 use tt_types::securities::symbols::Instrument;
+use tt_types::server_side::traits::{MarketDataProvider, ProbeStatus, ProviderParams};
 use tt_types::wire::{
     AccountDeltaBatch, BarBatch, OrdersBatch, PositionsBatch, QuoteBatch, Request, Response,
     Subscribe, TickBatch,

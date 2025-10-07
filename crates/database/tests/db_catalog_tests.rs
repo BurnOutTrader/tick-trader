@@ -1,5 +1,5 @@
-use std::str::FromStr;
 use chrono::{NaiveDate, TimeZone, Utc};
+use std::str::FromStr;
 use tt_database::duck::{
     create_partitions_schema, earliest_available, latest_available, prune_missing_partitions,
     quarantine_unreadable_partitions, upsert_dataset, upsert_partition, upsert_provider,
@@ -76,9 +76,14 @@ fn test_catalog_earliest_latest_ticks_across_partitions() {
         .unwrap();
     assert_eq!(e.ts.date_naive(), day1);
 
-    let l = latest_available(&conn, &provider_kind_to_db_string(provider), &symbol.to_string(), Topic::Ticks)
-        .unwrap()
-        .unwrap();
+    let l = latest_available(
+        &conn,
+        &provider_kind_to_db_string(provider),
+        &symbol.to_string(),
+        Topic::Ticks,
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(l.ts.date_naive(), day2);
 }
 
@@ -215,11 +220,8 @@ fn test_latest_available_candles_with_legacy_empty_resolution_key() {
     let conn = setup_conn();
 
     // Manually insert provider, symbol, and a legacy dataset row with empty resolution_key
-    conn.execute(
-        "INSERT INTO providers(provider_code) VALUES ('TESTP4')",
-        [],
-    )
-    .unwrap();
+    conn.execute("INSERT INTO providers(provider_code) VALUES ('TESTP4')", [])
+        .unwrap();
     let provider_id: i64 = conn
         .query_row(
             "SELECT provider_id FROM providers WHERE provider_code='TESTP4'",
@@ -279,5 +281,8 @@ fn test_latest_available_candles_with_legacy_empty_resolution_key() {
     let got = latest_available(&conn, "TESTP4", "SYM4", tt_types::keys::Topic::Candles1m)
         .unwrap()
         .map(|b| b.ts);
-    assert!(got.is_some(), "expected latest_available to find a timestamp for legacy candles dataset");
+    assert!(
+        got.is_some(),
+        "expected latest_available to find a timestamp for legacy candles dataset"
+    );
 }

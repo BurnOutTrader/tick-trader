@@ -122,7 +122,9 @@ async fn main() -> anyhow::Result<()> {
     // Wire upstream manager (providers) into the router for first/last sub notifications
     let mgr = Arc::new(tt_providers::manager::ProviderManager::new(router.clone()));
 
-    let cs = mgr.get_instruments_map(ProviderKind::ProjectX(ProjectXTenant::Topstep)).await?;
+    let cs = mgr
+        .get_instruments_map(ProviderKind::ProjectX(ProjectXTenant::Topstep))
+        .await?;
     let topics = vec![Topic::Candles1m, Topic::Candles1h, Topic::Candles1m];
     let instrument = vec![(Instrument::from_str("MNQZ5").unwrap(), Exchange::CME)];
     for topic in topics {

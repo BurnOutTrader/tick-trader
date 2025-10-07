@@ -1,4 +1,9 @@
+use anyhow::{Context, Result, anyhow};
+use chrono::{DateTime, Duration, NaiveDate, TimeZone, Utc};
+use duckdb;
+use rust_decimal::Decimal;
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::str::FromStr;
 use tt_database::duck::{earliest_available, latest_available, resolve_dataset_id};
 use tt_database::init::init_db;
@@ -7,12 +12,8 @@ use tt_database::queries::{get_candles_from_date_to_latest, get_candles_in_range
 use tt_types::base_data::{Candle, Exchange, Resolution};
 use tt_types::keys::Topic;
 use tt_types::providers::{ProjectXTenant, ProviderKind};
-use tt_types::securities::symbols::Instrument;use anyhow::{anyhow, Context, Result};
-use chrono::{DateTime, Duration, NaiveDate, TimeZone, Utc};
-use duckdb;
-use std::path::Path;
-use rust_decimal::Decimal;
-use tt_types::securities::market_hours::{hours_for_exchange, next_session_after, MarketHours};
+use tt_types::securities::market_hours::{MarketHours, hours_for_exchange, next_session_after};
+use tt_types::securities::symbols::Instrument;
 // ---- calendar helpers (intraday) -------------------------------------------------
 
 /// ceil `t` to the next multiple of `step_secs` (if already aligned, returns `t`)
@@ -62,8 +63,8 @@ fn main() -> Result<()> {
     let conn = init_db(db_root).context("failed to initialize DuckDB catalog")?;
 
     // 2) Target instrument and provider
-    let instrument = Instrument::from_str("MNQZ5")
-        .map_err(|e| anyhow!("invalid instrument: {:?}", e))?;
+    let instrument =
+        Instrument::from_str("MNQZ5").map_err(|e| anyhow!("invalid instrument: {:?}", e))?;
     let provider_kind = ProviderKind::ProjectX(ProjectXTenant::Topstep);
     let provider = provider_kind_to_db_string(provider_kind);
 
@@ -74,11 +75,13 @@ fn main() -> Result<()> {
     // 3) Determine start/end in catalog
     let start = match earliest_available(&conn, &provider_kind, &instrument, Topic::Candles1m)? {
         Some(b) => b.ts,
-        None => return Err(anyhow!(
-            "No candles available in catalog for {} {}",
-            provider,
-            instrument
-        )),
+        None => {
+            return Err(anyhow!(
+                "No candles available in catalog for {} {}",
+                provider,
+                instrument
+            ));
+        }
     };
     let end = latest_available(&conn, &provider, &instrument.to_string(), Topic::Candles1m)?
         .map(|b| b.ts)
@@ -97,11 +100,14 @@ fn main() -> Result<()> {
                 |r| r.get(0),
             )
             .unwrap_or(0);
-        println!("Catalog: dataset_id={} has {} partitions", dataset_id, count_all);
+        println!(
+            "Catalog: dataset_id={} has {} partitions",
+            dataset_id, count_all
+        );
 
         // read all paths
-        let mut stmt = conn
-            .prepare("SELECT path FROM partitions WHERE dataset_id = ? ORDER BY min_ts_ns")?;
+        let mut stmt =
+            conn.prepare("SELECT path FROM partitions WHERE dataset_id = ? ORDER BY min_ts_ns")?;
         let mut rows = stmt.query(duckdb::params![dataset_id])?;
         let mut paths: Vec<String> = Vec::new();
         while let Some(r) = rows.next()? {
@@ -122,7 +128,10 @@ fn main() -> Result<()> {
                 list, expect_ns
             );
             let mismatches: i64 = conn.query_row(&sql, [], |r| r.get(0)).unwrap_or(-1);
-            println!("Audit: width mismatches (end-start != 60s-1ns): {}", mismatches);
+            println!(
+                "Audit: width mismatches (end-start != 60s-1ns): {}",
+                mismatches
+            );
         }
     } else {
         println!(
@@ -182,9 +191,7 @@ fn main() -> Result<()> {
                 ));
             }
 
-            let width_ns = (c.time_end - c.time_start)
-                .num_nanoseconds()
-                .unwrap_or(-1);
+            let width_ns = (c.time_end - c.time_start).num_nanoseconds().unwrap_or(-1);
             if width_ns != expect_ns {
                 failures.push(format!(
                     "candle[{i}] width != 60s-1ns: {} -> {} ({} ns)",
@@ -200,9 +207,7 @@ fn main() -> Result<()> {
                     if c.time_start > expected_start {
                         // True gap: one or more minutes missing.
                         // Count how many missing 1-minute bars and attribute to the *expected* local date.
-                        let missing = (c.time_start - expected_start)
-                            .num_minutes()
-                            .max(1); // at least 1
+                        let missing = (c.time_start - expected_start).num_minutes().max(1); // at least 1
                         // iterate each missing minute and bump its local date bucket
                         let mut t = expected_start;
                         for _ in 0..missing {
@@ -283,7 +288,10 @@ fn main() -> Result<()> {
 
     // 6) Print per-date gap summary (exchange-local dates)
     if total_gaps > 0 {
-        println!("---- 1m gap summary (exchange-local dates, {}) ----", hours.tz);
+        println!(
+            "---- 1m gap summary (exchange-local dates, {}) ----",
+            hours.tz
+        );
         let mut dates: Vec<(NaiveDate, usize)> = gap_counts.into_iter().collect();
         dates.sort_by_key(|(d, _)| *d);
         for (d, n) in dates {
@@ -296,7 +304,11 @@ fn main() -> Result<()> {
 
     // 7) Final status
     if failures.is_empty() {
-        println!("Integrity checks PASS for {} ({} bars)", instrument, candles.len());
+        println!(
+            "Integrity checks PASS for {} ({} bars)",
+            instrument,
+            candles.len()
+        );
         Ok(())
     } else {
         eprintln!("Integrity checks FAILED ({} issues):", failures.len());

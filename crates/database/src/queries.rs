@@ -1,6 +1,6 @@
 use crate::duck::{latest_available, resolve_dataset_id};
 use crate::layout::Layout;
-use crate::models::{SeqBound};
+use crate::models::SeqBound;
 use crate::paths::{provider_kind_to_db_string, topic_to_db_string};
 use ahash::AHashMap;
 use anyhow::{Context, anyhow};
@@ -10,8 +10,8 @@ use rust_decimal::Decimal;
 use serde_json::Value as JsonValue;
 use std::str::FromStr;
 use std::sync::Arc;
-use tt_types::base_data::{Bbo, Candle, OrderBook, Side, Tick, BookLevel};
-use tt_types::base_data::{Resolution};
+use tt_types::base_data::Resolution;
+use tt_types::base_data::{Bbo, BookLevel, Candle, OrderBook, Side, Tick};
 use tt_types::keys::Topic;
 use tt_types::providers::ProviderKind;
 use tt_types::securities::symbols::{Exchange, Instrument, MarketType};
@@ -152,8 +152,12 @@ pub fn latest_data_time(
     instrument: &Instrument,
     topic: Topic,
 ) -> anyhow::Result<Option<DateTime<Utc>>> {
-    let v: Option<SeqBound> =
-        latest_available(conn, &provider_kind_to_db_string(provider), &instrument.to_string(), topic)?;
+    let v: Option<SeqBound> = latest_available(
+        conn,
+        &provider_kind_to_db_string(provider),
+        &instrument.to_string(),
+        topic,
+    )?;
     Ok(v.map(|b| b.ts))
 }
 
@@ -280,7 +284,8 @@ pub fn get_bbo_in_range(
             Exchange::from_str(&exch).ok_or_else(|| anyhow!("unknown exchange '{exch}'"))?;
         out.push(Bbo {
             symbol: sym.clone(),
-            instrument: Instrument::from_str(&sym).map_err(|_| anyhow!("invalid instrument '{}" , sym))? ,
+            instrument: Instrument::from_str(&sym)
+                .map_err(|_| anyhow!("invalid instrument '{}", sym))?,
             bid: Decimal::from_str(&bid_s)?,
             bid_size: Decimal::from_str(&bid_sz_s)?,
             ask: Decimal::from_str(&ask_s)?,
@@ -310,7 +315,13 @@ pub fn get_ticks_in_range(
         return Ok(Vec::new());
     }
 
-    let Some(dataset_id) = resolve_dataset_id(conn, &provider_kind_to_db_string(provider), &instrument.to_string(), Topic::Ticks)? else {
+    let Some(dataset_id) = resolve_dataset_id(
+        conn,
+        &provider_kind_to_db_string(provider),
+        &instrument.to_string(),
+        Topic::Ticks,
+    )?
+    else {
         return Ok(Vec::new());
     };
 
@@ -400,8 +411,12 @@ pub fn get_ticks_from_date_to_latest(
     instrument: &Instrument,
     start: DateTime<Utc>,
 ) -> anyhow::Result<Vec<Tick>> {
-    let Some(SeqBound { ts: latest_ts, .. }) =
-        latest_available(conn, &provider_kind_to_db_string(provider), &instrument.to_string(), Topic::Ticks)?
+    let Some(SeqBound { ts: latest_ts, .. }) = latest_available(
+        conn,
+        &provider_kind_to_db_string(provider),
+        &instrument.to_string(),
+        Topic::Ticks,
+    )?
     else {
         return Ok(Vec::new());
     };
@@ -435,7 +450,8 @@ pub fn get_candles_in_range(
     let Some(topic) = topic else {
         return Ok(Vec::new());
     };
-    let Some(dataset_id) = resolve_dataset_id(conn, provider, &instrument.to_string(), topic)? else {
+    let Some(dataset_id) = resolve_dataset_id(conn, provider, &instrument.to_string(), topic)?
+    else {
         return Ok(Vec::new());
     };
 
@@ -596,9 +612,24 @@ pub fn get_books_in_range(
 
         out.push(OrderBook {
             symbol: sym.clone(),
-            instrument: Instrument::from_str(&sym).map_err(|_| anyhow!("invalid instrument '{}" , sym))? ,
-            bids: bids.into_iter().map(|(p,v)| BookLevel{price:p, volume:v, level:0}).collect(),
-            asks: asks.into_iter().map(|(p,v)| BookLevel{price:p, volume:v, level:0}).collect(),
+            instrument: Instrument::from_str(&sym)
+                .map_err(|_| anyhow!("invalid instrument '{}", sym))?,
+            bids: bids
+                .into_iter()
+                .map(|(p, v)| BookLevel {
+                    price: p,
+                    volume: v,
+                    level: 0,
+                })
+                .collect(),
+            asks: asks
+                .into_iter()
+                .map(|(p, v)| BookLevel {
+                    price: p,
+                    volume: v,
+                    level: 0,
+                })
+                .collect(),
             time: epoch_ns_to_dt(t_ns),
         });
     }
@@ -665,9 +696,24 @@ pub fn get_latest_book(
 
         return Ok(Some(OrderBook {
             symbol: sym.clone(),
-            instrument: Instrument::from_str(&sym).map_err(|_| anyhow!("invalid instrument '{}" , sym))? ,
-            bids: bids.into_iter().map(|(p,v)| BookLevel{price:p, volume:v, level:0}).collect(),
-            asks: asks.into_iter().map(|(p,v)| BookLevel{price:p, volume:v, level:0}).collect(),
+            instrument: Instrument::from_str(&sym)
+                .map_err(|_| anyhow!("invalid instrument '{}", sym))?,
+            bids: bids
+                .into_iter()
+                .map(|(p, v)| BookLevel {
+                    price: p,
+                    volume: v,
+                    level: 0,
+                })
+                .collect(),
+            asks: asks
+                .into_iter()
+                .map(|(p, v)| BookLevel {
+                    price: p,
+                    volume: v,
+                    level: 0,
+                })
+                .collect(),
             time: epoch_ns_to_dt(t_ns),
         }));
     }
@@ -764,4 +810,3 @@ fn parse_ladder_json(txt: &str) -> anyhow::Result<Vec<(Decimal, Decimal)>> {
     }
     Ok(out)
 }
-

@@ -1,9 +1,9 @@
 use crate::base_data::{Bbo, Candle, Exchange, OrderBook, Tick};
 use crate::keys::Topic;
+use crate::providers::ProviderKind;
 use crate::securities::symbols::Instrument;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
-use crate::providers::ProviderKind;
 
 /// What a backtest wants to pull.
 #[derive(Clone, Debug)]

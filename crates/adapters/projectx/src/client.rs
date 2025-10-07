@@ -2,10 +2,10 @@ use crate::http::client::PxHttpClient;
 use crate::http::credentials::PxCredential;
 use crate::http::error::PxError;
 use crate::http::models::{RetrieveBarsReq, RetrieveBarsResponse};
-use crate::websocket::client::{parse_px_instrument, px_format_from_instrument, PxWebSocketClient};
+use crate::websocket::client::{PxWebSocketClient, parse_px_instrument, px_format_from_instrument};
 use ahash::AHashMap;
 use async_trait::async_trait;
-use chrono::{DateTime, NaiveDate, NaiveDateTime, ParseResult, Utc, Duration as ChronoDuration};
+use chrono::{DateTime, Duration as ChronoDuration, NaiveDate, NaiveDateTime, ParseResult, Utc};
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -18,7 +18,10 @@ use tt_types::providers::{ProjectXTenant, ProviderKind};
 use tt_types::securities::futures_helpers::{extract_month_year, extract_root};
 use tt_types::securities::symbols::Exchange;
 use tt_types::securities::symbols::Instrument;
-use tt_types::server_side::traits::{CommandAck, ConnectionState, DisconnectReason, ExecutionProvider, HistoricalDataProvider, MarketDataProvider, ProviderSessionSpec};
+use tt_types::server_side::traits::{
+    CommandAck, ConnectionState, DisconnectReason, ExecutionProvider, HistoricalDataProvider,
+    MarketDataProvider, ProviderSessionSpec,
+};
 
 pub struct PXClient {
     pub provider_kind: ProviderKind,
@@ -134,7 +137,10 @@ impl PXClient {
 
     /// Retrieve historical bars for a given instrument and topic over [start, end).
     /// Paginates using the ProjectX 20,000-bars limit and normalizes timestamps to UTC.
-    pub async fn retrieve_bars(&self, req: &HistoricalRequest) -> anyhow::Result<Vec<HistoryEvent>> {
+    pub async fn retrieve_bars(
+        &self,
+        req: &HistoricalRequest,
+    ) -> anyhow::Result<Vec<HistoryEvent>> {
         // Map Topic -> Resolution and PX unit fields
         let (resolution, unit, unit_number) = match req.topic {
             Topic::Candles1s => (Resolution::Seconds(1), 1, 1),
@@ -164,8 +170,8 @@ impl PXClient {
             }
         }
         let contract_id = match contract_id {
-            None =>  px_format_from_instrument(&req.instrument),
-            Some(id) => id
+            None => px_format_from_instrument(&req.instrument),
+            Some(id) => id,
         };
         let exchange = exchange.expect("exchange must be present for known instrument");
 
@@ -219,7 +225,12 @@ impl PXClient {
                     candles.iter().map(|c| c.time_end).max(),
                 );
                 if let (Some(min_end), Some(max_end)) = (min_end_opt, max_end_opt) {
-                    info!("candles: {} from: {}, to: {}", candles.len(), min_end, max_end);
+                    info!(
+                        "candles: {} from: {}, to: {}",
+                        candles.len(),
+                        min_end,
+                        max_end
+                    );
                 } else {
                     info!("candles: {}", candles.len());
                 }
@@ -663,20 +674,26 @@ impl HistoricalDataProvider for PXClient {
     }
 
     fn supports(&self, topic: Topic) -> bool {
-        if matches!(topic,
-        Topic::Candles1d | Topic::Candles1s | Topic::Candles1h | Topic::Candles1m) {
+        if matches!(
+            topic,
+            Topic::Candles1d | Topic::Candles1s | Topic::Candles1h | Topic::Candles1m
+        ) {
             return true;
         }
         false
     }
 
-    async fn earliest_available(&self, instrument: Instrument, _topic: Topic) -> anyhow::Result<Option<DateTime<Utc>>> {
+    async fn earliest_available(
+        &self,
+        instrument: Instrument,
+        _topic: Topic,
+    ) -> anyhow::Result<Option<DateTime<Utc>>> {
         self.http.manual_update_instruments(false).await?;
         if let Some(contract) = self.http.instruments_snapshot().await.get(&instrument) {
             if let Some(ad) = contract.activation_date {
                 let dt = NaiveDateTime::from(ad);
                 let utc_time = DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc);
-                return Ok(Some(utc_time))
+                return Ok(Some(utc_time));
             }
         }
         match NaiveDate::from_ymd_opt(2023, 1, 1) {
@@ -684,7 +701,7 @@ impl HistoricalDataProvider for PXClient {
                 let dt = NaiveDateTime::from(date);
                 let utc_time = DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc);
                 Ok(Some(utc_time))
-            },
+            }
             None => Ok(None),
         }
     }

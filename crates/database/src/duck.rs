@@ -37,7 +37,8 @@ fn topic_to_resolution(topic: Topic) -> Option<Resolution> {
 
 fn resolution_key(res: Option<Resolution>) -> String {
     // Use empty string for non-candle datasets to match ensure_dataset_row inserts
-    res.map(|r| r.to_os_string()).unwrap_or_else(|| "".to_string())
+    res.map(|r| r.to_os_string())
+        .unwrap_or_else(|| "".to_string())
 }
 
 /// Create or reuse a DuckDB connection (file-backed or in-memory).
@@ -389,7 +390,7 @@ pub fn resolve_dataset_id(
 
     // Fallback: legacy rows may have empty resolution_key for candle topics
     if !res_key.is_empty() {
-        let mut rows2 = stmt.query(duckdb::params![provider, symbol, kind_key, ""]) ?;
+        let mut rows2 = stmt.query(duckdb::params![provider, symbol, kind_key, ""])?;
         if let Some(row) = rows2.next()? {
             return Ok(Some(row.get::<_, i64>(0)?));
         }
@@ -420,7 +421,13 @@ pub fn earliest_available(
     symbol: &Instrument,
     topic: Topic,
 ) -> Result<Option<SeqBound>> {
-    let Some(dataset_id) = resolve_dataset_id(conn, &provider_kind_to_db_string(provider.clone()), &symbol.to_string(), topic)? else {
+    let Some(dataset_id) = resolve_dataset_id(
+        conn,
+        &provider_kind_to_db_string(provider.clone()),
+        &symbol.to_string(),
+        topic,
+    )?
+    else {
         return Ok(None);
     };
 

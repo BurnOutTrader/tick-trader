@@ -1,4 +1,4 @@
-use chrono::{Utc};
+use chrono::Utc;
 use rust_decimal::Decimal;
 use rust_decimal::prelude::FromPrimitive;
 use serde::{Deserialize, Serialize};
@@ -6,7 +6,7 @@ use tokio::{sync::watch, task::JoinHandle};
 use tt_types::base_data::{Candle, Exchange, Resolution};
 use tt_types::securities::futures_helpers::extract_root;
 use tt_types::securities::market_hours;
-use tt_types::securities::market_hours::{candle_end, MarketHours};
+use tt_types::securities::market_hours::{MarketHours, candle_end};
 use tt_types::securities::symbols::Instrument;
 
 #[allow(unused)]
@@ -138,7 +138,7 @@ impl RetrieveBarsResponse {
         bar: &PxApiBar,
         instrument: Instrument,
         resolution: Resolution,
-        exchange: Exchange
+        exchange: Exchange,
     ) -> anyhow::Result<Candle> {
         let time_start = chrono::DateTime::parse_from_rfc3339(&bar.t)
             .map(|dt| dt.with_timezone(&Utc))
