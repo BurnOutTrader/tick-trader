@@ -7,12 +7,9 @@ use std::os::unix::net::UnixListener as StdUnixListener;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::net::UnixListener;
 use tracing::level_filters::LevelFilter;
 use tt_bus::{Router, UpstreamManager};
-use tt_database::init::init_db;
-use tt_providers::download_manager::DownloadManager;
 use tt_types::data::core::{Exchange, Utc};
 use tt_types::history::HistoricalRequest;
 use tt_types::keys::Topic;
@@ -122,8 +119,8 @@ async fn main() -> anyhow::Result<()> {
     // Wire upstream manager (providers) into the router for first/last sub notifications
     let mgr = Arc::new(tt_providers::manager::ProviderManager::new(router.clone()));
 
-    let cs = mgr.get_instruments_map(ProviderKind::ProjectX(ProjectXTenant::Topstep)).await?;
-    for (i, c) in cs {
+   let cs = mgr.get_instruments_map(ProviderKind::ProjectX(ProjectXTenant::Topstep)).await?;
+    /*for (i, c) in cs {
         let req = HistoricalRequest {
             provider_kind: ProviderKind::ProjectX(ProjectXTenant::Topstep),
             topic: Topic::Candles1m,
@@ -133,7 +130,17 @@ async fn main() -> anyhow::Result<()> {
             end: Utc::now(),
         };
         mgr.update_historical_database(req).await?;
-    }
+    }*/
+
+    let req = HistoricalRequest {
+        provider_kind: ProviderKind::ProjectX(ProjectXTenant::Topstep),
+        topic: Topic::Candles1m,
+        instrument: Instrument::from_str("MNQZ5").unwrap(),
+        exchange: Exchange::CME,
+        start: Utc::now() - chrono::Duration::days(1500),
+        end: Utc::now(),
+    };
+    mgr.update_historical_database(req).await?;
 
     router.set_backend(mgr);
 

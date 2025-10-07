@@ -176,18 +176,18 @@ impl<P: MarketDataProvider + 'static> Engine<P> {
 
 #[async_trait]
 pub trait Strategy: Send + Sync + 'static {
-    fn desired_topics(&self) -> HashSet<Topic>;
-    async fn on_start(&self) {}
-    async fn on_stop(&self) {}
-    async fn on_tick(&self, _t: Tick) {}
-    async fn on_quote(&self, _q: Bbo) {}
-    async fn on_bar(&self, _b: Candle) {}
-    async fn on_depth(&self, _d: Mbp10) {}
-    async fn on_orders_batch(&self, _b: OrdersBatch) {}
-    async fn on_positions_batch(&self, _b: PositionsBatch) {}
-    async fn on_account_delta_batch(&self, _b: AccountDeltaBatch) {}
-    async fn on_subscribe(&self, _instrument: Instrument, _topic: Topic, _success: bool) {}
-    async fn on_unsubscribe(&self, _instrument: Instrument, _topic: Topic) {}
+    fn desired_topics(&mut self) -> HashSet<Topic>;
+    async fn on_start(&mut self, _h: EngineHandle) {}
+    async fn on_stop(&mut self) {}
+    async fn on_tick(&mut self, _t: Tick) {}
+    async fn on_quote(&mut self, _q: Bbo) {}
+    async fn on_bar(&mut self, _b: Candle) {}
+    async fn on_depth(&mut self, _d: Mbp10) {}
+    async fn on_orders_batch(&mut self, _b: OrdersBatch) {}
+    async fn on_positions_batch(&mut self, _b: PositionsBatch) {}
+    async fn on_account_delta_batch(&mut self, _b: AccountDeltaBatch) {}
+    async fn on_subscribe(&mut self, _instrument: Instrument, _topic: Topic, _success: bool) {}
+    async fn on_unsubscribe(&mut self, _instrument: Instrument, _topic: Topic) {}
 }
 
 struct EngineAccountsState {
@@ -208,6 +208,229 @@ pub struct EngineRuntime {
     // Vendor securities cache and watchers
     securities_by_provider: Arc<DashMap<ProviderKind, Vec<Instrument>>>,
     watching_providers: Arc<DashMap<ProviderKind, ()>>,
+}
+
+// Shared view used by EngineHandle
+pub(crate) struct EngineRuntimeShared {
+    bus: Arc<ClientMessageBus>,
+    sub_id: ClientSubId,
+    next_corr_id: Arc<AtomicU64>,
+    pending: Arc<DashMap<u64, oneshot::Sender<Response>>>,
+    securities_by_provider: Arc<DashMap<ProviderKind, Vec<Instrument>>>,
+    watching_providers: Arc<DashMap<ProviderKind, ()>>,
+    state: Arc<Mutex<EngineAccountsState>>,
+}
+
+#[derive(Clone)]
+pub struct EngineHandle {
+    inner: Arc<EngineRuntimeShared>,
+}
+
+impl EngineHandle {
+    async fn request_with_corr<F>(&self, make: F) -> oneshot::Receiver<Response>
+    where
+        F: FnOnce(u64) -> Request,
+    {
+        let corr_id = self.inner.next_corr_id.fetch_add(1, Ordering::SeqCst);
+        let (tx, rx) = oneshot::channel();
+        self.inner.pending.insert(corr_id, tx);
+        let req = make(corr_id);
+        let _ = self
+            .inner
+            .bus
+            .handle_request(&self.inner.sub_id, req)
+            .await;
+        rx
+    }
+
+    // Market data
+    pub async fn subscribe_key(&self, topic: Topic, key: SymbolKey) -> anyhow::Result<()> {
+        // Ensure vendor watch is running for this provider
+        self.ensure_vendor_securities_watch(key.provider).await;
+        let _ = self
+            .inner
+            .bus
+            .handle_request(
+                &self.inner.sub_id,
+                Request::SubscribeKey(tt_types::wire::SubscribeKey {
+                    topic,
+                    key,
+                    latest_only: false,
+                    from_seq: 0,
+                }),
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn unsubscribe_key(&self, topic: Topic, key: SymbolKey) -> anyhow::Result<()> {
+        let _ = self
+            .inner
+            .bus
+            .handle_request(
+                &self.inner.sub_id,
+                Request::UnsubscribeKey(tt_types::wire::UnsubscribeKey { topic, key }),
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn list_instruments(
+        &self,
+        provider: ProviderKind,
+        pattern: Option<String>,
+    ) -> anyhow::Result<Vec<Instrument>> {
+        use tokio::time::timeout;
+        use tt_types::wire::{InstrumentsRequest, Response as WireResp};
+        let rx = self
+            .request_with_corr(|corr_id| {
+                Request::InstrumentsRequest(InstrumentsRequest {
+                    provider,
+                    pattern,
+                    corr_id,
+                })
+            })
+            .await;
+        match timeout(Duration::from_millis(750), rx).await {
+            Ok(Ok(WireResp::InstrumentsResponse(ir))) => Ok(ir.instruments),
+            Ok(Ok(_)) | Ok(Err(_)) | Err(_) => Ok(vec![]),
+        }
+    }
+
+    pub async fn get_instruments_map(
+        &self,
+        provider: ProviderKind,
+    ) -> anyhow::Result<Vec<(Instrument, FuturesContract)>> {
+        use tokio::time::timeout;
+        use tt_types::wire::{InstrumentsMapRequest, Response as WireResp};
+        let rx = self
+            .request_with_corr(|corr_id| {
+                Request::InstrumentsMapRequest(InstrumentsMapRequest { provider, corr_id })
+            })
+            .await;
+        match timeout(Duration::from_secs(2), rx).await {
+            Ok(Ok(WireResp::InstrumentsMapResponse(imr))) => Ok(imr.instruments),
+            Ok(Ok(_)) | Ok(Err(_)) | Err(_) => Ok(vec![]),
+        }
+    }
+
+    // Orders
+    pub async fn place_order(&self, spec: tt_types::wire::PlaceOrder) -> anyhow::Result<()> {
+        let _ = self
+            .inner
+            .bus
+            .handle_request(&self.inner.sub_id, tt_types::wire::Request::PlaceOrder(spec))
+            .await?;
+        Ok(())
+    }
+    pub async fn cancel_order(&self, spec: tt_types::wire::CancelOrder) -> anyhow::Result<()> {
+        let _ = self
+            .inner
+            .bus
+            .handle_request(&self.inner.sub_id, tt_types::wire::Request::CancelOrder(spec))
+            .await?;
+        Ok(())
+    }
+    pub async fn replace_order(&self, spec: tt_types::wire::ReplaceOrder) -> anyhow::Result<()> {
+        let _ = self
+            .inner
+            .bus
+            .handle_request(&self.inner.sub_id, tt_types::wire::Request::ReplaceOrder(spec))
+            .await?;
+        Ok(())
+    }
+
+    // Accounts/positions (cached snapshots)
+    pub async fn last_orders(&self) -> Option<OrdersBatch> {
+        let st = self.inner.state.lock().await;
+        st.last_orders.clone()
+    }
+    pub async fn last_positions(&self) -> Option<PositionsBatch> {
+        let st = self.inner.state.lock().await;
+        st.last_positions.clone()
+    }
+    pub async fn last_accounts(&self) -> Option<AccountDeltaBatch> {
+        let st = self.inner.state.lock().await;
+        st.last_accounts.clone()
+    }
+    pub async fn orders_for_instrument(&self, instr: &Instrument) -> Vec<tt_types::accounts::events::OrderUpdate> {
+        let st = self.inner.state.lock().await;
+        st.last_orders
+            .as_ref()
+            .map(|ob| ob.orders.iter().filter(|o| &o.instrument == instr).cloned().collect())
+            .unwrap_or_default()
+    }
+    pub async fn find_position_delta(&self, instr: &Instrument) -> Option<tt_types::accounts::events::PositionDelta> {
+        let st = self.inner.state.lock().await;
+        st.last_positions
+            .as_ref()
+            .and_then(|pb| pb.positions.iter().find(|p| &p.instrument == instr).cloned())
+    }
+    pub async fn is_long(&self, instr: &Instrument) -> bool {
+        self.find_position_delta(instr)
+            .await
+            .map(|p| p.net_qty_after > 0)
+            .unwrap_or(false)
+    }
+    pub async fn is_short(&self, instr: &Instrument) -> bool {
+        self.find_position_delta(instr)
+            .await
+            .map(|p| p.net_qty_after < 0)
+            .unwrap_or(false)
+    }
+    pub async fn is_flat(&self, instr: &Instrument) -> bool {
+        self.find_position_delta(instr)
+            .await
+            .map(|p| p.net_qty_after == 0)
+            .unwrap_or(true)
+    }
+
+    // Reference data cache access
+    pub fn securities_for(&self, provider: ProviderKind) -> Vec<Instrument> {
+        self.inner
+            .securities_by_provider
+            .get(&provider)
+            .map(|v| v.value().clone())
+            .unwrap_or_default()
+    }
+
+    async fn ensure_vendor_securities_watch(&self, provider: ProviderKind) {
+        if self.inner.watching_providers.contains_key(&provider) {
+            return;
+        }
+        self.inner.watching_providers.insert(provider, ());
+        // Immediate fetch using the client bus correlation helper
+        let bus = self.inner.bus.clone();
+        let sec_map = self.inner.securities_by_provider.clone();
+        async fn fetch_into(
+            bus: Arc<ClientMessageBus>,
+            provider: ProviderKind,
+            sec_map: Arc<DashMap<ProviderKind, Vec<Instrument>>>,
+        ) {
+            use tokio::time::timeout;
+            use tt_types::wire::{InstrumentsRequest, Request as WireReq, Response as WireResp};
+            let rx = bus
+                .request_with_corr(|corr_id| {
+                    WireReq::InstrumentsRequest(InstrumentsRequest {
+                        provider,
+                        pattern: None,
+                        corr_id,
+                    })
+                })
+                .await;
+            if let Ok(Ok(WireResp::InstrumentsResponse(ir))) = timeout(Duration::from_secs(3), rx).await {
+                sec_map.insert(provider, ir.instruments);
+            }
+        }
+        fetch_into(bus.clone(), provider, sec_map.clone()).await;
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(3600));
+            loop {
+                tick.tick().await;
+                fetch_into(bus.clone(), provider, sec_map.clone()).await;
+            }
+        });
+    }
 }
 
 impl EngineRuntime {
@@ -400,9 +623,7 @@ impl EngineRuntime {
             .bus
             .handle_request(
                 &self.sub_id.as_ref().expect("engine started"),
-                tt_types::wire::Request::UnsubscribeAccount(tt_types::wire::UnsubscribeAccount {
-                    key,
-                }),
+                tt_types::wire::Request::UnsubscribeAccount(tt_types::wire::UnsubscribeAccount { key }),
             )
             .await?;
         Ok(())
@@ -430,10 +651,7 @@ impl EngineRuntime {
     where
         I: IntoIterator<Item = tt_types::accounts::account::AccountName>,
     {
-        let keys = names.into_iter().map(|account_name| AccountKey {
-            provider,
-            account_name,
-        });
+        let keys = names.into_iter().map(|account_name| AccountKey { provider, account_name });
         self.initialize_accounts(keys).await
     }
 
@@ -456,10 +674,7 @@ impl EngineRuntime {
     ) -> Option<tt_types::accounts::events::PositionDelta> {
         let st = self.state.lock().await;
         st.last_positions.as_ref().and_then(|pb| {
-            pb.positions
-                .iter()
-                .find(|p| &p.instrument == instrument)
-                .cloned()
+            pb.positions.iter().find(|p| &p.instrument == instrument).cloned()
         })
     }
     pub async fn orders_for_instrument(
@@ -470,21 +685,14 @@ impl EngineRuntime {
         st.last_orders
             .as_ref()
             .map(|ob| {
-                ob.orders
-                    .iter()
-                    .filter(|o| &o.instrument == instrument)
-                    .cloned()
-                    .collect()
+                ob.orders.iter().filter(|o| &o.instrument == instrument).cloned().collect()
             })
             .unwrap_or_default()
     }
 
     /// Return cached securities list for a provider (may be empty if not fetched yet)
     pub fn securities_for(&self, provider: ProviderKind) -> Vec<Instrument> {
-        self.securities_by_provider
-            .get(&provider)
-            .map(|v| v.value().clone())
-            .unwrap_or_default()
+        self.securities_by_provider.get(&provider).map(|v| v.value().clone()).unwrap_or_default()
     }
 
     /// Ensure that we fetch instruments from the vendor now and refresh every hour.
@@ -507,16 +715,10 @@ impl EngineRuntime {
             // Use bus-level correlation to avoid depending on EngineRuntime internals
             let rx = bus
                 .request_with_corr(|corr_id| {
-                    WireReq::InstrumentsRequest(InstrumentsRequest {
-                        provider,
-                        pattern: None,
-                        corr_id,
-                    })
+                    WireReq::InstrumentsRequest(InstrumentsRequest { provider, pattern: None, corr_id })
                 })
                 .await;
-            if let Ok(Ok(WireResp::InstrumentsResponse(ir))) =
-                timeout(Duration::from_secs(3), rx).await
-            {
+            if let Ok(Ok(WireResp::InstrumentsResponse(ir))) = timeout(Duration::from_secs(3), rx).await {
                 sec_map.insert(provider, ir.instruments);
             }
         }
@@ -578,11 +780,7 @@ impl EngineRuntime {
             sub_id: None,
             rx: None,
             task: None,
-            state: Arc::new(Mutex::new(EngineAccountsState {
-                last_orders: None,
-                last_positions: None,
-                last_accounts: None,
-            })),
+            state: Arc::new(Mutex::new(EngineAccountsState { last_orders: None, last_positions: None, last_accounts: None })),
             next_corr_id: Arc::new(AtomicU64::new(1)),
             pending: Arc::new(DashMap::new()),
             securities_by_provider: Arc::new(DashMap::new()),
@@ -590,26 +788,39 @@ impl EngineRuntime {
         }
     }
 
-    pub async fn start<S: Strategy>(&mut self, strategy: Arc<S>) -> anyhow::Result<()> {
+    pub async fn start<S: Strategy>(&mut self, strategy: Arc<Mutex<S>>) -> anyhow::Result<EngineHandle> {
         let (tx, rx) = mpsc::channel::<Response>(1024);
         let sub_id = self.bus.add_client(tx).await;
         self.sub_id = Some(sub_id.clone());
         self.rx = Some(rx);
-        for topic in strategy.desired_topics().into_iter() {
-            let sub = Subscribe {
-                topic,
-                latest_only: false,
-                from_seq: 0,
-            };
-            self.bus
-                .handle_request(&sub_id, Request::Subscribe(sub))
-                .await?;
+        // Keep legacy topic-level subscribe for low churn
+        {
+            let mut strat = strategy.lock().await;
+            for topic in strat.desired_topics().into_iter() {
+                let sub = Subscribe { topic, latest_only: false, from_seq: 0 };
+                self.bus.handle_request(&sub_id, Request::Subscribe(sub)).await?;
+            }
         }
-        let mut rx = self.rx.take().expect("rx present after start");
+        let rx = self.rx.take().expect("rx present after start");
         let state = self.state.clone();
         let pending = self.pending.clone();
-        strategy.on_start().await;
-        let handle = tokio::spawn(async move {
+        // Build handle and pass to strategy
+        let shared = EngineRuntimeShared {
+            bus: self.bus.clone(),
+            sub_id: sub_id.clone(),
+            next_corr_id: self.next_corr_id.clone(),
+            pending: self.pending.clone(),
+            securities_by_provider: self.securities_by_provider.clone(),
+            watching_providers: self.watching_providers.clone(),
+            state: self.state.clone(),
+        };
+        let handle = EngineHandle { inner: Arc::new(shared) };
+        {
+            let mut strat = strategy.lock().await;
+            strat.on_start(handle.clone()).await;
+        }
+        let handle_task = tokio::spawn(async move {
+            let mut rx = rx;
             while let Some(resp) = rx.recv().await {
                 // Fulfill engine-local correlated callbacks first
                 match &resp {
@@ -625,78 +836,50 @@ impl EngineRuntime {
                             continue;
                         }
                     }
+                    Response::AccountInfoResponse(air) => {
+                        if let Some((_k, tx)) = pending.remove(&air.corr_id) {
+                            let _ = tx.send(Response::AccountInfoResponse(air.clone()));
+                            continue;
+                        }
+                    }
                     _ => {}
                 }
                 match resp {
                     Response::TickBatch(TickBatch { ticks, .. }) => {
-                        for t in ticks {
-                            strategy.on_tick(t).await;
-                        }
+                        for t in ticks { let mut strat = strategy.lock().await; strat.on_tick(t).await; }
                     }
                     Response::QuoteBatch(QuoteBatch { quotes, .. }) => {
-                        for q in quotes {
-                            strategy.on_quote(q).await;
-                        }
+                        for q in quotes { let mut strat = strategy.lock().await; strat.on_quote(q).await; }
                     }
                     Response::BarBatch(BarBatch { bars, .. }) => {
-                        for b in bars {
-                            strategy.on_bar(b).await;
-                        }
+                        for b in bars { let mut strat = strategy.lock().await; strat.on_bar(b).await; }
                     }
-                    Response::MBP10(ob) => {
-                    }
+                    Response::MBP10(ob) => { let mut strat = strategy.lock().await; strat.on_depth(ob.event).await; }
                     Response::OrdersBatch(ob) => {
-                        // Update engine account state cache then notify strategy
-                        // Clone minimal to move into async call
-                        {
-                            let mut st = state.lock().await;
-                            st.last_orders = Some(ob.clone());
-                        }
-                        strategy.on_orders_batch(ob.clone()).await;
+                        { let mut st = state.lock().await; st.last_orders = Some(ob.clone()); }
+                        { let mut strat = strategy.lock().await; strat.on_orders_batch(ob.clone()).await; }
                     }
                     Response::PositionsBatch(pb) => {
-                        {
-                            let mut st = state.lock().await;
-                            st.last_positions = Some(pb.clone());
-                        }
-                        strategy.on_positions_batch(pb.clone()).await;
+                        { let mut st = state.lock().await; st.last_positions = Some(pb.clone()); }
+                        { let mut strat = strategy.lock().await; strat.on_positions_batch(pb.clone()).await; }
                     }
                     Response::AccountDeltaBatch(ab) => {
-                        {
-                            let mut st = state.lock().await;
-                            st.last_accounts = Some(ab.clone());
-                        }
-                        strategy.on_account_delta_batch(ab.clone()).await;
+                        { let mut st = state.lock().await; st.last_accounts = Some(ab.clone()); }
+                        { let mut strat = strategy.lock().await; strat.on_account_delta_batch(ab.clone()).await; }
                     }
-                    Response::Pong(_)
-                    | Response::InstrumentsResponse(_)
-                    | Response::InstrumentsMapResponse(_)
-                    | Response::VendorData(_)
-                    | Response::Tick(_)
-                    | Response::Quote(_)
-                    | Response::Bar(_)
-                    | Response::AnnounceShm(_) => {}
-                    Response::SubscribeResponse {
-                        topic,
-                        instrument,
-                        success,
-                    } => {
-                        strategy.on_subscribe(instrument, topic, success).await;
-                    }
-                    Response::UnsubscribeResponse { topic, instrument } => {
-                        strategy.on_unsubscribe(instrument, topic).await;
-                    }
-                    Response::AccountInfoResponse(air) => {
-                        if let Some((_k, tx)) = pending.remove(&air.corr_id) {
-                            let _ = tx.send(Response::AccountInfoResponse(air.clone()));
-                        }
-                    }
+                    Response::Tick(t) => { let mut strat = strategy.lock().await; strat.on_tick(t).await; }
+                    Response::Quote(q) => { let mut strat = strategy.lock().await; strat.on_quote(q).await; }
+                    Response::Bar(b) => { let mut strat = strategy.lock().await; strat.on_bar(b).await; }
+                    Response::Pong(_) | Response::InstrumentsResponse(_) | Response::InstrumentsMapResponse(_) | Response::VendorData(_) | Response::AnnounceShm(_) | Response::AccountInfoResponse(_) => {}
+                    Response::SubscribeResponse { topic, instrument, success } => { let mut strat = strategy.lock().await; strat.on_subscribe(instrument, topic, success).await; }
+                    Response::UnsubscribeResponse { topic, instrument } => { let mut strat = strategy.lock().await; strat.on_unsubscribe(instrument, topic).await; }
                 }
             }
-            let _ = strategy.on_stop().await;
+            let mut strat = strategy.lock().await;
+            let _ = strat.on_stop().await;
         });
-        self.task = Some(handle);
-        Ok(())
+        self.task = Some(handle_task);
+        Ok(handle)
     }
 
     pub async fn stop(&mut self) {
