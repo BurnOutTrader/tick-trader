@@ -23,7 +23,7 @@ use tt_bus::Router;
 use tt_types::accounts::events::{
     AccountDelta, ClientOrderId, OrderUpdate, PositionDelta, ProviderOrderId,
 };
-use tt_types::base_data::{BookLevel, OrderBookSnapShot, Tick};
+use tt_types::data::core::{BookLevel, OrderBookSnapShot, Tick};
 use tt_types::data::models::{Price, Side, Volume};
 use tt_types::keys::Topic;
 use tt_types::providers::ProjectXTenant;
@@ -614,7 +614,7 @@ impl PxWebSocketClient {
                                                 )
                                             })
                                             .unwrap_or_else(|_| Utc::now());
-                                            let bbo = tt_types::base_data::Bbo {
+                                            let bbo = tt_types::data::core::Bbo {
                                                 symbol,
                                                 instrument: instrument.clone(),
                                                 bid,

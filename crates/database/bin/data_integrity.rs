@@ -8,7 +8,7 @@ use tt_database::duck::{earliest_available, latest_available, resolve_dataset_id
 use tt_database::init::init_db;
 use tt_database::paths::provider_kind_to_db_string;
 use tt_database::queries::{get_candles_from_date_to_latest, get_candles_in_range};
-use tt_types::base_data::{Candle, Exchange};
+use tt_types::data::core::{Candle, Exchange};
 use tt_types::data::models::Resolution;
 use tt_types::keys::Topic;
 use tt_types::providers::{ProjectXTenant, ProviderKind};

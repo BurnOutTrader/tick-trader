@@ -1,4 +1,4 @@
-use crate::base_data::{Bbo, Candle, Exchange, Tick};
+use crate::data::core::{Bbo, Candle, Exchange, Tick};
 use crate::keys::{SymbolKey, Topic};
 use crate::providers::ProviderKind;
 use crate::securities::security::FuturesContract;
@@ -100,7 +100,7 @@ pub struct OrderBookBatch {
     /// Sequence number (monotonic per topic)
     pub seq: u64,
     /// Order books in this batch
-    pub books: Vec<crate::base_data::OrderBookSnapShot>,
+    pub books: Vec<crate::data::core::OrderBookSnapShot>,
 }
 
 /// Vendor-specific binary data batch

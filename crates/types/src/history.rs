@@ -1,4 +1,4 @@
-use crate::base_data::{Bbo, Candle, Exchange, OrderBookSnapShot, Tick};
+use crate::data::core::{Bbo, Candle, Exchange, OrderBookSnapShot, Tick};
 use crate::keys::Topic;
 use crate::providers::ProviderKind;
 use crate::securities::symbols::Instrument;

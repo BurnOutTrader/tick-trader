@@ -16,7 +16,7 @@ use crate::perist::{
     persist_bbo_partition_zstd, persist_books_partition_duckdb, persist_candles_partition_zstd,
     persist_ticks_partition_zstd,
 };
-use tt_types::base_data::OrderBookSnapShot;
+use tt_types::data::core::OrderBookSnapShot;
 
 fn month_from_u32(m: u32) -> Month {
     match m {

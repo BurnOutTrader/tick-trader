@@ -202,56 +202,6 @@ pub struct Bbo {
     pub is_snapshot: Option<bool>,
 }
 
-#[derive(
-    Archive,
-    RkyvDeserialize,
-    RkyvSerialize,
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    Serialize,
-    Deserialize,
-)]
-pub struct BookLevel {
-    #[rkyv(with = crate::rkyv_types::DecimalDef)]
-    pub price: Price,
-    #[rkyv(with = crate::rkyv_types::DecimalDef)]
-    pub volume: Volume,
-    pub level: u32, // number of orders at this price level, if available
-}
-
-/// Full order book snapshot.
-///
-/// Contains bid and ask ladders up to the requested depth.
-/// Depth levels are sorted: index 0 = best price level.
-#[derive(
-    Archive,
-    RkyvDeserialize,
-    RkyvSerialize,
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    Serialize,
-    Deserialize,
-)]
-pub struct OrderBookSnapShot {
-    /// Symbol identifier (e.g. `"MNQ"`, `"AAPL"`).
-    pub symbol: String,
-    /// Symbol identifier (e.g. `"MNQZ5"`).
-    pub instrument: Instrument,
-    /// descending iteration = best to worst
-    pub bids: Vec<BookLevel>,
-    /// descending iteration = best to worst
-    pub asks: Vec<BookLevel>,
-    /// UTC timestamp of the snapshot.
-    #[rkyv(with = crate::rkyv_types::DateTimeUtcDef)]
-    pub time: DateTime<Utc>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

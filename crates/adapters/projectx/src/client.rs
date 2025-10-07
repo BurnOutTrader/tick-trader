@@ -11,7 +11,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::info;
 use tt_bus::Router;
-use tt_types::base_data::Candle;
+use tt_types::data::core::Candle;
 use tt_types::data::models::Resolution;
 use tt_types::history::{HistoricalRequest, HistoryEvent};
 use tt_types::keys::{AccountKey, SymbolKey, Topic};

@@ -13,7 +13,7 @@ use tracing::level_filters::LevelFilter;
 use tt_bus::{Router, UpstreamManager};
 use tt_database::init::init_db;
 use tt_providers::download_manager::DownloadManager;
-use tt_types::base_data::{Exchange, Utc};
+use tt_types::data::core::{Exchange, Utc};
 use tt_types::history::HistoricalRequest;
 use tt_types::keys::Topic;
 use tt_types::providers::{ProjectXTenant, ProviderKind};

@@ -13,7 +13,7 @@ use std::path::Path;
 use std::sync::Arc;
 use dotenv::dotenv;
 use tt_database::init::init_db;
-use tt_types::base_data::OrderBookSnapShot;
+use tt_types::data::core::OrderBookSnapShot;
 use tt_types::history::{HistoricalRequest, HistoryEvent};
 use tt_types::providers::ProviderKind;
 use tt_types::securities::hours::market_hours::{

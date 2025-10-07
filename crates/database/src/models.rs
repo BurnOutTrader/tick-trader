@@ -1,7 +1,7 @@
 use crate::paths::provider_kind_to_db_string;
 use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
-use tt_types::base_data::Candle;
+use tt_types::data::core::Candle;
 use tt_types::providers::ProviderKind;
 
 // ---------- Disambiguation key for same-timestamp events ----------

@@ -10,7 +10,7 @@ use rust_decimal::Decimal;
 use serde_json::Value as JsonValue;
 use std::str::FromStr;
 use tt_types::data::models::{Resolution, Side};
-use tt_types::base_data::{Bbo, BookLevel, Candle, OrderBookSnapShot, Tick};
+use tt_types::data::core::{Bbo, BookLevel, Candle, OrderBookSnapShot, Tick};
 use tt_types::keys::Topic;
 use tt_types::providers::ProviderKind;
 use tt_types::securities::symbols::{Exchange, Instrument, MarketType};

@@ -13,7 +13,7 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 use tracing::info;
 use tt_bus::{ClientMessageBus, ClientSubId};
 use tt_database::init::init_db;
-use tt_types::base_data::{Bbo, Candle, OrderBookSnapShot, Tick};
+use tt_types::data::core::{Bbo, Candle, OrderBookSnapShot, Tick};
 use tt_types::keys::{AccountKey, SymbolKey, Topic};
 use tt_types::providers::ProviderKind;
 use tt_types::securities::symbols::Instrument;

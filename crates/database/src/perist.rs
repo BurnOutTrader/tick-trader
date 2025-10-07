@@ -20,7 +20,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
-use tt_types::base_data::OrderBookSnapShot;
+use tt_types::data::core::OrderBookSnapShot;
 use tt_types::keys::Topic;
 use tt_types::providers::ProviderKind;
 use tt_types::securities::symbols::{Instrument, MarketType};

@@ -1,6 +1,6 @@
 use chrono::{Duration, TimeZone, Utc};
 use rust_decimal::Decimal;
-use tt_types::base_data::{Bbo, Candle, Tick};
+use tt_types::data::core::{Bbo, Candle, Tick};
 use tt_types::consolidators::{
     BboToCandlesConsolidator, CandlesToCandlesConsolidator, TicksToCandlesConsolidator,
     TicksToTickBarsConsolidator,

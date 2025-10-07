@@ -1,4 +1,4 @@
-use crate::base_data::{Bbo, Candle, Tick, TickBar};
+use crate::data::core::{Bbo, Candle, Tick, TickBar};
 use crate::securities::hours::market_hours::{next_session_after, session_bounds, MarketHours};
 use crate::securities::symbols::Instrument;
 use chrono::{DateTime, Duration, TimeZone, Utc};

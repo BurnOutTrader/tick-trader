@@ -3,7 +3,7 @@
 // Keep this for reference only; avoid using it in new code paths.
 use crate::paths::provider_kind_to_db_string;
 use std::path::{Path, PathBuf};
-use tt_types::base_data::Exchange;
+use tt_types::data::core::Exchange;
 use tt_types::keys::Topic;
 use tt_types::providers::ProviderKind;
 use tt_types::securities::futures_helpers::extract_root;

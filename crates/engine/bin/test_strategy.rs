@@ -10,7 +10,7 @@ use tracing::{info, warn};
 use tt_bus::ClientMessageBus;
 use tt_engine::engine::EngineRuntime;
 use tt_engine::engine::Strategy;
-use tt_types::base_data::OrderBookSnapShot;
+use tt_types::data::core::OrderBookSnapShot;
 use tt_types::keys::Topic;
 use tt_types::securities::symbols::Instrument;
 use tt_types::wire;
@@ -40,13 +40,13 @@ impl Strategy for TestStrategy {
     async fn on_stop(&self) {
         info!("strategy stop");
     }
-    async fn on_tick(&self, t: tt_types::base_data::Tick) {
+    async fn on_tick(&self, t: tt_types::data::core::Tick) {
         println!("{:?}", t)
     }
-    async fn on_quote(&self, q: tt_types::base_data::Bbo) {
+    async fn on_quote(&self, q: tt_types::data::core::Bbo) {
         println!("{:?}", q);
     }
-    async fn on_bar(&self, _b: tt_types::base_data::Candle) {}
+    async fn on_bar(&self, _b: tt_types::data::core::Candle) {}
     async fn on_depth(&self, d: OrderBookSnapShot) {
         println!("{:?}", d);
     }
