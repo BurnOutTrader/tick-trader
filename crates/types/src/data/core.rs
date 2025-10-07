@@ -24,10 +24,13 @@ pub struct Tick {
     /// Symbol identifier (e.g. `"MNQZ5"`).
     pub instrument: Instrument,
     /// Trade price.
+    #[serde(with = "crate::serde_ext::decimal")]
     pub price: Price,
     /// Trade size (quantity).
+    #[serde(with = "crate::serde_ext::decimal")]
     pub volume: Volume,
     /// UTC timestamp of the trade.
+    #[serde(with = "crate::serde_ext::datetime")]
     pub time: DateTime<Utc>,
     /// Whether the trade was buyer- or seller-initiated.
     pub side: Side,
@@ -53,21 +56,30 @@ pub struct Candle {
     /// Symbol identifier (e.g. `"MNQZ5"`).
     pub instrument: Instrument,
     /// Start time of the candle (inclusive).
+    #[serde(with = "crate::serde_ext::datetime")]
     pub time_start: DateTime<Utc>,
     /// End time of the candle (exclusive).
+    #[serde(with = "crate::serde_ext::datetime")]
     pub time_end: DateTime<Utc>,
     /// Open price.
+    #[serde(with = "crate::serde_ext::decimal")]
     pub open: Price,
     /// High price.
+    #[serde(with = "crate::serde_ext::decimal")]
     pub high: Price,
     /// Low price.
+    #[serde(with = "crate::serde_ext::decimal")]
     pub low: Price,
+    #[serde(with = "crate::serde_ext::decimal")]
     pub close: Price,
     /// Total traded volume.
+    #[serde(with = "crate::serde_ext::decimal")]
     pub volume: Volume,
     /// Volume executed at the ask.
+    #[serde(with = "crate::serde_ext::decimal")]
     pub ask_volume: Volume,
     /// Volume executed at the bid.
+    #[serde(with = "crate::serde_ext::decimal")]
     pub bid_volume: Volume,
     /// Resolution used to build this candle.
     pub resolution: Resolution,
@@ -110,21 +122,30 @@ pub struct TickBar {
     /// Symbol identifier (e.g. `"MNQZ5"`).
     pub instrument: Instrument,
     /// Start time of the candle (inclusive).
+    #[serde(with = "crate::serde_ext::datetime")]
     pub time_start: DateTime<Utc>,
     /// End time of the candle (exclusive).
+    #[serde(with = "crate::serde_ext::datetime")]
     pub time_end: DateTime<Utc>,
     /// Open price.
+    #[serde(with = "crate::serde_ext::decimal")]
     pub open: Price,
     /// High price.
+    #[serde(with = "crate::serde_ext::decimal")]
     pub high: Price,
     /// Low price.
+    #[serde(with = "crate::serde_ext::decimal")]
     pub low: Price,
+    #[serde(with = "crate::serde_ext::decimal")]
     pub close: Price,
     /// Total traded volume.
+    #[serde(with = "crate::serde_ext::decimal")]
     pub volume: Volume,
     /// Volume executed at the ask.
+    #[serde(with = "crate::serde_ext::decimal")]
     pub ask_volume: Volume,
     /// Volume executed at the bid.
+    #[serde(with = "crate::serde_ext::decimal")]
     pub bid_volume: Volume,
 }
 
@@ -145,10 +166,15 @@ pub struct Bbo {
     pub symbol: String,
     /// Symbol identifier (e.g. `"MNQZ5"`).
     pub instrument: Instrument,
+    #[serde(with = "crate::serde_ext::decimal")]
     pub bid: Price,
+    #[serde(with = "crate::serde_ext::decimal")]
     pub bid_size: Volume,
+    #[serde(with = "crate::serde_ext::decimal")]
     pub ask: Price,
+    #[serde(with = "crate::serde_ext::decimal")]
     pub ask_size: Volume,
+    #[serde(with = "crate::serde_ext::datetime")]
     pub time: DateTime<Utc>, // normalized event time
 
     // ---- Optional cross-vendor metadata ----

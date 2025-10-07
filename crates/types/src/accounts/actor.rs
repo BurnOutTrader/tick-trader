@@ -6,6 +6,7 @@ use ahash::{AHashMap, AHashSet};
 use rust_decimal::Decimal;
 use rust_decimal::prelude::FromPrimitive;
 use tokio::sync::mpsc;
+use crate::wire::encode;
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct AccountState {
@@ -56,7 +57,7 @@ impl AccountActor {
 
     fn apply(&mut self, ev: AccountEvent) {
         // Append to WAL first, then apply side effects.
-        if let Ok(bytes) = bincode::serialize(&ev) {
+        if let Ok(bytes) = encode(&ev) {
             self.wal.push(bytes);
         }
         match ev {

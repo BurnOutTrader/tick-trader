@@ -10,5 +10,6 @@ pub mod securities;
 pub mod server_side;
 pub mod wire;
 pub mod data;
+pub mod serde_ext;
 
 pub use guid::Guid;

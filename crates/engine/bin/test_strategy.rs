@@ -6,6 +6,7 @@ use rust_decimal::Decimal;
 use tokio::sync::Mutex;
 use tokio::time::sleep;
 use tracing::info;
+use tracing::level_filters::LevelFilter;
 use tt_bus::ClientMessageBus;
 use tt_engine::engine::{EngineRuntime, EngineHandle, Strategy};
 use tt_types::accounts::events::AccountDelta;
@@ -217,7 +218,7 @@ impl Strategy for TestStrategy {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_max_level(LevelFilter::DEBUG)
         .init();
 
     let addr = std::env::var("TT_BUS_ADDR").unwrap_or_else(|_| "/tmp/tick-trader.sock".to_string());

@@ -2,14 +2,14 @@ use crate::providers::ProviderKind;
 use crate::securities::futures_helpers::{
     activation_ns_default, extract_root, parse_expiry_from_instrument,
 };
-use crate::securities::hours::market_hours::{MarketHours, hours_for_exchange};
+use crate::securities::hours::market_hours::hours_for_exchange;
 use crate::securities::symbols::{Currency, Exchange, Instrument, SecurityType, get_symbol_info};
 use chrono::{DateTime, NaiveDate, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
 /// Handle that composes facts (props), calendar (hours), models, and small runtime cache.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct FuturesContract {
     pub root: String,
     pub instrument: Instrument,

@@ -130,7 +130,9 @@ impl From<Flags> for u8 { fn from(f: Flags) -> u8 { f.0 } }
     Deserialize,
 )]
 pub struct BookLevels {
+    #[serde(with = "crate::serde_ext::decimal_vec")]
     pub bid_px: Vec<Decimal>,
+    #[serde(with = "crate::serde_ext::decimal_vec")]
     pub ask_px: Vec<Decimal>,
     pub bid_sz: Vec<u32>,
     pub ask_sz: Vec<u32>,
@@ -157,8 +159,10 @@ impl BookLevels {
 pub struct Mbp10 {
     pub instrument: Instrument,
     /// Capture-server receive time (UTC).
+    #[serde(with = "crate::serde_ext::datetime")]
     pub ts_recv: DateTime<Utc>,
     /// Matching engine receive time (UTC).
+    #[serde(with = "crate::serde_ext::datetime")]
     pub ts_event: DateTime<Utc>,
 
     /// Record type sentinel (always 10 for MBP-10).
@@ -173,6 +177,7 @@ pub struct Mbp10 {
     pub depth: u8,
 
     /// Order price (wire is i64 nanos). Stored as Decimal (scale 9).
+    #[serde(with = "crate::serde_ext::decimal")]
     pub price: Decimal,
 
     /// Order quantity.

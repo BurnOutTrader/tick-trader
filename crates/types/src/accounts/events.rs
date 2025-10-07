@@ -113,7 +113,9 @@ pub struct ExecutionEvent {
     pub client_order_id: Option<ClientOrderId>,
     pub side: Side,
     pub qty: i64,
+    #[serde(with = "crate::serde_ext::decimal")]
     pub price: Decimal,
+    #[serde(with = "crate::serde_ext::decimal")]
     pub fee: Decimal,
     pub ts_ns: i64,
     pub provider_seq: Option<u64>,
@@ -143,6 +145,7 @@ pub enum AdminEvent {
 )]
 pub struct MarkEvent {
     pub instrument: Instrument,
+    #[serde(with = "crate::serde_ext::decimal")]
     pub mark_px: Decimal,
     pub ts_ns: i64,
 }
@@ -169,6 +172,7 @@ pub struct OrderUpdate {
     pub state_code: u8,
     pub leaves: i64,
     pub cum_qty: i64,
+    #[serde(with = "crate::serde_ext::decimal")]
     pub avg_fill_px: Decimal,
     pub ts_ns: i64,
 }
@@ -180,7 +184,9 @@ pub struct PositionDelta {
     pub instrument: Instrument,
     pub net_qty_before: i64,
     pub net_qty_after: i64,
+    #[serde(with = "crate::serde_ext::decimal")]
     pub realized_delta: Decimal,
+    #[serde(with = "crate::serde_ext::decimal")]
     pub open_pnl: Decimal,
     pub ts_ns: i64,
 }
@@ -189,8 +195,11 @@ pub struct PositionDelta {
     Debug, Clone, PartialEq, Serialize, Deserialize,
 )]
 pub struct AccountDelta {
+    #[serde(with = "crate::serde_ext::decimal")]
     pub equity: Decimal,
+    #[serde(with = "crate::serde_ext::decimal")]
     pub day_realized_pnl: Decimal,
+    #[serde(with = "crate::serde_ext::decimal")]
     pub open_pnl: Decimal,
     pub ts_ns: i64,
     pub can_trade: bool,
