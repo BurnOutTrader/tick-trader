@@ -780,9 +780,64 @@ impl PxWebSocketClient {
                                             }
 
                                             // Map ProjectX depth items to MBP10 incremental updates and publish individually
-                                            use tt_types::data::mbp10::{Mbp10, Action as MbpAction, BookSide as MbpSide, Flags as MbpFlags};
+                                            use tt_types::data::mbp10::{Mbp10, Action as MbpAction, BookSide as MbpSide, Flags as MbpFlags, BookLevels};
                                             use rust_decimal::prelude::FromPrimitive as _;
+
+                                            // If we received a batch array, opportunistically compose an aggregated top-10 book snapshot
+                                            // from the batch to align with Databento optional book levels.
+                                            let mut attach_snapshot_book: Option<BookLevels> = None;
+                                            if let Some(data) = data_val {
+                                                if let Some(arr) = data.as_array() {
+                                                    // Collect levels per side keyed by price
+                                                    use std::collections::BTreeMap;
+                                                    // For bids sort by price desc; for asks sort asc
+                                                    let mut bid_map: BTreeMap<i64, u32> = BTreeMap::new();
+                                                    let mut ask_map: BTreeMap<i64, u32> = BTreeMap::new();
+                                                    for itv in arr.iter() {
+                                                        if let Ok(di) = serde_json::from_value::<models::GatewayDepth>(itv.clone()) {
+                                                            // Determine side as in event mapping
+                                                            match di.r#type {
+                                                                1 | 3 | 10 => {
+                                                                    // Ask side: use total volume at price for book
+                                                                    let px_nanos = (di.price * 1_000_000_000.0).round() as i64;
+                                                                    let sz = if di.volume < 0 { 0 } else { (di.volume as u64).min(u32::MAX as u64) as u32 };
+                                                                    // For asks we want ascending sort; BTreeMap is ascending by key
+                                                                    ask_map.insert(px_nanos, sz);
+                                                                }
+                                                                2 | 4 | 9 => {
+                                                                    // Bid side
+                                                                    let px_nanos = (di.price * 1_000_000_000.0).round() as i64;
+                                                                    let sz = if di.volume < 0 { 0 } else { (di.volume as u64).min(u32::MAX as u64) as u32 };
+                                                                    bid_map.insert(px_nanos, sz);
+                                                                }
+                                                                _ => {}
+                                                            }
+                                                        }
+                                                    }
+                                                    if !bid_map.is_empty() || !ask_map.is_empty() {
+                                                        // Extract top 10 bids (highest first) and asks (lowest first)
+                                                        let mut bid_px: Vec<Decimal> = Vec::new();
+                                                        let mut bid_sz: Vec<u32> = Vec::new();
+                                                        for (px, sz) in bid_map.iter().rev().take(10) { // highest first
+                                                            bid_px.push(Decimal::from_i128_with_scale(*px as i128, 9));
+                                                            bid_sz.push(*sz);
+                                                        }
+                                                        let mut ask_px: Vec<Decimal> = Vec::new();
+                                                        let mut ask_sz: Vec<u32> = Vec::new();
+                                                        for (px, sz) in ask_map.iter().take(10) { // lowest first
+                                                            ask_px.push(Decimal::from_i128_with_scale(*px as i128, 9));
+                                                            ask_sz.push(*sz);
+                                                        }
+                                                        // Order counts not available from PX depth payload; set zeros to keep alignment
+                                                        let bid_ct = vec![0u32; bid_px.len()];
+                                                        let ask_ct = vec![0u32; ask_px.len()];
+                                                        attach_snapshot_book = Some(BookLevels { bid_px, ask_px, bid_sz, ask_sz, bid_ct, ask_ct });
+                                                    }
+                                                }
+                                            }
+
                                             let mut published = 0usize;
+                                            let mut first_in_batch = true;
                                             for it in items.into_iter() {
                                                 // Map side using API DomType definitions
                                                 // Ask(1), BestAsk(3), NewBestAsk(10) => Ask; Bid(2), BestBid(4), NewBestBid(9) => Bid; others => None
@@ -826,7 +881,10 @@ impl PxWebSocketClient {
                                                     delta_i128 as i32
                                                 };
 
-                                                let size_u32 = if it.volume < 0 { 0 } else { (it.volume as u64).min(u32::MAX as u64) as u32 };
+                                                // Use currentVolume for Trade/Fill; otherwise, use total volume at price
+                                                let use_current = matches!(it.r#type, 5 | 11);
+                                                let raw_size = if use_current { it.current_volume } else { it.volume };
+                                                let size_u32 = if raw_size < 0 { 0 } else { (raw_size as u64).min(u32::MAX as u64) as u32 };
                                                 let mut flags = MbpFlags::from(MbpFlags::F_MBP);
                                                 if matches!(it.r#type, 3 | 4 | 9 | 10) { // best bid/ask related
                                                     flags = MbpFlags(flags.0 | MbpFlags::F_TOB);
@@ -834,8 +892,18 @@ impl PxWebSocketClient {
                                                 if bad_ts {
                                                     flags = MbpFlags(flags.0 | MbpFlags::F_BAD_TS_RECV);
                                                 }
+                                                // Attach aggregated book snapshot only once per batch if available
+                                                let mut book_opt = None;
+                                                if first_in_batch {
+                                                    if let Some(bk) = attach_snapshot_book.clone() {
+                                                        flags = MbpFlags(flags.0 | MbpFlags::F_SNAPSHOT);
+                                                        book_opt = Some(bk);
+                                                    }
+                                                }
 
                                                 // Build directly instead of make_mbp10 to avoid decimal conversion corner cases
+                                                // Convert price to Decimal via integer nanos to avoid FP rounding issues
+                                                let price_nanos = (it.price * 1_000_000_000.0).round() as i64;
                                                 let event = Mbp10 {
                                                     ts_recv,
                                                     ts_event,
@@ -845,13 +913,14 @@ impl PxWebSocketClient {
                                                     action,
                                                     side,
                                                     depth: it.index.unwrap_or(0).try_into().unwrap_or(0),
-                                                    price: Decimal::from_f64(it.price).unwrap_or_else(|| Decimal::from_i32(0).unwrap()),
+                                                    price: Decimal::from_i128_with_scale(price_nanos as i128, 9),
                                                     size: size_u32,
                                                     flags,
                                                     ts_in_delta: ts_in_delta_i32,
                                                     sequence: 0,
-                                                    book: None,
+                                                    book: book_opt,
                                                 };
+                                                first_in_batch = false;
 
                                                 if let Err(e) = self.bus.publish_mbp10_for_key(&key, event).await {
                                                     log::warn!(target: "projectx.ws", "failed to publish MBP10: {}", e);
