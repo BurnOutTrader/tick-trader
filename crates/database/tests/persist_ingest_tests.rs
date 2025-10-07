@@ -4,7 +4,7 @@ use tt_database::duck::{create_partitions_schema, earliest_available, latest_ava
 use tt_database::ingest::{ingest_bbo, ingest_candles, ingest_ticks};
 use tt_database::init::create_identity_schema_if_needed;
 use tt_database::models::{BboRow, CandleRow, TickRow};
-use tt_database::paths::{data_file_name, partition_dir};
+use tt_database::paths::{data_file_name, partition_dir, provider_kind_to_db_string};
 use tt_types::base_data::Resolution;
 use tt_types::keys::Topic;
 use tt_types::providers::{ProjectXTenant, ProviderKind};
@@ -21,11 +21,11 @@ fn temp_root() -> tempfile::TempDir { tempfile::tempdir().expect("tempdir") }
 
 // ---------- test data helpers ----------
 
-fn fake_ticks(provider_s: &str, symbol_s: &str, base_ns: i64, n: usize) -> Vec<TickRow> {
+fn fake_ticks(provider_s: ProviderKind, symbol_s: &str, base_ns: i64, n: usize) -> Vec<TickRow> {
     let mut v = Vec::with_capacity(n);
     for i in 0..n {
         v.push(TickRow {
-            provider: provider_s.to_string(),
+            provider: provider_kind_to_db_string(provider_s),
             symbol_id: symbol_s.to_string(),
             price: 10000.0 + i as f64,
             size: 1.0,
@@ -108,8 +108,7 @@ fn test_ingest_ticks_merge_monthly_file() {
     let root = tmp.path();
 
     // Provider string must match writer mapping (see provider_kind_to_db_string)
-    let provider_kind = ProviderKind::ProjectX(ProjectXTenant::Demo);
-    let provider_s = "projectx"; // mapping for ProjectX
+    let provider_s = ProviderKind::ProjectX(ProjectXTenant::Topstep);
     let instrument = Instrument::from_str("TESTSM").unwrap();
     let market = MarketType::Futures;
 
@@ -121,15 +120,15 @@ fn test_ingest_ticks_merge_monthly_file() {
     let mut batch2 = fake_ticks(provider_s, &instrument.to_string(), base_ns + 3_000_000, 5);
     batch2.push(batch1[4].clone());
 
-    let out1 = ingest_ticks(&conn, &provider_kind, &instrument, market, Topic::Ticks, &batch1, root, 9).expect("ingest1");
-    let out2 = ingest_ticks(&conn, &provider_kind, &instrument, market, Topic::Ticks, &batch2, root, 9).expect("ingest2");
+    let out1 = ingest_ticks(&conn, &provider_s, &instrument, market, Topic::Ticks, &batch1, root, 9).expect("ingest1");
+    let out2 = ingest_ticks(&conn, &provider_s, &instrument, market, Topic::Ticks, &batch2, root, 9).expect("ingest2");
 
     assert_eq!(out1.len(), 1);
     assert_eq!(out2.len(), 1);
     assert_eq!(out1[0], out2[0]);
 
     let year = day.year() as u32;
-    let expected_dir = partition_dir(root, provider_kind, market, &instrument, Topic::Ticks, year);
+    let expected_dir = partition_dir(root, provider_s, market, &instrument, Topic::Ticks, year);
     let expected_name = data_file_name(&instrument, Topic::Ticks, NaiveDate::from_ymd_opt(day.year(), day.month(), 1).unwrap());
     let expected_path = expected_dir.join(expected_name);
     assert_eq!(out1[0], expected_path);
@@ -171,9 +170,9 @@ fn test_candles_and_bbo_monthly_paths_and_catalog() {
     let expected_dir_bbo = partition_dir(root, provider_kind, market, &instrument, Topic::Quotes, day.year() as u32);
     let expected_name_bbo = data_file_name(&instrument, Topic::Quotes, NaiveDate::from_ymd_opt(day.year(), day.month(), 1).unwrap());
     assert_eq!(out1[0], expected_dir_bbo.join(expected_name_bbo));
-
+    let provider = ProviderKind::ProjectX(ProjectXTenant::Demo);
     // Catalog smoke: earliest/latest across these inserts
-    let e = earliest_available(&conn, "projectx", &instrument.to_string(), Topic::Quotes).unwrap().unwrap();
+    let e = earliest_available(&conn, &provider, &instrument, Topic::Quotes).unwrap().unwrap();
     let l = latest_available(&conn, "projectx", &instrument.to_string(), Topic::Quotes).unwrap().unwrap();
     assert!(e.ts <= l.ts);
 }
@@ -187,20 +186,20 @@ fn test_earliest_latest_ticks_across_days() {
     let provider_kind = ProviderKind::ProjectX(ProjectXTenant::Demo);
     let instrument = Instrument::from_str("TESTSM").unwrap();
     let market = MarketType::Futures;
-
+   let  provider_s = ProviderKind::ProjectX(ProjectXTenant::Demo);
     let day1 = NaiveDate::from_ymd_opt(2025, 6, 10).unwrap();
     let dt1 = Utc.with_ymd_and_hms(2025, 6, 10, 12, 0, 0).unwrap();
     let base1 = dt1.timestamp_nanos_opt().unwrap();
-    let b1 = fake_ticks("projectx", &instrument.to_string(), base1, 3);
+    let b1 = fake_ticks(provider_s, &instrument.to_string(), base1, 3);
     let _ = ingest_ticks(&conn, &provider_kind, &instrument, market, Topic::Ticks, &b1, root, 9).unwrap();
 
     let day2 = NaiveDate::from_ymd_opt(2025, 6, 11).unwrap();
     let dt2 = Utc.with_ymd_and_hms(2025, 6, 11, 12, 0, 0).unwrap();
     let base2 = dt2.timestamp_nanos_opt().unwrap();
-    let b2 = fake_ticks("projectx", &instrument.to_string(), base2, 5);
+    let b2 = fake_ticks(provider_s, &instrument.to_string(), base2, 5);
     let _ = ingest_ticks(&conn, &provider_kind, &instrument, market, Topic::Ticks, &b2, root, 9).unwrap();
 
-    let e = earliest_available(&conn, "projectx", &instrument.to_string(), Topic::Ticks).unwrap().unwrap();
+    let e = earliest_available(&conn, &provider_s, &instrument, Topic::Ticks).unwrap().unwrap();
     let l = latest_available(&conn, "projectx", &instrument.to_string(), Topic::Ticks).unwrap().unwrap();
     assert_eq!(e.ts.date_naive(), day1);
     assert_eq!(l.ts.date_naive(), day2);

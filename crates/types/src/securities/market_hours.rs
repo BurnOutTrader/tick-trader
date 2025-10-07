@@ -144,24 +144,37 @@ impl MarketHours {
         let ssm = local.num_seconds_from_midnight();
 
         // --- Hard gate known CME/CFE halts (source: CME rule filings & specs) ---
-        if matches!(self.exchange, Exchange::CME | Exchange::CFE) {
-            // 15:15–15:30 CT trading halt; 16:00–17:00 CT daily maintenance (Mon–Thu)
-            let ct_1515 = 15 * 3600 + 15 * 60;
-            let ct_1530 = 15 * 3600 + 30 * 60;
-            let ct_1600 = 16 * 3600;
-            let ct_1700 = 17 * 3600;
+        // CFE (VIX) really does halt 15:15–15:30 and maintenance 16:00–17:00 Mon–Thu
+        match self.exchange {
+            // CFE (VIX) really does halt 15:15–15:30 and maintenance 16:00–17:00 Mon–Thu
+            Exchange::CFE => {
+                let ct_1515 = 15 * 3600 + 15 * 60;
+                let ct_1530 = 15 * 3600 + 30 * 60;
+                let ct_1600 = 16 * 3600;
+                let ct_1700 = 17 * 3600;
 
-            // Halt window every weekday (Mon–Fri)
-            let is_weekday = w_today <= 4;
-            if is_weekday && ssm >= ct_1515 && ssm < ct_1530 {
-                return false;
+                let is_weekday = w_today <= 4;     // Mon–Fri
+                let is_mon_thu = w_today <= 3;     // Mon–Thu
+
+                if is_weekday && ssm >= ct_1515 && ssm < ct_1530 {
+                    return false;
+                }
+                if is_mon_thu && ssm >= ct_1600 && ssm < ct_1700 {
+                    return false;
+                }
             }
 
-            // Maintenance applies Mon–Thu (no Friday overnight open)
-            let is_mon_thu = w_today <= 3;
-            if is_mon_thu && ssm >= ct_1600 && ssm < ct_1700 {
-                return false;
+            // CME equity-index (ES/NQ/MNQ/etc.): NO 15:15–15:30 hard close; only maintenance 16:00–17:00 Mon–Thu.
+            Exchange::CME => {
+                let ct_1600 = 16 * 3600;
+                let ct_1700 = 17 * 3600;
+                let is_mon_thu = w_today <= 3; // Mon–Thu
+                if is_mon_thu && ssm >= ct_1600 && ssm < ct_1700 {
+                    return false;
+                }
             }
+
+            _ => {}
         }
         // -----------------------------------------------------------------------
         // ...then continue with your existing checks
@@ -332,9 +345,9 @@ pub fn candle_end(
 
     match resolution {
         Resolution::Seconds(_) | Resolution::Minutes(_) | Resolution::Hours(_) => {
-            // Use next bar boundary from market hours (skips closed periods)
-            let end_exclusive = hours.next_bar_end(time_open, resolution);
-            Some(minus_1ns(end_exclusive))
+            // For intraday, find the next permitted bar boundary and back up 1ns.
+            let end_excl = hours.next_bar_end(time_open, resolution);
+            Some(minus_1ns(end_excl))
         }
         Resolution::Daily => {
             if hours.has_daily_close {
@@ -389,6 +402,7 @@ pub fn candle_end(
                 Some(minus_1ns(sunday_17_local))
             }
         }
+        _ => None,
     }
 }
 
@@ -453,7 +467,7 @@ pub fn hours_for_exchange(exch: Exchange) -> MarketHours {
             regular: vec![
                 // Day session (Mon–Fri): 08:30–13:20 CT
                 SessionRule {
-                    days: [false, true, true, true, true, true, false],
+                    days: [true, true, true, true, true, false, false],
                     open_ssm: 8 * 3600 + 30 * 60,
                     close_ssm: 13 * 3600 + 20 * 60,
                 },
@@ -525,7 +539,7 @@ pub fn hours_for_exchange(exch: Exchange) -> MarketHours {
             regular: vec![
                 // Regular: 08:00–22:00 local
                 SessionRule {
-                    days: [false, true, true, true, true, true, false],
+                    days: [true, true, true, true, true, false, false],
                     open_ssm: 8 * 3600,
                     close_ssm: 22 * 3600,
                 },
@@ -533,7 +547,7 @@ pub fn hours_for_exchange(exch: Exchange) -> MarketHours {
             extended: vec![
                 // Asian hours: 01:00–08:00 local
                 SessionRule {
-                    days: [false, true, true, true, true, true, false],
+                    days: [true, true, true, true, true, false, false],
                     open_ssm: 1 * 3600,
                     close_ssm: 8 * 3600,
                 },
@@ -553,8 +567,9 @@ pub fn hours_for_exchange(exch: Exchange) -> MarketHours {
             regular: vec![],
             extended: vec![
                 // Wrapped: 20:00 → 18:00 next day ET (common ICE US schedule)
+                // Sun + Mon–Thu open, no Fri overnight, Sat closed
                 SessionRule {
-                    days: [true, true, true, true, true, true, false],
+                    days: [true, true, true, true, false, false, true],
                     open_ssm: 20 * 3600,
                     close_ssm: 18 * 3600,
                 },
@@ -573,7 +588,7 @@ pub fn hours_for_exchange(exch: Exchange) -> MarketHours {
             exchange: Exchange::ICEEU,
             tz: Europe::London,
             regular: vec![SessionRule {
-                days: [false, true, true, true, true, true, false],
+                days: [true, true, true, true, true, false, false],
                 open_ssm: 1 * 3600,
                 close_ssm: 23 * 3600,
             }],
@@ -593,7 +608,7 @@ pub fn hours_for_exchange(exch: Exchange) -> MarketHours {
             regular: vec![
                 // T session (Mon–Fri): 07:10–20:00 SGT
                 SessionRule {
-                    days: [false, true, true, true, true, true, false],
+                    days: [true, true, true, true, true, false, false],
                     open_ssm: 7 * 3600 + 10 * 60,
                     close_ssm: 20 * 3600,
                 },
@@ -601,7 +616,7 @@ pub fn hours_for_exchange(exch: Exchange) -> MarketHours {
             extended: vec![
                 // T+1 session (wrap): 20:00:01 → 05:15 next day SGT
                 SessionRule {
-                    days: [false, true, true, true, true, true, false],
+                    days: [true, true, true, true, true, false, false],
                     open_ssm: 20 * 3600,
                     close_ssm: 5 * 3600 + 15 * 60,
                 },
@@ -614,8 +629,9 @@ pub fn hours_for_exchange(exch: Exchange) -> MarketHours {
 
         // ------------------------------------------------------------
         // CFE (Cboe Futures – VIX default profile)
-        // Nearly 24x5 with daily 15-min halt 15:15–15:30 CT and a short 15:00–16:00 window;
+        // Nearly 24x5 with daily 15-min halt 15:15–15:30 CT and a short 15:30–16:00 window;
         // use RTH 08:30–15:15, plus 15:30–16:00, plus 17:00–08:30 wrap (Sun open at 17:00).
+        // The hard-gate 15:15–15:30 and 16:00–17:00 already enforce the 15-min halt and break.
         // ------------------------------------------------------------
         Exchange::CFE => MarketHours {
             exchange: Exchange::CFE,
@@ -900,3 +916,5 @@ pub fn next_session_open_after(mh: &MarketHours, after_utc: DateTime<Utc>) -> Da
     // Fallback: if we didn’t find anything (odd calendar), nudge by 1 day in UTC
     after_utc + Duration::days(1)
 }
+
+

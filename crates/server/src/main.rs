@@ -123,14 +123,15 @@ async fn main() -> anyhow::Result<()> {
     let mgr = Arc::new(tt_providers::manager::ProviderManager::new(router.clone()));
 
     let cs = mgr.get_instruments_map(ProviderKind::ProjectX(ProjectXTenant::Topstep)).await?;
-    let topics = vec![Topic::Candles1m, Topic::Candles1s, Topic::Candles1h, Topic::Candles1d];
+    let topics = vec![Topic::Candles1m, Topic::Candles1h, Topic::Candles1m];
+    let instrument = vec![(Instrument::from_str("MNQZ5").unwrap(), Exchange::CME)];
     for topic in topics {
-        for (i, c) in &cs {
+        for (i, c) in &instrument {
             let req = HistoricalRequest {
                 provider_kind: ProviderKind::ProjectX(ProjectXTenant::Topstep),
                 topic,
                 instrument: i.clone(),
-                exchange: c.exchange,
+                exchange: c.clone(),
                 start: Utc::now() - chrono::Duration::days(1500),
                 end: Utc::now(),
             };

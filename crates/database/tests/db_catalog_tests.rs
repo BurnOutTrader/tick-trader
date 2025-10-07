@@ -1,3 +1,4 @@
+use std::str::FromStr;
 use chrono::{NaiveDate, TimeZone, Utc};
 use tt_database::duck::{
     create_partitions_schema, earliest_available, latest_available, prune_missing_partitions,
@@ -5,7 +6,10 @@ use tt_database::duck::{
     upsert_symbol,
 };
 use tt_database::init::create_identity_schema_if_needed;
+use tt_database::paths::provider_kind_to_db_string;
 use tt_types::keys::Topic;
+use tt_types::providers::{ProjectXTenant, ProviderKind};
+use tt_types::securities::symbols::Instrument;
 
 fn setup_conn() -> duckdb::Connection {
     let conn = duckdb::Connection::open_in_memory().expect("duckdb mem");
@@ -20,10 +24,10 @@ fn test_catalog_earliest_latest_ticks_across_partitions() {
     let conn = setup_conn();
 
     // Create dataset for provider/symbol/topic
-    let provider = "TESTPROV";
-    let symbol = "TESTSYM";
-    let provider_id = upsert_provider(&conn, provider).unwrap();
-    let symbol_id = upsert_symbol(&conn, provider_id, symbol).unwrap();
+    let provider = ProviderKind::ProjectX(ProjectXTenant::Topstep);
+    let symbol = Instrument::from_str("MNQZ5").unwrap();
+    let provider_id = upsert_provider(&conn, &provider_kind_to_db_string(provider)).unwrap();
+    let symbol_id = upsert_symbol(&conn, provider_id, &symbol.to_string()).unwrap();
     let dataset_id = upsert_dataset(&conn, provider_id, symbol_id, Topic::Ticks, None).unwrap();
 
     // Two day partitions with increasing time ranges
@@ -67,12 +71,12 @@ fn test_catalog_earliest_latest_ticks_across_partitions() {
     .unwrap();
 
     // Resolve earliest/latest via high-level helpers
-    let e = earliest_available(&conn, provider, symbol, Topic::Ticks)
+    let e = earliest_available(&conn, &provider, &symbol, Topic::Ticks)
         .unwrap()
         .unwrap();
     assert_eq!(e.ts.date_naive(), day1);
 
-    let l = latest_available(&conn, provider, symbol, Topic::Ticks)
+    let l = latest_available(&conn, &provider_kind_to_db_string(provider), &symbol.to_string(), Topic::Ticks)
         .unwrap()
         .unwrap();
     assert_eq!(l.ts.date_naive(), day2);

@@ -6,8 +6,8 @@
 //! - Prune catalog rows that reference missing files and quarantine unreadable Parquet.
 //! - Resolve dataset IDs from human-friendly keys and bridge Topic -> resolution keys.
 
-use crate::models::SeqBound;
-use crate::paths::topic_to_db_string;
+use crate::models::{Provider, SeqBound};
+use crate::paths::{provider_kind_to_db_string, topic_to_db_string};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use duckdb::{Connection, Error, OptionalExt, params};
@@ -16,6 +16,8 @@ use thiserror::Error;
 use tracing::error;
 use tt_types::base_data::Resolution;
 use tt_types::keys::Topic;
+use tt_types::providers::ProviderKind;
+use tt_types::securities::symbols::Instrument;
 
 // --- Helpers bridging legacy dataset keys to new Topic layout ---
 fn topic_to_kind_key(topic: Topic) -> String {
@@ -414,11 +416,11 @@ fn ns_to_dt(ns: i64) -> std::result::Result<DateTime<Utc>, Error> {
 
 pub fn earliest_available(
     conn: &Connection,
-    provider: &str,
-    symbol: &str,
+    provider: &ProviderKind,
+    symbol: &Instrument,
     topic: Topic,
 ) -> Result<Option<SeqBound>> {
-    let Some(dataset_id) = resolve_dataset_id(conn, provider, symbol, topic)? else {
+    let Some(dataset_id) = resolve_dataset_id(conn, &provider_kind_to_db_string(provider.clone()), &symbol.to_string(), topic)? else {
         return Ok(None);
     };
 
@@ -477,8 +479,8 @@ pub fn latest_available(
 /// Bulk variant: fetch earliest for many symbols at once.
 pub fn earliest_for_many(
     conn: &Connection,
-    provider: &str,
-    symbols: &[&str],
+    provider: &ProviderKind,
+    symbols: &[&Instrument],
     topic: Topic,
 ) -> Result<Vec<(String, Option<SeqBound>)>> {
     let mut out = Vec::with_capacity(symbols.len());

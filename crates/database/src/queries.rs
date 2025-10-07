@@ -445,36 +445,34 @@ pub fn get_candles_in_range(
     }
 
     let src = build_read_parquet_list(&paths)?;
-    let start_us = dt_to_us(start);
-    let end_us = dt_to_us(end);
+    let start_ns = start.timestamp_nanos_opt().unwrap_or(0);
+    let end_ns = end.timestamp_nanos_opt().unwrap_or(0);
 
     let sql = format!(
         r#"
         select
-            symbol, exchange,
+            symbol_id, exchange,
             CAST(open  AS VARCHAR), CAST(high  AS VARCHAR),
             CAST(low   AS VARCHAR), CAST(close AS VARCHAR),
             CAST(volume      AS VARCHAR),
             CAST(ask_volume  AS VARCHAR),
             CAST(bid_volume  AS VARCHAR),
-            CAST(num_trades  AS VARCHAR),
-            time_start_us, time_end_us
+            time_start_ns, time_end_ns
         from {src}
-        where symbol = ?
-          and time_start_us >= ?
-          and time_end_us   <= ?
-        order by time_start_us asc
+        where time_start_ns >= ?
+          and time_end_ns   <= ?
+        order by time_start_ns asc
         "#,
         src = src
     );
 
     let mut stmt = conn.prepare(&sql)?;
-    let mut rows = stmt.query(params![instrument.to_string(), start_us, end_us])?;
+    let mut rows = stmt.query(params![start_ns, end_ns])?;
 
     let mut out = Vec::new();
     while let Some(r) = rows.next()? {
         let sym: String = r.get(0)?;
-        let exch: String = r.get(1)?;
+        let _exch: String = r.get(1)?; // exchange currently unused in Candle
 
         let open_s: String = r.get(2)?;
         let high_s: String = r.get(3)?;
@@ -483,17 +481,14 @@ pub fn get_candles_in_range(
         let volume_s: String = r.get(6)?;
         let ask_volume_s: String = r.get(7)?;
         let bid_volume_s: String = r.get(8)?;
-        let num_trades_s: String = r.get(9)?;
-        let ts_start_us: i64 = r.get(10)?;
-        let ts_end_us: i64 = r.get(11)?;
+        let ts_start_ns: i64 = r.get(9)?;
+        let ts_end_ns: i64 = r.get(10)?;
 
-        let exchange =
-            Exchange::from_str(&exch).ok_or_else(|| anyhow!("unknown exchange '{exch}'"))?;
         out.push(Candle {
             symbol: sym,
             instrument: instrument.clone(),
-            time_start: us_to_dt(ts_start_us),
-            time_end: us_to_dt(ts_end_us),
+            time_start: epoch_ns_to_dt(ts_start_ns),
+            time_end: epoch_ns_to_dt(ts_end_ns),
             open: Decimal::from_str(&open_s)?,
             high: Decimal::from_str(&high_s)?,
             low: Decimal::from_str(&low_s)?,
@@ -507,7 +502,6 @@ pub fn get_candles_in_range(
     Ok(out)
 }
 
-/// Convenience: candles from `start_date` to latest available.
 pub fn get_candles_from_date_to_latest(
     conn: &Connection,
     provider: &str,

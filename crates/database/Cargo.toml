@@ -26,3 +26,8 @@ lazy_static = {workspace = true}
 [features]
 # Gate legacy query/update modules until refactored to monthly layout
 queries = []
+default = ["queries"]
+
+[[bin]]
+name = "data_integrity"
+path = "bin/data_integrity.rs"

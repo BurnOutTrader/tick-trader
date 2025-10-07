@@ -25,7 +25,6 @@ use tokio::task::JoinHandle;
 use tracing::info;
 use uuid::Uuid;
 use tokio::time::{timeout, Duration as TokioDuration};
-use tt_database::duck::earliest_available;
 
 pub struct Entry {
     result: Mutex<Option<anyhow::Result<()>>>,
@@ -200,7 +199,6 @@ async fn run_download(
 
     let provider_code = client.name();
     let market_type = exchange_market_type(req.exchange);
-    let hours = hours_for_exchange(req.exchange);
 
     let earliest = client.earliest_available(req.instrument.clone(), req.topic).await?;
     let now = Utc::now();
@@ -227,24 +225,10 @@ async fn run_download(
         return Ok(());
     }
 
-    // If we're on a fully-closed calendar day for intraday-ish kinds, jump to next open.
-    if req.topic != Topic::Candles1d && hours.is_closed_all_day_at(cursor, CAL_TZ, SessionKind::Both) {
-        let open = next_session_open_after(&hours, cursor);
-        if open > cursor {
-            cursor = open;
-        }
-    }
-
     while cursor < now {
         // Pick a batch window that fits the kind/resolution.
         let span = choose_span(resolution);
         let end = (cursor + span).min(now);
-
-        // For intraday-ish kinds, skip windows that are 100% closed.
-        if req.topic != Topic::Candles1d && window_is_all_closed(&hours, CAL_TZ, cursor, end) {
-            cursor = next_session_open_after(&hours, cursor);
-            continue;
-        }
 
         let req = HistoricalRequest {
             provider_kind:req.provider_kind,
@@ -427,9 +411,6 @@ async fn run_download(
         // Advance cursor by what we *actually* got, otherwise by window end.
         if let Some(ts) = max_ts {
             cursor = ts + Duration::nanoseconds(1);
-        } else if wants_intraday {
-            let next_open = next_session_open_after(&hours, cursor);
-            cursor = next_open.max(end + Duration::nanoseconds(1));
         } else {
             cursor = end + Duration::seconds(1);
         }
