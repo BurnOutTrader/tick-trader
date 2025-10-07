@@ -5,7 +5,7 @@ use tt_database::ingest::{ingest_bbo, ingest_candles, ingest_ticks};
 use tt_database::init::create_identity_schema_if_needed;
 use tt_database::models::{BboRow, CandleRow, TickRow};
 use tt_database::paths::{data_file_name, partition_dir, provider_kind_to_db_string};
-use tt_types::base_data::Resolution;
+use tt_types::data::models::Resolution;
 use tt_types::keys::Topic;
 use tt_types::providers::{ProjectXTenant, ProviderKind};
 use tt_types::securities::symbols::{Instrument, MarketType};

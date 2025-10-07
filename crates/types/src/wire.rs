@@ -100,7 +100,7 @@ pub struct OrderBookBatch {
     /// Sequence number (monotonic per topic)
     pub seq: u64,
     /// Order books in this batch
-    pub books: Vec<crate::base_data::OrderBook>,
+    pub books: Vec<crate::base_data::OrderBookSnapShot>,
 }
 
 /// Vendor-specific binary data batch

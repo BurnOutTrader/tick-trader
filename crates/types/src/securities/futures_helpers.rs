@@ -1,4 +1,4 @@
-use crate::base_data::Price;
+use crate::data::models::Price;
 use crate::securities::symbols::Instrument;
 use chrono::{Datelike, Duration, Months, NaiveDate, NaiveTime};
 use rust_decimal::Decimal;

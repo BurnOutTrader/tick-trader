@@ -16,7 +16,7 @@ use crate::perist::{
     persist_bbo_partition_zstd, persist_books_partition_duckdb, persist_candles_partition_zstd,
     persist_ticks_partition_zstd,
 };
-use tt_types::base_data::OrderBook;
+use tt_types::base_data::OrderBookSnapShot;
 
 fn month_from_u32(m: u32) -> Month {
     match m {
@@ -182,7 +182,7 @@ pub fn ingest_books(
     instrument: &Instrument,
     market_type: MarketType,
     topic: Topic,
-    rows: &[OrderBook],
+    rows: &[OrderBookSnapShot],
     data_root: &Path,
 ) -> Result<Vec<PathBuf>> {
     if rows.is_empty() {
@@ -191,7 +191,7 @@ pub fn ingest_books(
     let buckets = group_by_year_month(rows, |b| b.time.timestamp_nanos_opt().unwrap_or(0))?;
     let mut out_paths = Vec::with_capacity(buckets.len());
     for ((_year, month), group) in buckets {
-        let mut scratch: Vec<OrderBook> = Vec::with_capacity(group.len());
+        let mut scratch: Vec<OrderBookSnapShot> = Vec::with_capacity(group.len());
         for r in group {
             scratch.push(r.clone());
         }

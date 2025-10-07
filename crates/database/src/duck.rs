@@ -14,7 +14,7 @@ use duckdb::{Connection, Error, OptionalExt, params};
 use std::path::Path;
 use thiserror::Error;
 use tracing::error;
-use tt_types::base_data::Resolution;
+use tt_types::data::models::Resolution;
 use tt_types::keys::Topic;
 use tt_types::providers::ProviderKind;
 use tt_types::securities::symbols::Instrument;

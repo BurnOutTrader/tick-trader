@@ -1,10 +1,10 @@
-use crate::base_data::{Bbo, Candle, Resolution, Side, Tick, TickBar};
-use crate::securities::hours::market_hours::{MarketHours, next_session_after, session_bounds};
+use crate::base_data::{Bbo, Candle, Tick, TickBar};
+use crate::securities::hours::market_hours::{next_session_after, session_bounds, MarketHours};
 use crate::securities::symbols::Instrument;
 use chrono::{DateTime, Duration, TimeZone, Utc};
-use rust_decimal::{Decimal, dec};
+use rust_decimal::{dec, Decimal};
 use std::sync::Arc;
-
+use crate::data::models::{Resolution, Side};
 // ===================== Helpers =====================
 
 fn end_inclusive(end: DateTime<Utc>) -> DateTime<Utc> {

@@ -1,13 +1,12 @@
 use anyhow::Context;
-use chrono::Utc;
 use rust_decimal::Decimal;
 use rust_decimal::prelude::FromPrimitive;
 use serde::{Deserialize, Serialize};
 use tokio::{sync::watch, task::JoinHandle};
-use tt_types::base_data::{Candle, Exchange, Resolution};
+use tt_types::base_data::{Candle, Exchange};
+use tt_types::data::models::Resolution;
 use tt_types::securities::futures_helpers::extract_root;
-use tt_types::securities::hours::market_hours;
-use tt_types::securities::hours::market_hours::{MarketHours, candle_end};
+use tt_types::securities::hours::market_hours::candle_end;
 use tt_types::securities::symbols::Instrument;
 
 #[allow(unused)]

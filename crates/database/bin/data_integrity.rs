@@ -1,7 +1,6 @@
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Duration, NaiveDate, TimeZone, Utc};
 use duckdb;
-use rust_decimal::Decimal;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::str::FromStr;
@@ -9,10 +8,11 @@ use tt_database::duck::{earliest_available, latest_available, resolve_dataset_id
 use tt_database::init::init_db;
 use tt_database::paths::provider_kind_to_db_string;
 use tt_database::queries::{get_candles_from_date_to_latest, get_candles_in_range};
-use tt_types::base_data::{Candle, Exchange, Resolution};
+use tt_types::base_data::{Candle, Exchange};
+use tt_types::data::models::Resolution;
 use tt_types::keys::Topic;
 use tt_types::providers::{ProjectXTenant, ProviderKind};
-use tt_types::securities::hours::market_hours::{MarketHours, hours_for_exchange, next_session_after};
+use tt_types::securities::hours::market_hours::{hours_for_exchange, next_session_after, MarketHours};
 use tt_types::securities::symbols::Instrument;
 
 const GAP_TOLERANCE_BARS: i64 = 200; // ignore gaps of 3 bars (minutes) or fewer

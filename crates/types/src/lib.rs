@@ -10,5 +10,6 @@ pub mod rkyv_types;
 pub mod securities;
 pub mod server_side;
 pub mod wire;
+pub mod data;
 
 pub use guid::Guid;

@@ -1,6 +1,6 @@
 use std::cmp::{Ordering, Reverse};
 use std::collections::BinaryHeap;
-use tt_types::base_data::{Bbo, Candle, OrderBook, Tick};
+use tt_types::base_data::{Bbo, Candle, OrderBookSnapShot, Tick};
 
 /// Iterator wrapper around `KMerge` so you can hand it to for-loops easily.
 pub struct KMergeIter<'a, T: TimeKey> {
@@ -89,7 +89,7 @@ impl TimeKey for Bbo {
     }
 }
 
-impl TimeKey for OrderBook {
+impl TimeKey for OrderBookSnapShot {
     #[inline]
     fn time_ns(&self) -> i128 {
         self.time.timestamp_nanos_opt().unwrap() as i128

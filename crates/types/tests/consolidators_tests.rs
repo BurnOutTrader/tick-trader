@@ -1,10 +1,11 @@
 use chrono::{Duration, TimeZone, Utc};
 use rust_decimal::Decimal;
-use tt_types::base_data::{Bbo, Candle, Resolution, Side, Tick};
+use tt_types::base_data::{Bbo, Candle, Tick};
 use tt_types::consolidators::{
     BboToCandlesConsolidator, CandlesToCandlesConsolidator, TicksToCandlesConsolidator,
     TicksToTickBarsConsolidator,
 };
+use tt_types::data::models::{Resolution, Side};
 use tt_types::securities::symbols::Instrument;
 
 fn d(v: i64) -> Decimal {

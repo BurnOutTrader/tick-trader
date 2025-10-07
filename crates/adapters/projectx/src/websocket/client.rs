@@ -14,7 +14,7 @@ use serde_json::Value;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use tokio::sync::{RwLock, mpsc};
+use tokio::sync::{mpsc, RwLock};
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{error, info};
@@ -23,7 +23,8 @@ use tt_bus::Router;
 use tt_types::accounts::events::{
     AccountDelta, ClientOrderId, OrderUpdate, PositionDelta, ProviderOrderId,
 };
-use tt_types::base_data::{BookLevel, OrderBook, Price, Side, Tick, Volume};
+use tt_types::base_data::{BookLevel, OrderBookSnapShot, Tick};
+use tt_types::data::models::{Price, Side, Volume};
 use tt_types::keys::Topic;
 use tt_types::providers::ProjectXTenant;
 use tt_types::securities::futures_helpers::{extract_month_year, extract_root, sanitize_code};
@@ -878,7 +879,7 @@ impl PxWebSocketClient {
                                                 bids.sort_by(|a, b| b.price.cmp(&a.price));
                                                 asks.sort_by(|a, b| a.price.cmp(&b.price));
 
-                                                let ob = OrderBook {
+                                                let ob = OrderBookSnapShot {
                                                     symbol,
                                                     instrument: instrument.clone(),
                                                     bids,

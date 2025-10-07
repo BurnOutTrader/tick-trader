@@ -13,7 +13,7 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 use tracing::info;
 use tt_bus::{ClientMessageBus, ClientSubId};
 use tt_database::init::init_db;
-use tt_types::base_data::{Bbo, Candle, OrderBook, Tick};
+use tt_types::base_data::{Bbo, Candle, OrderBookSnapShot, Tick};
 use tt_types::keys::{AccountKey, SymbolKey, Topic};
 use tt_types::providers::ProviderKind;
 use tt_types::securities::symbols::Instrument;
@@ -180,7 +180,7 @@ pub trait Strategy: Send + Sync + 'static {
     async fn on_tick(&self, _t: Tick) {}
     async fn on_quote(&self, _q: Bbo) {}
     async fn on_bar(&self, _b: Candle) {}
-    async fn on_depth(&self, _d: OrderBook) {}
+    async fn on_depth(&self, _d: OrderBookSnapShot) {}
     async fn on_orders_batch(&self, _b: OrdersBatch) {}
     async fn on_positions_batch(&self, _b: PositionsBatch) {}
     async fn on_account_delta_batch(&self, _b: AccountDeltaBatch) {}

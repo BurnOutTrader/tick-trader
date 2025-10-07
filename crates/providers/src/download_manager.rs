@@ -3,7 +3,7 @@ use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tt_database::paths::provider_kind_to_db_string;
 use tt_types::keys::Topic;
-use tt_database::ingest::{ingest_bbo, ingest_candles, ingest_ticks, ingest_books};
+use tt_database::ingest::{ingest_bbo, ingest_books, ingest_candles, ingest_ticks};
 use tt_database::models::{BboRow, CandleRow, TickRow};
 use tt_database::queries::latest_data_time;
 use chrono::{DateTime, Duration, Utc};
@@ -13,18 +13,19 @@ use std::path::Path;
 use std::sync::Arc;
 use dotenv::dotenv;
 use tt_database::init::init_db;
-use tt_types::base_data::{OrderBook, Resolution, Side};
+use tt_types::base_data::OrderBookSnapShot;
 use tt_types::history::{HistoricalRequest, HistoryEvent};
 use tt_types::providers::ProviderKind;
 use tt_types::securities::hours::market_hours::{
-    MarketHours, SessionKind, hours_for_exchange, next_session_open_after,
+    hours_for_exchange, next_session_open_after, MarketHours, SessionKind,
 };
-use tt_types::securities::symbols::{Instrument, exchange_market_type};
+use tt_types::securities::symbols::{exchange_market_type, Instrument};
 use tt_types::server_side::traits::HistoricalDataProvider;
 use tokio::task::JoinHandle;
 use tracing::info;
 use uuid::Uuid;
 use tokio::time::{timeout, Duration as TokioDuration};
+use tt_types::data::models::{Resolution, Side};
 
 pub struct Entry {
     result: Mutex<Option<anyhow::Result<()>>>,
@@ -274,7 +275,7 @@ async fn run_download(
         let mut ticks: Vec<TickRow> = Vec::new();
         let mut candles: Vec<CandleRow> = Vec::new();
         let mut quotes: Vec<BboRow> = Vec::new();
-        let mut books: Vec<OrderBook> = Vec::new();
+        let mut books: Vec<OrderBookSnapShot> = Vec::new();
 
         for ev in events { 
             match ev {

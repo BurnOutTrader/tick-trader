@@ -3,15 +3,14 @@ use crate::layout::Layout;
 use crate::models::SeqBound;
 use crate::paths::{provider_kind_to_db_string, topic_to_db_string};
 use ahash::AHashMap;
-use anyhow::{Context, anyhow};
+use anyhow::{anyhow, Context};
 use chrono::{DateTime, Utc};
-use duckdb::{Connection, OptionalExt, params};
+use duckdb::{params, Connection, OptionalExt};
 use rust_decimal::Decimal;
 use serde_json::Value as JsonValue;
 use std::str::FromStr;
-use std::sync::Arc;
-use tt_types::base_data::Resolution;
-use tt_types::base_data::{Bbo, BookLevel, Candle, OrderBook, Side, Tick};
+use tt_types::data::models::{Resolution, Side};
+use tt_types::base_data::{Bbo, BookLevel, Candle, OrderBookSnapShot, Tick};
 use tt_types::keys::Topic;
 use tt_types::providers::ProviderKind;
 use tt_types::securities::symbols::{Exchange, Instrument, MarketType};
@@ -551,7 +550,7 @@ pub fn get_books_in_range(
     start: DateTime<Utc>,
     end: DateTime<Utc>,
     depth: Option<usize>,
-) -> anyhow::Result<Vec<OrderBook>> {
+) -> anyhow::Result<Vec<OrderBookSnapShot>> {
     if start >= end {
         return Ok(Vec::new());
     }
@@ -610,7 +609,7 @@ pub fn get_books_in_range(
             }
         }
 
-        out.push(OrderBook {
+        out.push(OrderBookSnapShot {
             symbol: sym.clone(),
             instrument: Instrument::from_str(&sym)
                 .map_err(|_| anyhow!("invalid instrument '{}", sym))?,
@@ -644,7 +643,7 @@ pub fn get_latest_book(
     symbol: &str,
     hint_from: Option<DateTime<Utc>>,
     depth: Option<usize>,
-) -> anyhow::Result<Option<OrderBook>> {
+) -> anyhow::Result<Option<OrderBookSnapShot>> {
     let Some(dataset_id) = resolve_dataset_id(conn, provider, symbol, Topic::Depth)? else {
         return Ok(None);
     };
@@ -694,7 +693,7 @@ pub fn get_latest_book(
             }
         }
 
-        return Ok(Some(OrderBook {
+        return Ok(Some(OrderBookSnapShot {
             symbol: sym.clone(),
             instrument: Instrument::from_str(&sym)
                 .map_err(|_| anyhow!("invalid instrument '{}", sym))?,

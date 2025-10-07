@@ -1,4 +1,4 @@
-use crate::base_data::{Bbo, Candle, Exchange, OrderBook, Tick};
+use crate::base_data::{Bbo, Candle, Exchange, OrderBookSnapShot, Tick};
 use crate::keys::Topic;
 use crate::providers::ProviderKind;
 use crate::securities::symbols::Instrument;
@@ -22,7 +22,7 @@ pub enum HistoryEvent {
     Candle(Candle),
     // Optional future:
     Bbo(Bbo),
-    OrderBook(OrderBook),
+    OrderBook(OrderBookSnapShot),
     EndOfStream,          // provider finished successfully
     Error(anyhow::Error), // provider aborted
 }

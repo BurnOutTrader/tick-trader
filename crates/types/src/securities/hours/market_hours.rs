@@ -61,7 +61,7 @@
 //!   overlap within that window.
 //!
 //! Examples can be found in `standard_lib/tests/market_hours_tests.rs`.
-use crate::base_data::Resolution;
+use crate::data::models::Resolution;
 use crate::securities::symbols::Exchange;
 use chrono::{
     DateTime, Datelike, Duration, LocalResult, NaiveDate, NaiveDateTime, TimeZone, Timelike, Utc,
@@ -938,7 +938,8 @@ pub mod mh_tests {
     use chrono::{Duration, NaiveDate, TimeZone, Utc};
     use chrono_tz::Tz;
     use chrono_tz::US::Central;
-    use crate::base_data::{Exchange, Resolution};
+    use crate::base_data::Exchange;
+    use crate::data::models::Resolution;
     use crate::securities::hours::market_hours::{hours_for_exchange, next_session_after, next_session_open_after, session_bounds, week_session_bounds};
     use crate::securities::hours::market_hours::{candle_end, next_session_after_with, time_end_of_day, SessionKind};
 

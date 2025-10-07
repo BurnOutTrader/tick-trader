@@ -20,7 +20,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
-use tt_types::base_data::OrderBook;
+use tt_types::base_data::OrderBookSnapShot;
 use tt_types::keys::Topic;
 use tt_types::providers::ProviderKind;
 use tt_types::securities::symbols::{Instrument, MarketType};
@@ -342,7 +342,7 @@ pub fn persist_books_partition_duckdb(
     instrument: &Instrument,
     topic: Topic,
     month: Month,
-    snapshots: &[OrderBook],
+    snapshots: &[OrderBookSnapShot],
     data_root: &std::path::Path,
 ) -> anyhow::Result<std::path::PathBuf> {
     if snapshots.is_empty() {
