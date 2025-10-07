@@ -1,6 +1,9 @@
 use crate::securities::symbols::Instrument;
 use rust_decimal::Decimal;
-use serde::{Deserialize, Serialize};
+use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
+use chrono::{DateTime, Utc};
+
+use crate::Guid;
 
 #[derive(
     Debug,
@@ -8,8 +11,9 @@ use serde::{Deserialize, Serialize};
     PartialEq,
     Eq,
     Hash,
-    Serialize,
-    Deserialize,
+    Archive,
+    RkyvDeserialize,
+    RkyvSerialize,
 )]
 pub struct ProviderOrderId(pub String);
 
@@ -19,8 +23,9 @@ pub struct ProviderOrderId(pub String);
     PartialEq,
     Eq,
     Hash,
-    Serialize,
-    Deserialize,
+    Archive,
+    RkyvDeserialize,
+    RkyvSerialize,
 )]
 pub struct ClientOrderId(pub crate::Guid);
 
@@ -37,8 +42,9 @@ impl ClientOrderId {
     PartialEq,
     Eq,
     Hash,
-    Serialize,
-    Deserialize,
+    Archive,
+    RkyvDeserialize,
+    RkyvSerialize,
 )]
 pub struct ExecId(pub crate::Guid);
 
@@ -55,8 +61,9 @@ impl ExecId {
     Copy,
     PartialEq,
     Eq,
-    Serialize,
-    Deserialize,
+    Archive,
+    RkyvDeserialize,
+    RkyvSerialize,
 )]
 pub enum Side {
     Buy,
@@ -74,7 +81,7 @@ impl Side {
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Serialize, Deserialize,
+    Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize,
 )]
 pub struct OrderEvent {
     pub kind: OrderEventKind,
@@ -82,11 +89,12 @@ pub struct OrderEvent {
     pub client_order_id: Option<ClientOrderId>,
     pub provider_seq: Option<u64>,
     pub leaves_qty: Option<i64>,
-    pub ts_ns: i64,
+    #[rkyv(with = "crate::rkyv_types::DateTimeUtcDef")]
+    pub ts_ns: DateTime<Utc>,
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Serialize, Deserialize,
+    Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize,
 )]
 pub enum OrderEventKind {
     NewAck {
@@ -105,7 +113,7 @@ pub enum OrderEventKind {
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Serialize, Deserialize,
+    Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize,
 )]
 pub struct ExecutionEvent {
     pub exec_id: ExecId,
@@ -113,26 +121,28 @@ pub struct ExecutionEvent {
     pub client_order_id: Option<ClientOrderId>,
     pub side: Side,
     pub qty: i64,
-    #[serde(with = "crate::serde_ext::decimal")]
+    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
     pub price: Decimal,
-    #[serde(with = "crate::serde_ext::decimal")]
+    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
     pub fee: Decimal,
-    pub ts_ns: i64,
+    #[rkyv(with = "crate::rkyv_types::DateTimeUtcDef")]
+    pub ts_ns: DateTime<Utc>,
     pub provider_seq: Option<u64>,
     pub instrument: Instrument,
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Serialize, Deserialize,
+    Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize,
 )]
 pub struct CorrectionEvent {
     pub exec_id_ref: ExecId,
     pub delta_qty: i64,
-    pub ts_ns: i64,
+    #[rkyv(with = "crate::rkyv_types::DateTimeUtcDef")]
+    pub ts_ns: DateTime<Utc>,
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Serialize, Deserialize,
+    Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize,
 )]
 pub enum AdminEvent {
     SnapshotFromProvider,
@@ -141,17 +151,18 @@ pub enum AdminEvent {
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Serialize, Deserialize,
+    Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize,
 )]
 pub struct MarkEvent {
     pub instrument: Instrument,
-    #[serde(with = "crate::serde_ext::decimal")]
+    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
     pub mark_px: Decimal,
-    pub ts_ns: i64,
+    #[rkyv(with = "crate::rkyv_types::DateTimeUtcDef")]
+    pub ts_ns: DateTime<Utc>,
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Serialize, Deserialize,
+    Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize,
 )]
 pub enum AccountEvent {
     Order(OrderEvent),
@@ -163,7 +174,7 @@ pub enum AccountEvent {
 
 // Outbound projections
 #[derive(
-    Debug, Clone, PartialEq, Serialize, Deserialize,
+    Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize,
 )]
 pub struct OrderUpdate {
     pub instrument: Instrument,
@@ -172,35 +183,38 @@ pub struct OrderUpdate {
     pub state_code: u8,
     pub leaves: i64,
     pub cum_qty: i64,
-    #[serde(with = "crate::serde_ext::decimal")]
+    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
     pub avg_fill_px: Decimal,
-    pub ts_ns: i64,
+    #[rkyv(with = "crate::rkyv_types::DateTimeUtcDef")]
+    pub ts_ns: DateTime<Utc>,
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Serialize, Deserialize,
+    Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize,
 )]
 pub struct PositionDelta {
     pub instrument: Instrument,
     pub net_qty_before: i64,
     pub net_qty_after: i64,
-    #[serde(with = "crate::serde_ext::decimal")]
+    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
     pub realized_delta: Decimal,
-    #[serde(with = "crate::serde_ext::decimal")]
+    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
     pub open_pnl: Decimal,
-    pub ts_ns: i64,
+    #[rkyv(with = "crate::rkyv_types::DateTimeUtcDef")]
+    pub ts_ns: DateTime<Utc>,
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Serialize, Deserialize,
+    Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize,
 )]
 pub struct AccountDelta {
-    #[serde(with = "crate::serde_ext::decimal")]
+    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
     pub equity: Decimal,
-    #[serde(with = "crate::serde_ext::decimal")]
+    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
     pub day_realized_pnl: Decimal,
-    #[serde(with = "crate::serde_ext::decimal")]
+    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
     pub open_pnl: Decimal,
-    pub ts_ns: i64,
+    #[rkyv(with = "crate::rkyv_types::DateTimeUtcDef")]
+    pub ts_ns: DateTime<Utc>,
     pub can_trade: bool,
 }

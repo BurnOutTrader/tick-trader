@@ -678,11 +678,9 @@ impl HistoricalDataProvider for PXClient {
     ) -> anyhow::Result<Option<DateTime<Utc>>> {
         self.http.manual_update_instruments(false).await?;
         if let Some(contract) = self.http.instruments_snapshot().await.get(&instrument) {
-            if let Some(ad) = contract.activation_date {
-                let dt = NaiveDateTime::from(ad);
-                let utc_time = DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc);
-                return Ok(Some(utc_time));
-            }
+            let dt = NaiveDateTime::from(contract.activation_date);
+            let utc_time = DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc);
+            return Ok(Some(utc_time));
         }
         match NaiveDate::from_ymd_opt(2023, 1, 1) {
             Some(date) => {

@@ -68,7 +68,7 @@ use chrono::{
     Weekday,
 };
 use chrono_tz::{America, Asia, Europe, Tz, US};
-use serde::{Deserialize, Serialize, Serializer};
+use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use tracing::warn;
 
 /// One schedule slice for a market session.
@@ -77,7 +77,7 @@ use tracing::warn;
 /// - `open_ssm` / `close_ssm`: seconds since local midnight in the exchange TZ.
 ///   If `open_ssm <= close_ssm` the session is same-day; if `open_ssm > close_ssm`
 ///   the session wraps into the next local day and closes at `close_ssm` there.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
 pub struct SessionRule {
     /// Weekday activation mask (Mon=0 .. Sun=6)
     pub days: [bool; 7],

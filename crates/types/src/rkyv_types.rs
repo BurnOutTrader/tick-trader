@@ -1,4 +1,4 @@
-/*use chrono::TimeZone;
+use chrono::TimeZone;
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 
 // Remote derive wrappers and helpers for external types that don't natively implement rkyv
@@ -64,4 +64,4 @@ impl From<DecimalDef> for rust_decimal::Decimal {
 // For convenience re-export common names if needed by callers
 pub use DateTimeUtcDef as RkyvDateTimeUtc;
 pub use DecimalDef as RkyvDecimal;
-*/
+

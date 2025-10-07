@@ -1,9 +1,9 @@
-use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
+use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 
 /// 16-byte globally unique identifier used for internal IDs.
-/// Stored as raw bytes for compact rkyv/serde representation.
+/// Stored as raw bytes for compact rkyv representation.
 #[derive(
     Debug,
     Clone,
@@ -13,8 +13,9 @@ use std::str::FromStr;
     PartialOrd,
     Ord,
     Hash,
-    Serialize,
-    Deserialize,
+    Archive,
+    RkyvDeserialize,
+    RkyvSerialize,
 )]
 #[repr(transparent)]
 pub struct Guid(pub [u8; 16]);

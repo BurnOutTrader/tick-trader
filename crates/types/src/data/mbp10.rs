@@ -1,13 +1,13 @@
 //! MBP-10 record type (Databento-style aggregated book updates)
 //! "Base data type" for MDP-10/MBP-10 translated into our engine types.
-use serde::{Deserialize, Serialize};
+use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 pub use chrono::{DateTime, Utc};
 use chrono::{TimeDelta};
-pub use rust_decimal::Decimal;
+use rust_decimal::Decimal;
 use strum_macros::Display;
 use crate::securities::symbols::Instrument;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, Archive, RkyvDeserialize, RkyvSerialize)]
 pub enum BookSide {
     Ask,   // 'A'
     Bid,   // 'B'
@@ -41,8 +41,9 @@ impl From<BookSide> for u8 {
     PartialEq,
     Eq,
     Hash,
-    Serialize,
-    Deserialize,
+    Archive,
+    RkyvDeserialize,
+    RkyvSerialize,
 )]
 pub enum Action {
     Add,    // 'A'
@@ -92,10 +93,10 @@ impl From<Action> for u8 {
     PartialEq,
     Eq,
     Hash,
-    Serialize,
-    Deserialize,
+    Archive,
+    RkyvDeserialize,
+    RkyvSerialize,
 )]
-#[serde(transparent)]
 pub struct Flags(pub u8);
 
 impl Flags {
@@ -126,13 +127,15 @@ impl From<Flags> for u8 { fn from(f: Flags) -> u8 { f.0 } }
     PartialEq,
     Eq,
     Hash,
-    Serialize,
-    Deserialize,
+    Archive,
+    RkyvDeserialize,
+    RkyvSerialize,
 )]
 pub struct BookLevels {
-    #[serde(with = "crate::serde_ext::decimal_vec")]
+    // NOTE: container adapters (Vec<Decimal>) are not implemented in rkyv_types.rs.
+    // Removing the serde helper here; to support rkyv you must wrap the element type or
+    // provide a container-specific adapter.
     pub bid_px: Vec<Decimal>,
-    #[serde(with = "crate::serde_ext::decimal_vec")]
     pub ask_px: Vec<Decimal>,
     pub bid_sz: Vec<u32>,
     pub ask_sz: Vec<u32>,
@@ -153,16 +156,17 @@ impl BookLevels {
     PartialEq,
     Eq,
     Hash,
-    Serialize,
-    Deserialize,
+    Archive,
+    RkyvDeserialize,
+    RkyvSerialize,
 )]
 pub struct Mbp10 {
     pub instrument: Instrument,
     /// Capture-server receive time (UTC).
-    #[serde(with = "crate::serde_ext::datetime")]
+    #[rkyv(with = "crate::rkyv_types::DateTimeUtcDef")]
     pub ts_recv: DateTime<Utc>,
     /// Matching engine receive time (UTC).
-    #[serde(with = "crate::serde_ext::datetime")]
+    #[rkyv(with = "crate::rkyv_types::DateTimeUtcDef")]
     pub ts_event: DateTime<Utc>,
 
     /// Record type sentinel (always 10 for MBP-10).
@@ -177,7 +181,7 @@ pub struct Mbp10 {
     pub depth: u8,
 
     /// Order price (wire is i64 nanos). Stored as Decimal (scale 9).
-    #[serde(with = "crate::serde_ext::decimal")]
+    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
     pub price: Decimal,
 
     /// Order quantity.

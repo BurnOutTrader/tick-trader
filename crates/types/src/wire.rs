@@ -1,13 +1,14 @@
-use crate::data::core::{Bbo, Candle, Exchange, Tick};
+use crate::data::core::{Bbo, Candle, Tick};
 use crate::keys::{SymbolKey, Topic};
 use crate::providers::ProviderKind;
 use crate::securities::security::FuturesContract;
 use crate::securities::symbols::Instrument;
-use rust_decimal::Decimal;
-use serde::{Serialize, Deserialize};
+use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
+use chrono::{DateTime, Utc};
 
 /// Request to subscribe to a topic (coarse, topic-level interest)
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, PartialEq, Clone)]
+#[rkyv(compare(PartialEq), derive(Debug))]
 pub struct Subscribe {
     /// Topic to subscribe to
     pub topic: Topic,
@@ -23,7 +24,8 @@ impl Subscribe {
 }
 
 /// Request to subscribe to a specific (topic, key) pair (precise, key-based)
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, PartialEq, Clone)]
+#[rkyv(compare(PartialEq), derive(Debug))]
 pub struct SubscribeKey {
     /// Topic to subscribe to
     pub topic: Topic,
@@ -44,20 +46,25 @@ impl SubscribeKey {
 }
 
 /// Ping message (heartbeat)
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, PartialEq, Clone)]
+#[rkyv(compare(PartialEq), derive(Debug))]
 pub struct Ping {
     /// Nanosecond timestamp
-    pub ts_ns: i64,
+    #[rkyv(with = crate::rkyv_types::DateTimeUtcDef)]
+    pub ts_ns: DateTime<Utc>,
 }
 /// Pong reply (heartbeat)
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, PartialEq, Clone)]
+#[rkyv(compare(PartialEq), derive(Debug))]
 pub struct Pong {
     /// Nanosecond timestamp
-    pub ts_ns: i64,
+    #[rkyv(with = crate::rkyv_types::DateTimeUtcDef)]
+    pub ts_ns: DateTime<Utc>,
 }
 
 /// Batch of ticks for a topic/sequence
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, PartialEq, Clone)]
+#[rkyv(compare(PartialEq), derive(Debug))]
 pub struct TickBatch {
     /// Topic (e.g. Ticks)
     pub topic: Topic,
@@ -68,7 +75,8 @@ pub struct TickBatch {
 }
 
 /// Batch of quotes (BBOs) for a topic/sequence
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, PartialEq, Clone)]
+#[rkyv(compare(PartialEq), derive(Debug))]
 pub struct QuoteBatch {
     /// Topic (e.g. Quotes)
     pub topic: Topic,
@@ -79,7 +87,8 @@ pub struct QuoteBatch {
 }
 
 /// Batch of OHLC bars for a topic/sequence
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, PartialEq, Clone)]
+#[rkyv(compare(PartialEq), derive(Debug))]
 pub struct BarBatch {
     /// Topic (e.g. Bars1m)
     pub topic: Topic,
@@ -90,7 +99,8 @@ pub struct BarBatch {
 }
 
 /// Batch of order book snapshots/updates
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, PartialEq, Clone)]
+#[rkyv(compare(PartialEq), derive(Debug))]
 pub struct MBP10Batch {
     /// Topic (e.g. Depth)
     pub topic: Topic,
@@ -100,7 +110,8 @@ pub struct MBP10Batch {
 }
 
 /// Vendor-specific binary data batch
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, PartialEq, Clone)]
+#[rkyv(compare(PartialEq), derive(Debug))]
 pub struct VendorData {
     /// Topic
     pub topic: Topic,
@@ -111,7 +122,8 @@ pub struct VendorData {
 }
 
 /// Batch of order updates (lossless)
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, PartialEq, Clone)]
+#[rkyv(compare(PartialEq), derive(Debug))]
 pub struct OrdersBatch {
     /// Topic (e.g. Orders)
     pub topic: Topic,
@@ -122,7 +134,8 @@ pub struct OrdersBatch {
 }
 
 /// Batch of position updates (lossless)
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, PartialEq, Clone)]
+#[rkyv(compare(PartialEq), derive(Debug))]
 pub struct PositionsBatch {
     /// Topic (e.g. Positions)
     pub topic: Topic,
@@ -133,7 +146,8 @@ pub struct PositionsBatch {
 }
 
 /// Batch of account delta updates (lossless)
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, PartialEq, Clone)]
+#[rkyv(compare(PartialEq), derive(Debug))]
 pub struct AccountDeltaBatch {
     /// Topic (e.g. AccountEvt)
     pub topic: Topic,
@@ -144,7 +158,8 @@ pub struct AccountDeltaBatch {
 }
 
 /// Request for available instruments from a provider
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, PartialEq, Clone)]
+#[rkyv(compare(PartialEq), derive(Debug))]
 pub struct InstrumentsRequest {
     /// Provider to query
     pub provider: ProviderKind,
@@ -155,7 +170,8 @@ pub struct InstrumentsRequest {
 }
 
 /// Response with available instruments from a provider
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, PartialEq, Clone)]
+#[rkyv(compare(PartialEq), derive(Debug))]
 pub struct InstrumentsResponse {
     /// Provider
     pub provider: ProviderKind,
@@ -166,7 +182,8 @@ pub struct InstrumentsResponse {
 }
 
 /// Response with a map of instruments and their contract details
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, PartialEq, Clone)]
+#[rkyv(compare(PartialEq), derive(Debug))]
 pub struct InstrumentsMapResponse {
     /// Provider name
     pub provider: String,
@@ -177,7 +194,8 @@ pub struct InstrumentsMapResponse {
 }
 
 /// Request for a full map of futures contracts from a provider
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, PartialEq, Clone)]
+#[rkyv(compare(PartialEq), derive(Debug))]
 pub struct InstrumentsMapRequest {
     /// Provider to query
     pub provider: ProviderKind,
@@ -186,7 +204,8 @@ pub struct InstrumentsMapRequest {
 }
 
 /// Authentication credentials for a provider
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, PartialEq, Clone)]
+#[rkyv(compare(PartialEq), derive(Debug))]
 pub struct AuthCredentials {
     /// Provider
     pub provider: ProviderKind,
@@ -203,21 +222,24 @@ pub struct AuthCredentials {
 }
 
 /// Unsubscribe from all topics/keys (clean detach)
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, PartialEq, Clone)]
+#[rkyv(compare(PartialEq), derive(Debug))]
 pub struct UnsubscribeAll {
     /// Optional reason for unsubscribe
     pub reason: Option<String>,
 }
 
 /// Client-initiated disconnect request (ask the router to kick this connection)
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, PartialEq, Clone)]
+#[rkyv(compare(PartialEq), derive(Debug))]
 pub struct Kick {
     /// Optional reason for disconnect
     pub reason: Option<String>,
 }
 
 /// Unsubscribe from a specific (topic, key) pair
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, PartialEq, Clone)]
+#[rkyv(compare(PartialEq), derive(Debug))]
 pub struct UnsubscribeKey {
     /// Topic
     pub topic: Topic,
@@ -226,7 +248,8 @@ pub struct UnsubscribeKey {
 }
 
 /// Announce a shared memory (SHM) snapshot stream
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, PartialEq, Clone)]
+#[rkyv(compare(PartialEq), derive(Debug))]
 pub struct AnnounceShm {
     /// Topic
     pub topic: Topic,
@@ -241,7 +264,8 @@ pub struct AnnounceShm {
 }
 
 /// Order type for wire protocol
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, PartialEq, Clone)]
+#[rkyv(compare(PartialEq), derive(Debug))]
 pub enum OrderTypeWire {
     /// Market order
     Market,
@@ -260,7 +284,8 @@ pub enum OrderTypeWire {
 }
 
 /// Bracket order details for stop loss/take profit
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, PartialEq, Clone)]
+#[rkyv(compare(PartialEq), derive(Debug))]
 pub struct BracketWire {
     /// Number of ticks for bracket
     pub ticks: i32,
@@ -269,7 +294,8 @@ pub struct BracketWire {
 }
 
 /// Place a new order
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, PartialEq, Clone)]
+#[rkyv(compare(PartialEq), derive(Debug))]
 pub struct PlaceOrder {
     /// Account ID
     pub account_id: i64,
@@ -296,7 +322,8 @@ pub struct PlaceOrder {
 }
 
 /// Cancel an existing order
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, PartialEq, Clone)]
+#[rkyv(compare(PartialEq), derive(Debug))]
 pub struct CancelOrder {
     /// Account ID
     pub account_id: i64,
@@ -307,7 +334,8 @@ pub struct CancelOrder {
 }
 
 /// Replace (modify) an existing order
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, PartialEq, Clone)]
+#[rkyv(compare(PartialEq), derive(Debug))]
 pub struct ReplaceOrder {
     /// Account ID
     pub account_id: i64,
@@ -326,21 +354,24 @@ pub struct ReplaceOrder {
 }
 
 /// Subscribe to all execution streams for an account
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, PartialEq, Clone)]
+#[rkyv(compare(PartialEq), derive(Debug))]
 pub struct SubscribeAccount {
     /// Account key
     pub key: crate::keys::AccountKey,
 }
 
 /// Unsubscribe from all execution streams for an account
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, PartialEq, Clone)]
+#[rkyv(compare(PartialEq), derive(Debug))]
 pub struct UnsubscribeAccount {
     /// Account key
     pub key: crate::keys::AccountKey,
 }
 
 /// Request account info for a provider
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, PartialEq, Clone)]
+#[rkyv(compare(PartialEq), derive(Debug))]
 pub struct AccountInfoRequest {
     /// Provider
     pub provider: ProviderKind,
@@ -349,7 +380,8 @@ pub struct AccountInfoRequest {
 }
 
 /// Summary of an account (for info response)
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, PartialEq, Clone)]
+#[rkyv(compare(PartialEq), derive(Debug))]
 pub struct AccountSummaryWire {
     /// Account ID
     pub account_id: i64,
@@ -360,7 +392,8 @@ pub struct AccountSummaryWire {
 }
 
 /// Response with account info for a provider
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, PartialEq, Clone)]
+#[rkyv(compare(PartialEq), derive(Debug))]
 pub struct AccountInfoResponse {
     /// Provider
     pub provider: ProviderKind,
@@ -370,7 +403,8 @@ pub struct AccountInfoResponse {
     pub accounts: Vec<AccountSummaryWire>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, PartialEq, Clone)]
+#[rkyv(compare(PartialEq), derive(Debug))]
 pub enum Request {
     // Control from clients to server (coarse)
     Subscribe(Subscribe),
@@ -394,7 +428,8 @@ pub enum Request {
     ReplaceOrder(ReplaceOrder),
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, PartialEq, Clone)]
+#[rkyv(compare(PartialEq), derive(Debug))]
 pub enum Response {
     // Control replies
     Pong(Pong),
@@ -429,65 +464,37 @@ pub enum Response {
     Bar(Candle),
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, PartialEq, Clone)]
+#[rkyv(compare(PartialEq), derive(Debug))]
 pub enum WireMessage {
     Request(Request),
     Response(Response),
 }
 
-/// Encode any serializable message to bytes
-pub fn encode<T: Serialize>(msg: &T) -> anyhow::Result<Vec<u8>> {
-    let buf = bincode::serialize(msg)?;
-    Ok(buf)
-}
-
-/// Decode bytes into a message
-pub fn decode<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> anyhow::Result<T> {
-    let msg = bincode::deserialize(bytes)?;
-    Ok(msg)
-}
-
-#[cfg(test)]
-mod tests {
+pub mod codec {
     use super::*;
-    use std::str::FromStr;
+    use anyhow::Context;
+    use rkyv::ser::serializers::AllocSerializer;
+    use std::convert::Infallible;
+    use rkyv::archived_root;
 
-    #[test]
-    fn instruments_map_response_bincode_roundtrip() {
-        // Build a minimal FuturesContract with sane Decimals
-        let fc = FuturesContract {
-            root: "MNQ".to_string(),
-            instrument: Instrument::from_str("MNQ.Z25").unwrap(),
-            security_type: crate::securities::symbols::SecurityType::Future,
-            exchange: crate::securities::symbols::Exchange::GLOBEX,
-            provider_contract_name: "MNQZ5".to_string(),
-            provider_id: ProviderKind::ProjectX(crate::providers::ProjectXTenant::Topstep),
-            tick_size: rust_decimal::Decimal::new(25, 2),
-            value_per_tick: rust_decimal::Decimal::new(50, 0),
-            decimal_accuracy: 2,
-            quote_ccy: crate::securities::symbols::Currency::USD,
-            activation_date: None,
-            expiration_date: None,
-            is_continuous: false,
-        };
-        let resp = InstrumentsMapResponse {
-            provider: "ProjectX::Topstep".to_string(),
-            instruments: vec![(Instrument::from_str("MNQ.Z25").unwrap(), fc)],
-            corr_id: 42,
-        };
-        let wm = WireMessage::Response(Response::InstrumentsMapResponse(resp.clone()));
-        let bytes = encode(&wm).expect("encode");
-        let decoded: WireMessage = decode(&bytes).expect("decode");
-        match decoded {
-            WireMessage::Response(Response::InstrumentsMapResponse(r2)) => {
-                assert_eq!(r2.corr_id, resp.corr_id);
-                assert_eq!(r2.provider, resp.provider);
-                assert_eq!(r2.instruments.len(), 1);
-                let (_ins, fc2) = &r2.instruments[0];
-                assert_eq!(fc2.tick_size, rust_decimal::Decimal::new(25, 2));
-                assert_eq!(fc2.value_per_tick, rust_decimal::Decimal::new(50, 0));
-            }
-            other => panic!("unexpected decoded: {:?}", other),
-        }
+    /// Encode a WireMessage using rkyv into bytes (AllocSerializer)
+    pub fn encode(msg: &WireMessage) -> anyhow::Result<Vec<u8>> {
+        let mut serializer = AllocSerializer::<256>::default();
+        serializer
+            .serialize_value(msg)
+            .context("rkyv serialize failed")?;
+        let buf = serializer.into_inner();
+        Ok(buf)
+    }
+
+    /// Decode bytes (rkyv archived) into a WireMessage (owned) by deserializing the archived root.
+    pub fn decode(bytes: &[u8]) -> anyhow::Result<WireMessage> {
+        // Safety: bytes must contain a full archived root of WireMessage; user must ensure this.
+        let archived = unsafe { archived_root::<WireMessage>(bytes) };
+        let msg: WireMessage = archived
+            .deserialize(&mut Infallible)
+            .context("rkyv deserialize failed")?;
+        Ok(msg)
     }
 }

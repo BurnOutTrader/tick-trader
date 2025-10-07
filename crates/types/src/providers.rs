@@ -1,9 +1,9 @@
-use serde::{Deserialize, Serialize};
+use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use std::fmt::Display;
 use std::hash::Hash;
 use strum_macros::Display;
 
-#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
 pub enum ProjectXTenant {
     Topstep,
     AlphaFutures,
@@ -68,7 +68,7 @@ impl RithmicSystem {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(RkyvDeserialize)]
 #[allow(unused)]
 pub struct RithmicCredentials {
     pub(crate) user: String,
@@ -109,8 +109,9 @@ impl RithmicCredentials {
 }
 
 #[derive(
-    Serialize,
-    Deserialize,
+    Archive,
+    RkyvDeserialize,
+    RkyvSerialize,
     Clone,
     Eq,
     PartialEq,
@@ -183,8 +184,9 @@ impl RithmicSystem {
 }
 
 #[derive(
-    Serialize,
-    Deserialize,
+    Archive,
+    RkyvDeserialize,
+    RkyvSerialize,
     Clone,
     Eq,
     PartialEq,
@@ -210,7 +212,7 @@ pub enum RithmicServer {
     Test,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
 pub enum ProviderKind {
     ProjectX(ProjectXTenant),
     Rithmic(RithmicSystem),

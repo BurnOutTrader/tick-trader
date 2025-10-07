@@ -1,85 +1,79 @@
 pub use crate::securities::symbols::Exchange;
 use crate::securities::symbols::Instrument;
 pub use chrono::{DateTime, Utc};
+use chrono::TimeZone;
 pub use rust_decimal::Decimal;
-use serde::{Deserialize, Serialize};
 use crate::data::models::{BarClose, Price, Resolution, Side, Volume};
+use rkyv::{Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 
 /// A single executed trade (tick).
 ///
 /// Represents the smallest atomic piece of trade data.
 /// Often used as input for tick charts or indicators.
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    Serialize,
-    Deserialize,
-)]
+#[derive(rkyv::Archive, RkyvDeserialize, RkyvSerialize, Debug, PartialEq, Clone)]
+#[rkyv(compare(PartialEq), derive(Debug))]
 pub struct Tick {
     /// Symbol identifier (e.g. `"MNQ"`, `"AAPL"`).
     pub symbol: String,
-    /// Symbol identifier (e.g. `"MNQZ5"`).
+    /// Symbol identifier (e.g. `"MNQ.Z25"`).
     pub instrument: Instrument,
     /// Trade price.
-    #[serde(with = "crate::serde_ext::decimal")]
+    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
     pub price: Price,
     /// Trade size (quantity).
-    #[serde(with = "crate::serde_ext::decimal")]
+    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
     pub volume: Volume,
     /// UTC timestamp of the trade.
-    #[serde(with = "crate::serde_ext::datetime")]
+    #[rkyv(with = "crate::rkyv_types::DateTimeUtcDef")]
     pub time: DateTime<Utc>,
     /// Whether the trade was buyer- or seller-initiated.
     pub side: Side,
 
     pub venue_seq: Option<u32>,
 }
+/// Convert an archived Tick's time to chrono::DateTime<Utc> without deserializing the full Tick.
+/*pub fn archived_tick_time(archived: &ArchivedTick) -> DateTime<Utc> {
+    // The archived field type depends on your remote adapter, so just convert manually
+    let secs = archived.time.secs();
+    let nanos = archived.time.nanos();
+    Utc.timestamp_opt(secs, nanos).single().expect("invalid timestamp")
+}*/
 
 /// A candlestick / bar of aggregated trades.
 ///
 /// Produced by consolidating ticks or vendor-provided candles.
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    Serialize,
-    Deserialize,
-)]
+#[derive(rkyv::Archive, RkyvDeserialize, RkyvSerialize, Debug, PartialEq, Clone)]
+#[rkyv(compare(PartialEq), derive(Debug))]
 pub struct Candle {
     /// Symbol identifier (e.g. `"MNQ"`, `"AAPL"`).
     pub symbol: String,
-    /// Symbol identifier (e.g. `"MNQZ5"`).
+    /// Symbol identifier (e.g. `"MNQ.Z25"`).
     pub instrument: Instrument,
     /// Start time of the candle (inclusive).
-    #[serde(with = "crate::serde_ext::datetime")]
+    #[rkyv(with = "crate::rkyv_types::DateTimeUtcDef")]
     pub time_start: DateTime<Utc>,
     /// End time of the candle (exclusive).
-    #[serde(with = "crate::serde_ext::datetime")]
+    #[rkyv(with = "crate::rkyv_types::DateTimeUtcDef")]
     pub time_end: DateTime<Utc>,
     /// Open price.
-    #[serde(with = "crate::serde_ext::decimal")]
+    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
     pub open: Price,
     /// High price.
-    #[serde(with = "crate::serde_ext::decimal")]
+    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
     pub high: Price,
     /// Low price.
-    #[serde(with = "crate::serde_ext::decimal")]
+    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
     pub low: Price,
-    #[serde(with = "crate::serde_ext::decimal")]
+    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
     pub close: Price,
     /// Total traded volume.
-    #[serde(with = "crate::serde_ext::decimal")]
+    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
     pub volume: Volume,
     /// Volume executed at the ask.
-    #[serde(with = "crate::serde_ext::decimal")]
+    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
     pub ask_volume: Volume,
     /// Volume executed at the bid.
-    #[serde(with = "crate::serde_ext::decimal")]
+    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
     pub bid_volume: Volume,
     /// Resolution used to build this candle.
     pub resolution: Resolution,
@@ -107,74 +101,60 @@ impl Candle {
     }
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    Serialize,
-    Deserialize,
-)]
+#[derive(rkyv::Archive, RkyvDeserialize, RkyvSerialize, Debug, PartialEq, Clone)]
+#[rkyv(compare(PartialEq), derive(Debug))]
 pub struct TickBar {
     /// Symbol identifier (e.g. `"MNQ"`, `"AAPL"`).
     pub symbol: String,
-    /// Symbol identifier (e.g. `"MNQZ5"`).
+    /// Symbol identifier (e.g. `"MNQ.Z25"`).
     pub instrument: Instrument,
     /// Start time of the candle (inclusive).
-    #[serde(with = "crate::serde_ext::datetime")]
+    #[rkyv(with = "crate::rkyv_types::DateTimeUtcDef")]
     pub time_start: DateTime<Utc>,
     /// End time of the candle (exclusive).
-    #[serde(with = "crate::serde_ext::datetime")]
+    #[rkyv(with = "crate::rkyv_types::DateTimeUtcDef")]
     pub time_end: DateTime<Utc>,
     /// Open price.
-    #[serde(with = "crate::serde_ext::decimal")]
+    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
     pub open: Price,
     /// High price.
-    #[serde(with = "crate::serde_ext::decimal")]
+    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
     pub high: Price,
     /// Low price.
-    #[serde(with = "crate::serde_ext::decimal")]
+    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
     pub low: Price,
-    #[serde(with = "crate::serde_ext::decimal")]
+    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
     pub close: Price,
     /// Total traded volume.
-    #[serde(with = "crate::serde_ext::decimal")]
+    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
     pub volume: Volume,
     /// Volume executed at the ask.
-    #[serde(with = "crate::serde_ext::decimal")]
+    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
     pub ask_volume: Volume,
     /// Volume executed at the bid.
-    #[serde(with = "crate::serde_ext::decimal")]
+    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
     pub bid_volume: Volume,
 }
 
 /// Best bid and offer (BBO).
 ///
 /// A lightweight snapshot of the top of the order book.
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    Serialize,
-    Deserialize,
-)]
+#[derive(rkyv::Archive, RkyvDeserialize, RkyvSerialize, Debug, PartialEq, Clone)]
+#[rkyv(compare(PartialEq), derive(Debug))]
 pub struct Bbo {
     /// Symbol identifier (e.g. `"MNQ"`, `"AAPL"`).
     pub symbol: String,
-    /// Symbol identifier (e.g. `"MNQZ5"`).
+    /// Symbol identifier (e.g. `"MNQ.Z25"`).
     pub instrument: Instrument,
-    #[serde(with = "crate::serde_ext::decimal")]
+    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
     pub bid: Price,
-    #[serde(with = "crate::serde_ext::decimal")]
+    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
     pub bid_size: Volume,
-    #[serde(with = "crate::serde_ext::decimal")]
+    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
     pub ask: Price,
-    #[serde(with = "crate::serde_ext::decimal")]
+    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
     pub ask_size: Volume,
-    #[serde(with = "crate::serde_ext::datetime")]
+    #[rkyv(with = "crate::rkyv_types::DateTimeUtcDef")]
     pub time: DateTime<Utc>, // normalized event time
 
     // ---- Optional cross-vendor metadata ----

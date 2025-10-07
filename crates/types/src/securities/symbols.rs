@@ -1,15 +1,15 @@
 use chrono::{Datelike, NaiveDate};
-use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 use std::str::FromStr;
 use strum_macros::Display;
+use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
 pub enum SecurityType {
     Future,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, PartialOrd)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Archive, RkyvDeserialize, RkyvSerialize, Display, PartialOrd)]
 pub enum Exchange {
     CME,
     CBOT,
@@ -59,7 +59,7 @@ impl Exchange {
         })
     }
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Archive, RkyvDeserialize, RkyvSerialize, Display)]
 pub enum MarketType {
     Futures,
 }
@@ -86,7 +86,7 @@ impl FromStr for Exchange {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
 pub enum Currency {
     USD,
     EUR,
@@ -113,7 +113,7 @@ impl Currency {
 }
 
 /// Example canonical: `MNQ.Z25` or continuous contracts `MNQ.C.0`
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
 pub struct Instrument(pub String);
 
 impl Instrument {
