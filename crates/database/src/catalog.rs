@@ -115,7 +115,7 @@ pub fn dataset_id(
     topic: Topic,
 ) -> anyhow::Result<i64> {
     let pid = get_or_create_provider_id(conn, &provider_string(provider))?;
-    let sid = get_or_create_symbol_id(conn, pid, &instrument.to_lowercase())?;
+    let sid = get_or_create_symbol_id(conn, pid, &instrument.to_string().to_lowercase())?;
     get_or_create_dataset_id(conn, pid, sid, topic)
 }
 

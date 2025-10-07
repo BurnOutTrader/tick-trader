@@ -78,6 +78,7 @@ impl Order {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
     use super::*;
     use crate::securities::symbols::Instrument;
 
@@ -92,7 +93,7 @@ mod tests {
 
     #[test]
     fn can_apply_seq_greater_allows() {
-        let inst = Instrument::try_from("ESZ5").unwrap();
+        let inst = Instrument::from_str("ES.Z25").unwrap();
         let mut o = Order::new(inst, Side::Buy, 5);
         o.last_provider_seq = Some(10);
         // incoming seq higher
@@ -103,7 +104,7 @@ mod tests {
 
     #[test]
     fn can_apply_equal_seq_uses_precedence() {
-        let inst = Instrument::try_from("ESZ5").unwrap();
+        let inst = Instrument::from_str("ES.Z25").unwrap();
         let mut o = Order::new(inst, Side::Buy, 5);
         o.state = OrderState::Acknowledged;
         o.last_provider_seq = Some(42);
@@ -115,7 +116,7 @@ mod tests {
 
     #[test]
     fn can_apply_without_seq_defaults_to_accept() {
-        let inst = Instrument::try_from("ESZ5").unwrap();
+        let inst = Instrument::from_str("ES.Z25").unwrap();
         let o = Order::new(inst, Side::Buy, 1);
         assert!(o.can_apply(None, OrderState::Acknowledged));
     }

@@ -131,6 +131,7 @@ impl Strategy for TestStrategy {
         use std::collections::HashSet;
         let mut s = HashSet::new();
         // Keep legacy topic subscribe light; exact key subscribe happens in on_start
+        s.insert(Topic::MBP10);
         s.insert(Topic::Ticks);
         s
     }
@@ -140,12 +141,21 @@ impl Strategy for TestStrategy {
         h.subscribe_key(
             Topic::MBP10,
             SymbolKey::new(
-                Instrument::from_str("MNQZ25").unwrap(),
+                Instrument::from_str("MNQ.Z25").unwrap(),
                 ProviderKind::ProjectX(ProjectXTenant::Topstep),
             ),
         )
         .await
         .unwrap();
+        h.subscribe_key(
+            Topic::Ticks,
+            SymbolKey::new(
+                Instrument::from_str("MNQ.Z25").unwrap(),
+                ProviderKind::ProjectX(ProjectXTenant::Topstep),
+            ),
+        )
+            .await
+            .unwrap();
         self.engine = Some(h);
     }
     async fn on_stop(&mut self) {

@@ -940,27 +940,80 @@ mod tests {
     use tt_types::providers::{ProjectXTenant, ProviderKind};
     use tt_types::keys::SymbolKey;
     use tt_types::wire::{Request, SubscribeKey};
-
+    use std::sync::atomic::{AtomicBool, Ordering as Ato};
+    use tokio::time::{timeout, Instant as TInstant};
+    use tt_types::wire::{Response};
     // This test requires a running router/backend and valid PX credentials.
     // It does NOT use EngineRuntime or any Strategy. It drives the ClientMessageBus directly.
     #[tokio::test]
     #[ignore]
     async fn subscribe_and_print_mbp10_no_strategy() -> anyhow::Result<()> {
-        // Enable logs if RUST_LOG is set
+        // init logging if set
         let _ = tracing_subscriber::fmt()
             .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
             .try_init();
 
+
+
         let addr = std::env::var("TT_BUS_ADDR").unwrap_or_else(|_| "/tmp/tick-trader.sock".to_string());
         let bus = ClientMessageBus::connect(&addr).await?;
 
-        // Register a client and get a sub_id to receive Responses
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<tt_types::wire::Response>(1024);
+        // register client
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<Response>(1024);
         let sub_id = bus.add_client(tx).await;
 
-        // Build the key and send a SubscribeKey directly over the bus
+        // simple ping sanity check (optional but useful)
+        let _ = bus.handle_request(&sub_id, Request::Ping(tt_types::wire::Ping { ts_ns: 0 })).await?;
+
+        // flags
+        let got_sub_ok = std::sync::Arc::new(AtomicBool::new(false));
+        let got_data   = std::sync::Arc::new(AtomicBool::new(false));
+        let got_sub_ok2 = got_sub_ok.clone();
+        let got_data2   = got_data.clone();
+
+        // drain task
+        let drain = tokio::spawn(async move {
+            let deadline = TInstant::now() + Duration::from_secs(20);
+            while TInstant::now() < deadline {
+                match rx.recv().await {
+                    Some(resp) => {
+                        match resp {
+                            Response::Pong(_) => {
+                                tracing::info!("Pong received");
+                            }
+                            Response::SubscribeResponse { topic, instrument, success } => {
+                                tracing::info!("Subscribed: topic={:?} instrument={} success={}", topic, instrument, success);
+                                if success { got_sub_ok2.store(true, Ato::SeqCst); }
+                            }
+                            Response::AnnounceShm(ann) => {
+                                // If your server uses SHM for MBP10, this may be the only thing you get.
+                                tracing::info!("AnnounceShm: topic={:?} key={:?}", ann.topic, ann.key);
+                                got_data2.store(true, Ato::SeqCst);
+                            }
+                            Response::MBP10(batch) => {
+                                let e = batch.event;
+                                tracing::info!(
+                                "Mbp10: action={:?} side={:?} px={} sz={} flags={:?} ts_event={} ts_recv={}",
+                                e.action, e.side, e.price, e.size, e.flags, e.ts_event, e.ts_recv
+                            );
+                                got_data2.store(true, Ato::SeqCst);
+                            }
+                            // You can log others or ignore
+                            _ => {}
+                        }
+                    }
+                    None => {
+                        // channel closed by writer; stop rather than spinning
+                        tracing::warn!("rx closed");
+                        break;
+                    }
+                }
+            }
+        });
+
+        // subscribe AFTER the drain task is running
         let key = SymbolKey::new(
-            Instrument::from_str("MNQZ25").unwrap(),
+            Instrument::from_str("MNQ.Z25").unwrap(),
             ProviderKind::ProjectX(ProjectXTenant::Topstep),
         );
         bus.handle_request(
@@ -968,38 +1021,21 @@ mod tests {
             Request::SubscribeKey(SubscribeKey { topic: Topic::MBP10, key, latest_only: false, from_seq: 0 })
         ).await?;
 
-        let mut got_data = false;
-        // Drain responses for a short period and print MBP10 events
-        let deadline = TokioInstant::now() + Duration::from_secs(15);
-        while TokioInstant::now() < deadline {
-            tokio::select! {
-                Some(resp) = rx.recv() => {
-                    match resp {
-                        tt_types::wire::Response::SubscribeResponse { topic, instrument, success } => {
-                            println!("Subscribed: topic={:?} instrument={} success={}", topic, instrument, success);
-                        }
-                        tt_types::wire::Response::AnnounceShm(ann) => {
-                            println!("AnnounceShm: topic={:?} key={:?}", ann.topic, ann.key);
-                        }
-                        tt_types::wire::Response::MBP10(batch) => {
-                            let e = batch.event;
-                            println!(
-                                "Mbp10: action={:?} side={:?} px={} sz={} flags={:?} ts_event={} ts_recv={}",
-                                e.action, e.side, e.price, e.size, e.flags, e.ts_event, e.ts_recv
-                            );
-                            got_data = true;
-                        }
-                        other => {
-                            // Uncomment for debugging
-                            // println!("Other response: {:?}", other);
-                        }
-                    }
-                }
-                _ = sleep(Duration::from_millis(50)) => {}
+        // wait for subscribe ack -> success
+        timeout(Duration::from_secs(5), async {
+            while !got_sub_ok.load(Ato::SeqCst) {
+                tokio::time::sleep(Duration::from_millis(50)).await;
             }
-        }
-        assert!(got_data);
-        // Drop rx to detach; router will clean up when client disconnects
+        }).await.map_err(|_| anyhow::anyhow!("timeout waiting for SubscribeResponse(success=true)"))?;
+
+        // wait for either framed data OR AnnounceShm (SHM mode)
+        timeout(Duration::from_secs(10), async {
+            while !got_data.load(Ato::SeqCst) {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }).await.map_err(|_| anyhow::anyhow!("timeout waiting for MBP10 or AnnounceShm"))?;
+
+        let _ = drain.await;
         Ok(())
     }
 }

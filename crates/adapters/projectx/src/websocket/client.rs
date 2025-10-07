@@ -103,44 +103,49 @@ pub struct PxWebSocketClient {
 }
 
 pub fn parse_px_instrument(input: &str) -> String {
+    // Expect formats like "CON.F.US.MNQ.Z25" or root-only like "CON.F.US.MNQ".
     let mut parts: Vec<&str> = input.split('.').collect();
-    if parts.len() >= 2 {
+    if parts.len() >= 4 {
+        // Last part is expiry (e.g., Z25), preceding is root (e.g., MNQ)
         let expiry = parts.pop().unwrap();
         let root = parts.pop().unwrap();
-        // Normalize expiry to a single-digit year (e.g., Z25 -> Z5, Z05 -> Z5)
-        let exp_norm = if expiry.len() >= 2 {
-            let mut chars = expiry.chars();
-            let month = chars.next().unwrap_or('Z');
-            let last_digit = chars.last().unwrap_or('0');
-            format!("{}{}", month, last_digit)
-        } else {
-            expiry.to_string()
-        };
-        format!("{}{}", root, exp_norm)
-    } else {
-        input.to_string()
+        // Ensure two-digit year in expiry; keep as provided if already two-digit
+        // If expiry is like "Z5", convert to "Z05"? Requirement: format as ROOT.MonYY (two-digit). We'll map single digit to 0X? Better: assume PX always provides 2-digit (Z25). If 1-digit, left-pad with 0.
+        let mut chars = expiry.chars();
+        let month = chars.next().unwrap_or('Z');
+        let yy: String = chars.collect();
+        let yy2 = if yy.len() == 1 { format!("0{}", yy) } else { yy };
+        return format!("{}.{}{}", root, month, yy2);
+    } else if parts.len() >= 2 {
+        // Fallback: root-only PX id -> produce continuous instrument ROOT (no expiry)
+        let root = parts.pop().unwrap();
+        return root.to_string();
     }
+    input.to_string()
 }
 
 /// Format to ProjectX contract id:
 /// - Continuous:  "CON.F.US.MNQ"
 /// - Dated:       "CON.F.US.MNQ.Z25"
 pub fn px_format_from_instrument(instrument: &Instrument) -> String {
-    // sanitize + uppercase once
-    let raw = sanitize_code(&instrument.to_string()).to_ascii_uppercase();
+    // Accept instruments like "MNQ.Z25" or legacy "MNQZ25" or root-only "MNQ".
+    let code = sanitize_code(&instrument.to_string()).to_ascii_uppercase();
 
     // If it looks like a dated contract, format ROOT + . + <Mon><YY>
     if let Some((month_ch, yy)) = extract_month_year(instrument) {
-        // ROOT is everything before the month/year suffix
-        let mut root = extract_root(instrument);
-        root = sanitize_code(&root).to_ascii_uppercase();
-        // ProjectX expects two-digit year; map 1-digit codes (e.g., 5) to 25 for 2025
-        let yy_norm: u8 = if yy < 10 { yy + 20 } else { yy };
-        return format!("CON.F.US.{}.{}{:02}", root, month_ch, yy_norm);
+        // ROOT: if the instrument contains a '.', take substring before it; else use extract_root
+        let root = if let Some(dot) = code.find('.') {
+            code[..dot].to_string()
+        } else {
+            sanitize_code(&extract_root(instrument)).to_ascii_uppercase()
+        };
+        // Two-digit year as provided by extract_month_year (1–2 digits). Left-pad if needed.
+        let yy2: u8 = yy;
+        return format!("CON.F.US.{}.{}{:02}", root, month_ch, yy2);
     }
 
     // Otherwise treat as a continuous root
-    format!("CON.F.US.{}", raw)
+    format!("CON.F.US.{}", code)
 }
 
 impl PxWebSocketClient {
@@ -601,7 +606,9 @@ impl PxWebSocketClient {
                                 let args_opt = val.get("arguments").and_then(|a| a.as_array());
                                 if let Some(args) = args_opt {
                                     // contract id is first arg when present
-                                    let instrument_opt = args.get(0).and_then(|v| v.as_str()).map(|s| parse_px_instrument(s));
+                                    let instrument_opt = args.get(0)
+                                        .and_then(|v| v.as_str())
+                                        .and_then(|s| Instrument::try_parse_dotted(s).ok());
                                     // data is second arg when present, otherwise first
                                     let maybe_data = if args.len() >= 2 { Some(&args[1]) } else { args.get(0) };
 
@@ -623,8 +630,7 @@ impl PxWebSocketClient {
                                         return;
                                     }
 
-                                    if let Some(instr_str) = instrument_opt {
-                                        if let Ok(instrument) = Instrument::from_str(&instr_str) {
+                                    if let Some(instrument) = instrument_opt {
                                             let symbol = extract_root(&instrument);
                                             let provider = tt_types::providers::ProviderKind::ProjectX(self.firm);
                                             let key = tt_types::keys::SymbolKey { instrument: instrument.clone(), provider };
@@ -658,11 +664,8 @@ impl PxWebSocketClient {
                                             if published == 0 {
                                                 info!(target: "projectx.ws", "GatewayQuote: parsed but no valid quotes for {}", instrument);
                                             }
-                                        } else {
-                                            info!(target: "projectx.ws", "GatewayQuote (invalid instrument arg): {:?}", args.get(0));
-                                        }
                                     } else {
-                                        info!(target: "projectx.ws", "GatewayQuote (missing contract id arg): {:?}", args);
+                                        info!(target: "projectx.ws", "GatewayQuote: could not derive instrument from args: {:?}", args);
                                     }
                                 }
                             }
@@ -671,7 +674,9 @@ impl PxWebSocketClient {
                                 let args_opt = val.get("arguments").and_then(|a| a.as_array());
                                 if let Some(args) = args_opt {
                                     // First arg is the full contract id (e.g., "CON.F.US.MNQ.Z25"). Use it to derive Instrument.
-                                    let instrument_opt = args.get(0).and_then(|v| v.as_str()).map(|s| parse_px_instrument(s));
+                                    let instrument_opt = args.get(0)
+                                                                            .and_then(|v| v.as_str())
+                                                                            .and_then(|s| Instrument::try_parse_dotted(s).ok());
 
                                     // Second arg is either an array of trade objects or a single object
                                     let maybe_data = if args.len() >= 2 { Some(&args[1]) } else { args.get(0) };
@@ -698,8 +703,7 @@ impl PxWebSocketClient {
                                     }
 
                                     // Resolve instrument once
-                                    if let Some(instr_str) = instrument_opt {
-                                        if let Ok(instrument) = Instrument::from_str(&instr_str) {
+                                    if let Some(instrument) = instrument_opt {
                                             let symbol = extract_root(&instrument);
                                             let provider = tt_types::providers::ProviderKind::ProjectX(self.firm);
                                             let key = tt_types::keys::SymbolKey { instrument: instrument.clone(), provider };
@@ -728,11 +732,8 @@ impl PxWebSocketClient {
                                             if published == 0 {
                                                 info!(target: "projectx.ws", "GatewayTrade: parsed but no valid ticks for {}", instrument);
                                             }
-                                        } else {
-                                            info!(target: "projectx.ws", "GatewayTrade (invalid instrument arg): {:?}", args.get(0));
-                                        }
                                     } else {
-                                        info!(target: "projectx.ws", "GatewayTrade (missing contract id arg): {:?}", args);
+                                        info!(target: "projectx.ws", "GatewayTrade: could not derive instrument from args: {:?}", args);
                                     }
                                 }
                             }
@@ -741,21 +742,12 @@ impl PxWebSocketClient {
                                 let args_opt = val.get("arguments").and_then(|a| a.as_array());
                                 if let Some(args) = args_opt {
                                     // contract id is first arg; data is second when present
-                                    let (instrument_opt, data_val) = if args.len() >= 2 {
-                                        (
-                                            args.get(0).and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                            Some(&args[1])
-                                        )
-                                    } else {
-                                        (
-                                            args.get(0).and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                            args.get(0)
-                                        )
-                                    };
+                                    let instr_opt = args.get(0)
+                                        .and_then(|v| v.as_str())
+                                        .and_then(|s| Instrument::try_parse_dotted(s).ok());
+                                    let data_val = if args.len() >= 2 { Some(&args[1]) } else { args.get(0) };
 
-                                    if let Some(instr_str) = instrument_opt {
-                                        // Normalize instrument like other handlers (collapse 2-digit year to 1 digit)
-                                        if let Ok(instrument) = Instrument::from_str(&parse_px_instrument(instr_str.as_str())) {
+                                    if let Some(instrument) = instr_opt {
                                             let symbol = extract_root(&instrument);
                                             let provider = tt_types::providers::ProviderKind::ProjectX(self.firm);
                                             let key = tt_types::keys::SymbolKey { instrument: instrument.clone(), provider };
@@ -904,6 +896,7 @@ impl PxWebSocketClient {
                                                 // Convert price to Decimal via integer nanos to avoid FP rounding issues
                                                 let price_nanos = (it.price * 1_000_000_000.0).round() as i64;
                                                 let event = Mbp10 {
+                                                    instrument: instrument.clone(),
                                                     ts_recv,
                                                     ts_event,
                                                     rtype: 10,
@@ -919,6 +912,7 @@ impl PxWebSocketClient {
                                                     sequence: 0,
                                                     book: book_opt,
                                                 };
+                                               // info!("{:?}", event);
                                                 first_in_batch = false;
 
                                                 if let Err(e) = self.bus.publish_mbp10_for_key(&key, event).await {
@@ -928,13 +922,10 @@ impl PxWebSocketClient {
                                                 }
                                             }
                                             if published == 0 {
-                                                info!(target: "projectx.ws", "GatewayDepth: parsed but no valid updates for {}", instrument);
+                                                info!(target: "projectx.ws", "GatewayDepth: parsed but no valid updates for instrument");
                                             }
-                                        } else {
-                                            info!(target: "projectx.ws", "GatewayDepth: invalid instrument in args: {}", instr_str);
-                                        }
                                     } else {
-                                        info!(target: "projectx.ws", "GatewayDepth: missing instrument in arguments");
+                                        info!(target: "projectx.ws", "GatewayDepth: could not derive instrument from args: {:?}", args);
                                     }
                                 }
                             }
@@ -985,7 +976,7 @@ impl PxWebSocketClient {
                                     };
                                 // Build identifiers
                                 let instrument =
-                                    match Instrument::from_str(order.symbol_id.as_str()) {
+                                    match Instrument::try_parse_dotted(order.contract_id.as_str()) {
                                         Ok(i) => i,
                                         Err(e) => {
                                             error!("error parsing instrument: {:?}", e);

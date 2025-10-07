@@ -140,13 +140,14 @@ impl PositionLedger {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
     use super::*;
     use crate::securities::symbols::Instrument;
     use rust_decimal::prelude::FromPrimitive;
 
     #[test]
     fn accumulate_and_cross_flat() {
-        let inst = Instrument::try_from("ESZ5").unwrap();
+        let inst = Instrument::from_str("ES.Z25").unwrap();
         let mut l = PositionLedger::new();
         // buy 2 @ 100
         l.apply_fill(
@@ -178,7 +179,7 @@ mod tests {
 
     #[test]
     fn same_side_accumulates_and_updates_vwap() {
-        let inst = Instrument::try_from("CLZ5").unwrap();
+        let inst = Instrument::from_str("CL.Z25").unwrap();
         let mut l = PositionLedger::new();
         l.apply_fill(
             &inst,
@@ -204,7 +205,7 @@ mod tests {
 
     #[test]
     fn close_to_flat_exact() {
-        let inst = Instrument::try_from("NQZ5").unwrap();
+        let inst = Instrument::from_str("NQ.Z25").unwrap();
         let mut l = PositionLedger::new();
         l.apply_fill(
             &inst,
@@ -228,7 +229,7 @@ mod tests {
 
     #[test]
     fn overshoot_reverses_and_starts_new_segment() {
-        let inst = Instrument::try_from("ESZ5").unwrap();
+        let inst = Instrument::from_str("NQ.Z25").unwrap();
         let mut l = PositionLedger::new();
         l.apply_fill(
             &inst,
@@ -255,7 +256,7 @@ mod tests {
 
     #[test]
     fn fees_accumulate_on_segment() {
-        let inst = Instrument::try_from("ESZ5").unwrap();
+        let inst = Instrument::from_str("ES.Z25").unwrap();
         let mut l = PositionLedger::new();
         l.apply_fill(
             &inst,

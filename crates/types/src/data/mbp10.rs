@@ -5,6 +5,7 @@ pub use chrono::{DateTime, Utc};
 use chrono::{TimeDelta};
 pub use rust_decimal::Decimal;
 use strum_macros::Display;
+use crate::securities::symbols::Instrument;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, Serialize, Deserialize)]
 pub enum BookSide {
@@ -154,6 +155,7 @@ impl BookLevels {
     Deserialize,
 )]
 pub struct Mbp10 {
+    pub instrument: Instrument,
     /// Capture-server receive time (UTC).
     pub ts_recv: DateTime<Utc>,
     /// Matching engine receive time (UTC).
@@ -193,6 +195,7 @@ pub struct Mbp10 {
 /// * `*_ns` fields are UNIX epoch nanoseconds.
 /// * `price_nanos` and price vectors are integer nanos (1e-9) and converted to `Decimal` scale 9.
 pub fn make_mbp10(
+    instrument: Instrument,
     ts_recv_ns: u64,
     ts_event_ns: u64,
     rtype: u8,
@@ -248,6 +251,7 @@ pub fn make_mbp10(
     });
 
     Some(Mbp10 {
+        instrument,
         ts_recv,
         ts_event,
         rtype,

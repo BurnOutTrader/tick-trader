@@ -1,3 +1,4 @@
+use std::str::FromStr;
 use chrono::{Duration, TimeZone, Utc};
 use rust_decimal::Decimal;
 use tt_types::data::core::{Bbo, Candle, Tick};
@@ -18,7 +19,7 @@ fn tick(sym: &str, t_ns: i64, px: i64, sz: i64, side: Side) -> Tick {
         t_ns.rem_euclid(1_000_000_000) as u32,
     )
     .unwrap();
-    let instrument = Instrument::try_from(sym).unwrap();
+    let instrument = Instrument::from_str(sym).unwrap();
     Tick {
         symbol: sym.to_string(),
         instrument,
@@ -38,7 +39,7 @@ fn bbo(sym: &str, t_ns: i64, bid: i64, ask: i64) -> Bbo {
     .unwrap();
     Bbo {
         symbol: sym.to_string(),
-        instrument: Instrument::try_from(sym).unwrap(),
+        instrument: Instrument::from_str(sym).unwrap(),
         bid: d(bid),
         bid_size: d(1),
         ask: d(ask),
@@ -63,7 +64,7 @@ fn candle(
 ) -> Candle {
     Candle {
         symbol: sym.to_string(),
-        instrument: Instrument::try_from(sym).unwrap(),
+        instrument: Instrument::from_str(sym).unwrap(),
         time_start: start,
         time_end: start + Duration::seconds(secs) - Duration::nanoseconds(1),
         open: d(o),
@@ -79,12 +80,12 @@ fn candle(
 
 #[test]
 fn ticks_to_m1_single_bar() {
-    let symbol = "MNQZ5";
+    let symbol = "MNQ.Z25";
     let mut cons = TicksToCandlesConsolidator::new(
         Resolution::Minutes(1),
         symbol.to_string(),
         None,
-        Instrument::try_from(symbol).unwrap(),
+        Instrument::from_str(symbol).unwrap(),
     );
 
     let base = Utc
@@ -137,11 +138,11 @@ fn ticks_to_m1_single_bar() {
 
 #[test]
 fn ticks_to_tickbars_two_bars() {
-    let symbol = "MNQZ5";
+    let symbol = "MNQ.Z25";
     let mut cons = TicksToTickBarsConsolidator::new(
         3,
         symbol.to_string(),
-        Instrument::try_from(symbol).unwrap(),
+        Instrument::from_str(symbol).unwrap(),
     );
 
     let base = Utc
@@ -181,12 +182,12 @@ fn ticks_to_tickbars_two_bars() {
 
 #[test]
 fn candles_to_m5_from_m1() {
-    let symbol = "MNQZ5";
+    let symbol = "MNQ.Z25";
     let mut cons = CandlesToCandlesConsolidator::new(
         Resolution::Minutes(5),
         symbol.to_string(),
         None,
-        Instrument::try_from(symbol).unwrap(),
+        Instrument::from_str(symbol).unwrap(),
     );
 
     // 5 x 1m candles starting at 10:00:00
@@ -230,12 +231,12 @@ fn candles_to_m5_from_m1() {
 
 #[test]
 fn bbo_to_m1_two_bars_midprice() {
-    let symbol = "MNQZ5";
+    let symbol = "MNQ.Z25";
     let mut cons = BboToCandlesConsolidator::new(
         Resolution::Minutes(1),
         symbol.to_string(),
         None,
-        Instrument::try_from(symbol).unwrap(),
+        Instrument::from_str(symbol).unwrap(),
     );
 
     let base = Utc
@@ -268,13 +269,13 @@ fn bbo_to_m1_two_bars_midprice() {
 
 #[test]
 fn candles_to_m5_no_feedback_duplicate() {
-    let symbol = "MNQZ5";
+    let symbol = "MNQ.Z25";
 
     let mut cons = CandlesToCandlesConsolidator::new(
         Resolution::Minutes(5),
         symbol.to_string(),
         None,
-        Instrument::try_from(symbol).unwrap(),
+        Instrument::from_str(symbol).unwrap(),
     );
 
     // 5 x 1m candles starting at 10:00:00

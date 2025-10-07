@@ -138,6 +138,6 @@ let _ = req_tx.send(Request::SubscribeKey(SubscribeKey { topic: Topic::Depth, ke
 use std::str::FromStr;
 use tt_types::securities::symbols::Instrument;
 
-let instrument: Instrument = Instrument::from_str("MNQZ25").unwrap();
+let instrument: Instrument = Instrument::from_str("MNQ.Z25").unwrap();
 let symbol: String = "MNQ".to_string();
 ```

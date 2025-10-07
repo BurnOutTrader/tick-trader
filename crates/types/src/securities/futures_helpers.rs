@@ -156,10 +156,14 @@ pub fn parse_expiry_from_instrument(instrument: &Instrument) -> Option<NaiveDate
 /// - Accept 1–2 trailing digits for the year
 /// - Case-insensitive; preserves the original casing of the root
 pub fn extract_root(instrument: &Instrument) -> String {
-    // Valid month codes per CME
-    const MONTHS: &[u8] = b"FGHJKMNQUVXZ";
-
+    // If instrument is in dot format (e.g., "MNQ.Z25"), return the part before the dot
     let code = instrument.to_string();
+    if let Some(dot) = code.find('.') {
+        return code[..dot].to_string();
+    }
+
+    // Legacy format without dot: strip trailing <Mon><YY>
+    const MONTHS: &[u8] = b"FGHJKMNQUVXZ";
     let up = code.to_ascii_uppercase();
     let b = up.as_bytes();
 
@@ -272,30 +276,32 @@ pub fn extract_month_year(instrument: &Instrument) -> Option<(char, u8)> {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
     use super::*;
     use crate::securities::symbols::Instrument;
 
     #[test]
     fn test_extract_month_year_two_letter_root() {
-        let i = Instrument::try_from("ESZ25").expect("ESZ25");
+        let i = Instrument::from_str("ES.Z25").expect("ESZ25");
         assert_eq!(extract_month_year(&i), Some(('Z', 25)));
     }
 
     #[test]
     fn test_extract_month_year_three_letter_root() {
-        let i = Instrument::try_from("MNQZ5").expect("MNQZ5");
+        let i = Instrument::from_str("MNQ.Z5").expect("MNQZ5");
         assert_eq!(extract_month_year(&i), Some(('Z', 5)));
     }
 
     #[test]
     fn test_extract_month_year_other() {
-        let i = Instrument::try_from("HEG24").expect("HEG24");
+        // Accept dotted variant where suffix carries month+year
+        let i = Instrument::from_str("HE.G24").expect("HE.G24");
         assert_eq!(extract_month_year(&i), Some(('G', 24)));
     }
 
     #[test]
     fn test_extract_month_year_none() {
-        let i = Instrument::try_from("CL").expect("CL");
-        assert_eq!(extract_month_year(&i), None);
+        // Continuous roots should be rejected by Instrument parser
+        assert!(Instrument::from_str("CL").is_err());
     }
 }

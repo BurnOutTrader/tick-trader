@@ -132,7 +132,7 @@ async fn main() -> anyhow::Result<()> {
         mgr.update_historical_database(req).await?;
     }*/
 
-    let req = HistoricalRequest {
+  /*  let req = HistoricalRequest {
         provider_kind: ProviderKind::ProjectX(ProjectXTenant::Topstep),
         topic: Topic::Candles1m,
         instrument: Instrument::from_str("MNQZ5").unwrap(),
@@ -140,7 +140,7 @@ async fn main() -> anyhow::Result<()> {
         start: Utc::now() - chrono::Duration::days(1500),
         end: Utc::now(),
     };
-    mgr.update_historical_database(req).await?;
+    mgr.update_historical_database(req).await?;*/
 
     router.set_backend(mgr);
 

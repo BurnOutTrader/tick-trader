@@ -112,28 +112,171 @@ impl Currency {
     }
 }
 
-///Example: `MNQZ5`
-
+/// Example canonical: `MNQ.Z25` or continuous contracts `MNQ.C.0`
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct Instrument(String);
+pub struct Instrument(pub String);
+
 impl Instrument {
-    pub fn try_from(name: &str) -> anyhow::Result<Instrument> {
-        if name.len() > 5 {
-            return Err(anyhow!("Instrument name too long: {}", name));
-        }
-        Ok(Self(name.to_string()))
+    pub const MONTHS: &'static [u8] = b"FGHJKMNQUVXZ";
+
+    pub fn is_valid_month(m: u8) -> bool {
+        Self::MONTHS.contains(&m)
     }
-    pub fn to_lowercase(&self) -> String {
-        self.to_string().to_lowercase()
+
+    /// 1, 2, or 4-digit year → 1–2 digit suffix
+    /// - 4-digit: last two (2025 -> "25")
+    /// - 2-digit: keep, but strip leading 0 ("05" -> "5")
+    /// - 1-digit: keep
+    pub fn normalize_year_digits(digs: &str) -> anyhow::Result<String> {
+        if digs.is_empty() || digs.len() > 4 || !digs.chars().all(|c| c.is_ascii_digit()) {
+            return Err(anyhow!("invalid year digits: {digs}"));
+        }
+        let out = match digs.len() {
+            1 => digs.to_string(),
+            2 => if digs.starts_with('0') { digs[1..].to_string() } else { digs.to_string() },
+            4 => digs[2..].to_string(),
+            _ => return Err(anyhow!("invalid year length: {}", digs.len())),
+        };
+        Ok(out)
+    }
+
+    /// Build canonical month contract: ROOT.MYY (returns Instrument)
+    pub fn build_canonical_month(root: &str, suff: &str) -> anyhow::Result<Self> {
+        if suff.len() < 2 {
+            return Err(anyhow!("suffix too short: {suff}"));
+        }
+        let mut chars = suff.chars();
+        let m = chars.next().unwrap().to_ascii_uppercase();
+        let rest: String = chars.collect();
+
+        if !m.is_ascii_alphabetic() {
+            return Err(anyhow!("suffix missing month letter: {suff}"));
+        }
+        if !Self::is_valid_month(m as u8) {
+            return Err(anyhow!("invalid month code: {}", m));
+        }
+        if root.is_empty() || !root.chars().all(|c| c.is_ascii_alphanumeric()) {
+            return Err(anyhow!("invalid root: {root}"));
+        }
+
+        let yy = Self::normalize_year_digits(&rest)?;
+        if yy.is_empty() {
+            return Err(anyhow!("missing/invalid year digits in: {suff}"));
+        }
+
+        let name = format!("{}.{}{}", root.to_ascii_uppercase(), m, yy);
+        Self::validate_len(name)
+    }
+
+    /// Build canonical continuous contract: ROOT.C.0
+    pub fn build_canonical_cont(root: &str) -> anyhow::Result<Self> {
+        if root.is_empty() || !root.chars().all(|c| c.is_ascii_alphanumeric()) {
+            return Err(anyhow!("invalid root for continuous: {root}"));
+        }
+        let name = format!("{}.C.0", root.to_ascii_uppercase());
+        Self::validate_len(name)
+    }
+
+    /// Enforce a sane upper bound (adjust if you need)
+    pub fn validate_len<S: Into<String>>(s: S) -> anyhow::Result<Self> {
+        let name = s.into();
+        if name.len() > 32 {
+            return Err(anyhow!("instrument name too long: {name}"));
+        }
+        Ok(Instrument(name))
+    }
+
+    /// Parse dotted forms, including vendor prefixes and continuous:
+    /// - "... MNQ . Z25"  => "MNQ.Z25"
+    /// - "... MNQ . c . 0" => "MNQ.C.0"
+    pub fn try_parse_dotted(up: &str) -> anyhow::Result<Self> {
+        let parts: Vec<&str> = up.split('.').filter(|p| !p.is_empty()).collect();
+        if parts.len() < 2 {
+            return Err(anyhow!("not dotted"));
+        }
+
+        // continuous detection: last two segments "c" and "0"
+        if parts.len() >= 3
+            && parts[parts.len() - 2].eq_ignore_ascii_case("c")
+            && parts[parts.len() - 1] == "0"
+        {
+            let root = parts[parts.len() - 3];
+            return Self::build_canonical_cont(root);
+        }
+
+        // standard month form: last two segments as (root, suff)
+        let root = parts[parts.len() - 2];
+        let suff = parts[parts.len() - 1];
+        Self::build_canonical_month(root, suff)
+    }
+
+    /// Parse compact month form like "MNQZ25", "MNQZ5", "NQH6"
+    pub fn try_parse_compact(up: &str) -> anyhow::Result<Self> {
+        let b = up.as_bytes();
+        if b.len() < 3 {
+            return Err(anyhow!("too short for compact futures: {up}"));
+        }
+        let mut i = b.len();
+
+        // collect up to 4 trailing digits
+        let mut dstart = i;
+        let mut dcount = 0usize;
+        while dstart > 0 && b[dstart - 1].is_ascii_digit() && dcount < 4 {
+            dstart -= 1;
+            dcount += 1;
+        }
+        if dcount == 0 {
+            return Err(anyhow!("no trailing year digits"));
+        }
+        if dstart == 0 {
+            return Err(anyhow!("missing month letter/root"));
+        }
+
+        let mpos = dstart - 1;
+        let m = b[mpos].to_ascii_uppercase();
+        if !Self::is_valid_month(m) {
+            return Err(anyhow!("invalid month code in compact: {}", m as char));
+        }
+        let root = &up[..mpos];
+        let digs = &up[dstart..];
+
+        Self::build_canonical_month(root, &format!("{}{}", m as char, digs))
     }
 }
+
 impl FromStr for Instrument {
-    type Err = ();
+    type Err = anyhow::Error;
+
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if !s.is_empty() {
-            return Ok(Instrument(s.to_string()));
+        let up = s.trim().to_ascii_uppercase();
+        if up.is_empty() {
+            return Err(anyhow!("empty instrument string"));
         }
-        Err(())
+
+        // 1) dotted (incl. vendor prefixes & continuous c.0)
+        if let Ok(inst) = Self::try_parse_dotted(&up) {
+            return Ok(inst);
+        }
+
+        // 2) compact (e.g., MNQZ25)
+        if let Ok(inst) = Self::try_parse_compact(&up) {
+            return Ok(inst);
+        }
+
+        // 3) explicit already-canonical dotted with odd casing/spacing (redundant but safe)
+        if up.contains('.') {
+            if let Ok(inst) = {
+                let mut it = up.split('.');
+                match (it.next(), it.next(), it.next()) {
+                    (Some(root), Some(suff), None) => Self::build_canonical_month(root, suff),
+                    _ => Err(anyhow!("unrecognized dotted form: {up}")),
+                }
+            } {
+                return Ok(inst);
+            }
+        }
+
+        Err(anyhow!("could not parse instrument: {s}"))
     }
 }
 impl Display for Instrument {

@@ -56,6 +56,9 @@ impl AccountActor {
 
     fn apply(&mut self, ev: AccountEvent) {
         // Append to WAL first, then apply side effects.
+        if let Ok(bytes) = bincode::serialize(&ev) {
+            self.wal.push(bytes);
+        }
         match ev {
             AccountEvent::Order(oe) => self.apply_order_event(oe),
             AccountEvent::Exec(exe) => self.apply_exec(exe),
@@ -228,11 +231,12 @@ impl AccountActor {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
     use super::*;
     use crate::securities::symbols::Instrument;
 
     fn inst(code: &str) -> Instrument {
-        Instrument::try_from(code).unwrap()
+        Instrument::from_str(code).unwrap()
     }
 
     #[test]
@@ -251,7 +255,7 @@ mod tests {
         // Ack new order
         actor.apply(AccountEvent::Order(OrderEvent {
             kind: OrderEventKind::NewAck {
-                instrument: inst("ESZ5"),
+                instrument: inst("ES.Z25"),
                 side: Side::Buy,
                 qty: 10,
             },
@@ -305,7 +309,7 @@ mod tests {
         // Create an order via ack
         actor.apply(AccountEvent::Order(OrderEvent {
             kind: OrderEventKind::NewAck {
-                instrument: inst("MNQZ5"),
+                instrument: inst("MNQ.Z25"),
                 side: Side::Buy,
                 qty: 3,
             },
@@ -327,7 +331,7 @@ mod tests {
             fee: Decimal::from_f32(0.5).unwrap(),
             ts_ns: 2,
             provider_seq: Some(11),
-            instrument: inst("MNQZ5"),
+            instrument: inst("MNQ.Z25"),
         }));
         // Duplicate exec should be ignored
         actor.apply(AccountEvent::Exec(ExecutionEvent {
@@ -340,7 +344,7 @@ mod tests {
             fee: Decimal::from_f32(0.5).unwrap(),
             ts_ns: 2,
             provider_seq: Some(11),
-            instrument: inst("MNQZ5"),
+            instrument: inst("MNQ.Z25"),
         }));
         let o = actor.orders_by_provider.get(&prov).unwrap();
         assert_eq!(o.cum_qty, 1);
@@ -348,7 +352,7 @@ mod tests {
         assert_eq!(o.state, OrderState::PartiallyFilled);
         // Mark price to compute open pnl on a remaining position (long 1 @ 100, mark 105 => +5)
         actor.apply(AccountEvent::Mark(MarkEvent {
-            instrument: inst("MNQZ5"),
+            instrument: inst("MNQ.Z25"),
             mark_px: Decimal::from_i32(105).unwrap(),
             ts_ns: 3,
         }));
@@ -365,7 +369,7 @@ mod tests {
             fee: Decimal::ZERO,
             ts_ns: 4,
             provider_seq: Some(12),
-            instrument: inst("MNQZ5"),
+            instrument: inst("MNQ.Z25"),
         }));
         let o = actor.orders_by_provider.get(&prov).unwrap();
         assert_eq!(o.leaves, 0);
@@ -382,7 +386,7 @@ mod tests {
             fee: Decimal::ZERO,
             ts_ns: 5,
             provider_seq: None,
-            instrument: inst("MNQZ5"),
+            instrument: inst("MNQ.Z25"),
         }));
         // Open PnL should be 0 (flat); day realized > 39.9
         assert_eq!(actor.state.open_pnl, Decimal::ZERO);
@@ -404,7 +408,7 @@ mod tests {
         let prov = ProviderOrderId("P3".to_string());
         actor.apply(AccountEvent::Order(OrderEvent {
             kind: OrderEventKind::NewAck {
-                instrument: inst("ESZ5"),
+                instrument: inst("ES.Z25"),
                 side: Side::Buy,
                 qty: 1,
             },
@@ -424,7 +428,7 @@ mod tests {
             fee: Decimal::ZERO,
             ts_ns: 2,
             provider_seq: Some(2),
-            instrument: inst("ESZ5"),
+            instrument: inst("ES.Z25"),
         }));
         // Now send a cancel with no seq; can_apply returns true (current rules) and sets Canceled
         actor.apply(AccountEvent::Order(OrderEvent {
@@ -454,7 +458,7 @@ mod tests {
         // Ack at seq 5
         actor.apply(AccountEvent::Order(OrderEvent {
             kind: OrderEventKind::NewAck {
-                instrument: inst("ESZ5"),
+                instrument: inst("ES.Z25"),
                 side: Side::Buy,
                 qty: 2,
             },
@@ -494,7 +498,7 @@ mod tests {
         // Ack at seq 2
         actor.apply(AccountEvent::Order(OrderEvent {
             kind: OrderEventKind::NewAck {
-                instrument: inst("MNQZ5"),
+                instrument: inst("MNQ.Z25"),
                 side: Side::Buy,
                 qty: 1,
             },
@@ -515,7 +519,7 @@ mod tests {
             fee: Decimal::ZERO,
             ts_ns: 2,
             provider_seq: Some(3),
-            instrument: inst("MNQZ5"),
+            instrument: inst("MNQ.Z25"),
         }));
         // Equal seq cancel (2) should override due to precedence
         actor.apply(AccountEvent::Order(OrderEvent {
@@ -547,7 +551,7 @@ mod tests {
         // Ack then Cancel with higher seq
         actor.apply(AccountEvent::Order(OrderEvent {
             kind: OrderEventKind::NewAck {
-                instrument: inst("ESZ5"),
+                instrument: inst("ES.Z25"),
                 side: Side::Sell,
                 qty: 2,
             },
@@ -576,9 +580,9 @@ mod tests {
             fee: Decimal::ZERO,
             ts_ns: 3,
             provider_seq: Some(9),
-            instrument: inst("ESZ5"),
+            instrument: inst("ES.Z25"),
         }));
-        let seg = actor.positions.segments.get(&inst("ESZ5")).cloned();
+        let seg = actor.positions.segments.get(&inst("ES.Z25")).cloned();
         assert!(seg.is_some());
         let seg = seg.unwrap();
         assert_eq!(seg.net_qty, -1);
@@ -603,7 +607,7 @@ mod tests {
         let prov = ProviderOrderId("P7".to_string());
         actor.apply(AccountEvent::Order(OrderEvent {
             kind: OrderEventKind::NewAck {
-                instrument: inst("CLZ5"),
+                instrument: inst("CL.Z25"),
                 side: Side::Buy,
                 qty: 1,
             },
@@ -624,7 +628,7 @@ mod tests {
         // Duplicate NewAck at same seq as first should not downgrade state
         actor.apply(AccountEvent::Order(OrderEvent {
             kind: OrderEventKind::NewAck {
-                instrument: inst("CLZ5"),
+                instrument: inst("CL.Z25"),
                 side: Side::Buy,
                 qty: 1,
             },
@@ -683,7 +687,7 @@ mod tests {
             fee: Decimal::ZERO,
             ts_ns: 1,
             provider_seq: None,
-            instrument: inst("ESZ5"),
+            instrument: inst("ES.Z25"),
         }));
         actor.apply(AccountEvent::Exec(ExecutionEvent {
             exec_id: ExecId::new(),
@@ -695,16 +699,16 @@ mod tests {
             fee: Decimal::ZERO,
             ts_ns: 2,
             provider_seq: None,
-            instrument: inst("MNQZ5"),
+            instrument: inst("MNQ.Z25"),
         }));
         // Marks: ES 105 => +5*2 = +10; NQ 195 on short @200 => +5*1 = +5; total +15
         actor.apply(AccountEvent::Mark(MarkEvent {
-            instrument: inst("ESZ5"),
+            instrument: inst("ES.Z25"),
             mark_px: Decimal::from_i32(105).unwrap(),
             ts_ns: 3,
         }));
         actor.apply(AccountEvent::Mark(MarkEvent {
-            instrument: inst("MNQZ5"),
+            instrument: inst("MNQ.Z25"),
             mark_px: Decimal::from_i32(195).unwrap(),
             ts_ns: 4,
         }));
@@ -726,7 +730,7 @@ mod tests {
         // Order -> Ack
         actor.apply(AccountEvent::Order(OrderEvent {
             kind: OrderEventKind::NewAck {
-                instrument: inst("ESZ5"),
+                instrument: inst("ES.Z25"),
                 side: Side::Buy,
                 qty: 1,
             },
@@ -747,7 +751,7 @@ mod tests {
             fee: Decimal::ZERO,
             ts_ns: 2,
             provider_seq: Some(2),
-            instrument: inst("ESZ5"),
+            instrument: inst("ES.Z25"),
         }));
         // Admin (noop)
         let before_state = actor.state.clone();
@@ -755,7 +759,7 @@ mod tests {
         let after_state = actor.state.clone();
         // Mark
         actor.apply(AccountEvent::Mark(MarkEvent {
-            instrument: inst("ESZ5"),
+            instrument: inst("ES.Z25"),
             mark_px: Decimal::from_i32(101).unwrap(),
             ts_ns: 3,
         }));

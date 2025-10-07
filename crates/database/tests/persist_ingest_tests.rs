@@ -117,7 +117,7 @@ fn test_ingest_ticks_merge_monthly_file() {
 
     // Provider string must match writer mapping (see provider_kind_to_db_string)
     let provider_s = ProviderKind::ProjectX(ProjectXTenant::Topstep);
-    let instrument = Instrument::from_str("TESTSM").unwrap();
+    let instrument = Instrument::from_str("MNQ.Z25").unwrap();
     let market = MarketType::Futures;
 
     let day = NaiveDate::from_ymd_opt(2025, 3, 15).unwrap();
@@ -181,7 +181,7 @@ fn test_candles_and_bbo_monthly_paths_and_catalog() {
 
     let provider_kind = ProviderKind::ProjectX(ProjectXTenant::Demo);
     let provider_s = "projectx";
-    let instrument = Instrument::from_str("TESTSM").unwrap();
+    let instrument = Instrument::from_str("MNQ.Z25").unwrap();
     let market = MarketType::Futures;
 
     let day = NaiveDate::from_ymd_opt(2025, 2, 7).unwrap();
@@ -277,7 +277,7 @@ fn test_earliest_latest_ticks_across_days() {
     let root = tmp.path();
 
     let provider_kind = ProviderKind::ProjectX(ProjectXTenant::Demo);
-    let instrument = Instrument::from_str("TESTSM").unwrap();
+    let instrument = Instrument::from_str("MNQ.Z25").unwrap();
     let market = MarketType::Futures;
     let provider_s = ProviderKind::ProjectX(ProjectXTenant::Demo);
     let day1 = NaiveDate::from_ymd_opt(2025, 6, 10).unwrap();
@@ -330,7 +330,7 @@ fn test_ingest_candles_merge_monthly_file() {
 
     let provider_kind = ProviderKind::ProjectX(ProjectXTenant::Demo);
     let provider_s = "projectx";
-    let instrument = Instrument::from_str("TESTSM").unwrap();
+    let instrument = Instrument::from_str("MNQ.Z25").unwrap();
     let market = MarketType::Futures;
 
     let day = NaiveDate::from_ymd_opt(2025, 2, 7).unwrap();
