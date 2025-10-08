@@ -2929,7 +2929,6 @@ dependencies = [
  "dashmap",
  "dotenvy",
  "futures-util",
- "http",
  "log",
  "reqwest",
  "rust_decimal",
