@@ -2,7 +2,7 @@ use crate::http::client::PxHttpClient;
 use crate::http::credentials::PxCredential;
 use crate::http::error::PxError;
 use crate::http::models::{RetrieveBarsReq, RetrieveBarsResponse};
-use crate::websocket::client::{parse_px_instrument, px_format_from_instrument, PxWebSocketClient};
+use crate::websocket::client::{PxWebSocketClient, parse_px_instrument, px_format_from_instrument};
 use ahash::AHashMap;
 use async_trait::async_trait;
 use chrono::{DateTime, Duration as ChronoDuration, NaiveDate, NaiveDateTime, ParseResult, Utc};
@@ -138,7 +138,10 @@ impl PXClient {
 
     /// Retrieve historical bars for a given instrument and topic over [start, end).
     /// Paginates using the ProjectX 20,000-bars limit and normalizes timestamps to UTC.
-    pub async fn retrieve_bars(&self, req: &HistoricalRequest) -> anyhow::Result<Vec<HistoryEvent>> {
+    pub async fn retrieve_bars(
+        &self,
+        req: &HistoricalRequest,
+    ) -> anyhow::Result<Vec<HistoryEvent>> {
         // Map Topic -> Resolution and PX unit fields
         let (resolution, unit, unit_number) = match req.topic {
             Topic::Candles1s => (Resolution::Seconds(1), 1, 1),
@@ -165,8 +168,10 @@ impl PXClient {
                     ex = Some(fc.exchange);
                 }
             }
-            (cid.unwrap_or_else(|| px_format_from_instrument(&req.instrument)),
-             ex.expect("exchange must be present for known instrument"))
+            (
+                cid.unwrap_or_else(|| px_format_from_instrument(&req.instrument)),
+                ex.expect("exchange must be present for known instrument"),
+            )
         };
 
         let limit: i32 = 20_000;
@@ -195,10 +200,10 @@ impl PXClient {
             let resp: RetrieveBarsResponse = self.http.inner.retrieve_bars(&body).await?;
             if !resp.success {
                 anyhow::bail!(
-                "ProjectX retrieveBars error: code={:?} msg={:?}",
-                resp.error_code,
-                resp.error_message
-            );
+                    "ProjectX retrieveBars error: code={:?} msg={:?}",
+                    resp.error_code,
+                    resp.error_message
+                );
             }
 
             if resp.bars.is_empty() {
@@ -208,13 +213,14 @@ impl PXClient {
             }
 
             // Parse to engine candles
-            let mut batch = match resp.to_engine_candles(req.instrument.clone(), resolution, exchange) {
-                Ok(c) => c,
-                Err(e) => {
-                    log::error!("Error parsing ProjectX bars: {}", e);
-                    break 'main;
-                }
-            };
+            let mut batch =
+                match resp.to_engine_candles(req.instrument.clone(), resolution, exchange) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        log::error!("Error parsing ProjectX bars: {}", e);
+                        break 'main;
+                    }
+                };
 
             // Keep only *new* bars strictly after prev_max_start
             if let Some(pms) = prev_max_start {
@@ -233,7 +239,12 @@ impl PXClient {
                 batch.iter().map(|c| c.time_start).min().unwrap(),
                 batch.iter().map(|c| c.time_start).max().unwrap(),
             );
-            log::info!("candles: {} from start={} to start={}", batch.len(), min_s, max_s);
+            log::info!(
+                "candles: {} from start={} to start={}",
+                batch.len(),
+                min_s,
+                max_s
+            );
 
             out.extend(batch);
             prev_max_start = Some(match prev_max_start {

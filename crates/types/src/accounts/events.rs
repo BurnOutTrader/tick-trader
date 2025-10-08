@@ -1,32 +1,19 @@
 use crate::securities::symbols::Instrument;
-use rust_decimal::Decimal;
-use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use chrono::{DateTime, Utc};
+use chrono::rkyv::ArchivedDateTime;
+use rkyv::{AlignedVec, Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
+use rkyv::ser::{serializers::AllocSerializer, Serializer};
+use rust_decimal::Decimal;
 
 use crate::Guid;
+use crate::wire::{Bytes, WireMessage};
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    Archive,
-    RkyvDeserialize,
-    RkyvSerialize,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
+#[archive(check_bytes)]
 pub struct ProviderOrderId(pub String);
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    Archive,
-    RkyvDeserialize,
-    RkyvSerialize,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
+#[archive(check_bytes)]
 pub struct ClientOrderId(pub crate::Guid);
 
 impl ClientOrderId {
@@ -36,16 +23,8 @@ impl ClientOrderId {
     }
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    Archive,
-    RkyvDeserialize,
-    RkyvSerialize,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
+#[archive(check_bytes)]
 pub struct ExecId(pub crate::Guid);
 
 impl ExecId {
@@ -55,16 +34,8 @@ impl ExecId {
     }
 }
 
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Archive,
-    RkyvDeserialize,
-    RkyvSerialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Archive, RkyvDeserialize, RkyvSerialize)]
+#[archive(check_bytes)]
 pub enum Side {
     Buy,
     Sell,
@@ -80,22 +51,20 @@ impl Side {
     }
 }
 
-#[derive(
-    Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize,
-)]
+#[derive(Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize)]
+#[archive(check_bytes)]
 pub struct OrderEvent {
     pub kind: OrderEventKind,
     pub provider_order_id: Option<ProviderOrderId>,
     pub client_order_id: Option<ClientOrderId>,
     pub provider_seq: Option<u64>,
     pub leaves_qty: Option<i64>,
-    #[rkyv(with = "crate::rkyv_types::DateTimeUtcDef")]
     pub ts_ns: DateTime<Utc>,
 }
 
-#[derive(
-    Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize,
-)]
+
+#[derive(Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize)]
+#[archive(check_bytes)]
 pub enum OrderEventKind {
     NewAck {
         instrument: Instrument,
@@ -112,58 +81,53 @@ pub enum OrderEventKind {
     Expired,
 }
 
-#[derive(
-    Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize,
-)]
+#[derive(Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize)]
+#[archive(check_bytes)]
 pub struct ExecutionEvent {
     pub exec_id: ExecId,
     pub provider_order_id: Option<ProviderOrderId>,
     pub client_order_id: Option<ClientOrderId>,
     pub side: Side,
     pub qty: i64,
-    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
     pub price: Decimal,
-    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
+
     pub fee: Decimal,
-    #[rkyv(with = "crate::rkyv_types::DateTimeUtcDef")]
+
     pub ts_ns: DateTime<Utc>,
     pub provider_seq: Option<u64>,
     pub instrument: Instrument,
 }
 
-#[derive(
-    Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize,
-)]
+
+#[derive(Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize)]
+#[archive(check_bytes)]
 pub struct CorrectionEvent {
     pub exec_id_ref: ExecId,
     pub delta_qty: i64,
-    #[rkyv(with = "crate::rkyv_types::DateTimeUtcDef")]
+
     pub ts_ns: DateTime<Utc>,
 }
 
-#[derive(
-    Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize,
-)]
+#[derive(Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize)]
+#[archive(check_bytes)]
 pub enum AdminEvent {
     SnapshotFromProvider,
     ClockSync,
     RiskUpdate,
 }
 
-#[derive(
-    Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize,
-)]
+#[derive(Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize)]
+#[archive(check_bytes)]
 pub struct MarkEvent {
     pub instrument: Instrument,
-    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
+
     pub mark_px: Decimal,
-    #[rkyv(with = "crate::rkyv_types::DateTimeUtcDef")]
+
     pub ts_ns: DateTime<Utc>,
 }
 
-#[derive(
-    Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize,
-)]
+#[derive(Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize)]
+#[archive(check_bytes)]
 pub enum AccountEvent {
     Order(OrderEvent),
     Exec(ExecutionEvent),
@@ -171,11 +135,26 @@ pub enum AccountEvent {
     Admin(AdminEvent),
     Mark(MarkEvent),
 }
+impl Bytes<Self> for AccountEvent {
+    fn from_bytes(archived: &[u8]) -> anyhow::Result<AccountEvent> {
+        // If the archived bytes do not end with the delimiter, proceed as before
+        match rkyv::from_bytes::<AccountEvent>(archived) {
+            //Ignore this warning: Trait `Deserialize<ResponseType, SharedDeserializeMap>` is not implemented for `ArchivedRequestType` [E0277]
+            Ok(response) => Ok(response),
+            Err(e) => Err(anyhow::Error::msg(e.to_string())),
+        }
+    }
+
+    fn to_bytes(&self) -> Vec<u8> {
+        let vec = rkyv::to_bytes::<_, 256>(self).unwrap();
+        vec.into()
+    }
+}
+
 
 // Outbound projections
-#[derive(
-    Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize,
-)]
+#[derive(Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize)]
+#[archive(check_bytes)]
 pub struct OrderUpdate {
     pub instrument: Instrument,
     pub provider_order_id: Option<ProviderOrderId>,
@@ -183,38 +162,36 @@ pub struct OrderUpdate {
     pub state_code: u8,
     pub leaves: i64,
     pub cum_qty: i64,
-    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
+
     pub avg_fill_px: Decimal,
-    #[rkyv(with = "crate::rkyv_types::DateTimeUtcDef")]
+
     pub ts_ns: DateTime<Utc>,
 }
 
-#[derive(
-    Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize,
-)]
+#[derive(Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize)]
+#[archive(check_bytes)]
 pub struct PositionDelta {
     pub instrument: Instrument,
     pub net_qty_before: i64,
     pub net_qty_after: i64,
-    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
+
     pub realized_delta: Decimal,
-    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
+
     pub open_pnl: Decimal,
-    #[rkyv(with = "crate::rkyv_types::DateTimeUtcDef")]
+
     pub ts_ns: DateTime<Utc>,
 }
 
-#[derive(
-    Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize,
-)]
+#[derive(Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize)]
+#[archive(check_bytes)]
 pub struct AccountDelta {
-    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
+
     pub equity: Decimal,
-    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
+
     pub day_realized_pnl: Decimal,
-    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
+
     pub open_pnl: Decimal,
-    #[rkyv(with = "crate::rkyv_types::DateTimeUtcDef")]
+
     pub ts_ns: DateTime<Utc>,
     pub can_trade: bool,
 }

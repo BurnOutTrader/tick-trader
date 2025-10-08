@@ -109,7 +109,6 @@ pub struct MarketHours {
     pub has_weekend_close: bool,
 }
 
-
 /// Which session set to consult when querying hours
 #[derive(Debug, Clone, Copy)]
 pub enum SessionKind {
@@ -206,9 +205,15 @@ impl MarketHours {
     /// Inclusive bar close given its UTC open and resolution.
     pub fn bar_end(&self, open_time: DateTime<Utc>, res: Resolution) -> DateTime<Utc> {
         match res {
-            Resolution::Seconds(s) => open_time + chrono::Duration::seconds(s as i64) - chrono::Duration::nanoseconds(1),
-            Resolution::Minutes(m) => open_time + chrono::Duration::minutes(m as i64) - chrono::Duration::nanoseconds(1),
-            Resolution::Hours(h)   => open_time + chrono::Duration::hours(h as i64)   - chrono::Duration::nanoseconds(1),
+            Resolution::Seconds(s) => {
+                open_time + chrono::Duration::seconds(s as i64) - chrono::Duration::nanoseconds(1)
+            }
+            Resolution::Minutes(m) => {
+                open_time + chrono::Duration::minutes(m as i64) - chrono::Duration::nanoseconds(1)
+            }
+            Resolution::Hours(h) => {
+                open_time + chrono::Duration::hours(h as i64) - chrono::Duration::nanoseconds(1)
+            }
             Resolution::Daily => {
                 // End at that session’s close (already inclusive in your model)
                 let (_open, close) = session_bounds(self, open_time);
@@ -842,7 +847,6 @@ pub fn next_session_after(
     next_session_after_with(SessionKind::Both, hours, end_excl)
 }
 
-
 fn mk_local(tz: Tz, day: chrono::NaiveDate, ssm: u32) -> chrono::DateTime<Tz> {
     let base: NaiveDateTime = day.and_hms_opt(0, 0, 0).unwrap() + Duration::seconds(ssm as i64);
     // Resolve TZ (handle DST transitions); prefer `.single()` and fallback safely
@@ -936,13 +940,18 @@ pub fn next_session_open_after(mh: &MarketHours, after_utc: DateTime<Utc>) -> Da
 
 #[cfg(test)]
 pub mod mh_tests {
+    use crate::data::core::Exchange;
+    use crate::data::models::Resolution;
+    use crate::securities::hours::market_hours::{
+        SessionKind, candle_end, next_session_after_with, time_end_of_day,
+    };
+    use crate::securities::hours::market_hours::{
+        hours_for_exchange, next_session_after, next_session_open_after, session_bounds,
+        week_session_bounds,
+    };
     use chrono::{Duration, NaiveDate, TimeZone, Utc};
     use chrono_tz::Tz;
     use chrono_tz::US::Central;
-    use crate::data::core::Exchange;
-    use crate::data::models::Resolution;
-    use crate::securities::hours::market_hours::{hours_for_exchange, next_session_after, next_session_open_after, session_bounds, week_session_bounds};
-    use crate::securities::hours::market_hours::{candle_end, next_session_after_with, time_end_of_day, SessionKind};
 
     fn utc(y: i32, m: u32, d: u32, hh: u32, mm: u32, ss: u32) -> chrono::DateTime<Utc> {
         Utc.with_ymd_and_hms(y, m, d, hh, mm, ss).single().unwrap()
@@ -1080,7 +1089,6 @@ pub mod mh_tests {
         // 15:20 CT on 2023-06-05 -> 20:20 UTC: must be CLOSED (15:15–15:30 halt)
         assert!(!mh.is_open(utc(2023, 6, 5, 20, 20, 0)));
     }
-
 
     fn ct(y: i32, m: u32, d: u32, hh: u32, mm: u32, ss: u32) -> chrono::DateTime<Utc> {
         Central
@@ -1248,7 +1256,10 @@ pub mod mh_tests {
         let mh = hours_for_exchange(Exchange::CME);
         // Exactly at 15:30 CT -> 20:30 UTC should be OPEN
         let open_edge = utc(2023, 6, 5, 20, 30, 0);
-        assert!(mh.is_open_extended(open_edge), "15:30 CT should be open (extended)");
+        assert!(
+            mh.is_open_extended(open_edge),
+            "15:30 CT should be open (extended)"
+        );
 
         // Just before 16:00 CT -> 20:59:59 UTC should still be OPEN
         let just_before_close = utc(2023, 6, 5, 20, 59, 59);
@@ -1285,10 +1296,14 @@ pub mod mh_tests {
         // Expected: Mon 2023-06-05 00:00 Central -> 05:00 UTC (CDT),
         //           Mon 2023-06-12 00:00 Central -> 05:00 UTC.
         let expected_open = chrono_tz::US::Central
-            .with_ymd_and_hms(2023, 6, 5, 0, 0, 0).single().unwrap()
+            .with_ymd_and_hms(2023, 6, 5, 0, 0, 0)
+            .single()
+            .unwrap()
             .with_timezone(&Utc);
         let expected_close = chrono_tz::US::Central
-            .with_ymd_and_hms(2023, 6, 12, 0, 0, 0).single().unwrap()
+            .with_ymd_and_hms(2023, 6, 12, 0, 0, 0)
+            .single()
+            .unwrap()
             .with_timezone(&Utc);
 
         assert_eq!(wopen, expected_open);
@@ -1307,10 +1322,14 @@ pub mod mh_tests {
         // Expect the window to be Sun 2023-06-04 17:00 Central -> 22:00 UTC,
         // then Sun 2023-06-11 17:00 Central -> 22:00 UTC.
         let expected_open = chrono_tz::US::Central
-            .with_ymd_and_hms(2023, 6, 4, 17, 0, 0).single().unwrap()
+            .with_ymd_and_hms(2023, 6, 4, 17, 0, 0)
+            .single()
+            .unwrap()
             .with_timezone(&Utc);
         let expected_close = chrono_tz::US::Central
-            .with_ymd_and_hms(2023, 6, 11, 17, 0, 0).single().unwrap()
+            .with_ymd_and_hms(2023, 6, 11, 17, 0, 0)
+            .single()
+            .unwrap()
             .with_timezone(&Utc);
 
         assert_eq!(wopen, expected_open);

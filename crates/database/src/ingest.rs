@@ -13,8 +13,7 @@ use tt_types::securities::symbols::{Instrument, MarketType};
 
 use crate::models::{BboRow, CandleRow, TickRow};
 use crate::perist::{
-    persist_bbo_partition_zstd, persist_candles_partition_zstd,
-    persist_ticks_partition_zstd,
+    persist_bbo_partition_zstd, persist_candles_partition_zstd, persist_ticks_partition_zstd,
 };
 
 fn month_from_u32(m: u32) -> Month {

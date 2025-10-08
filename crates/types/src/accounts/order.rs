@@ -78,9 +78,9 @@ impl Order {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
     use super::*;
     use crate::securities::symbols::Instrument;
+    use std::str::FromStr;
 
     #[test]
     fn order_state_precedence_ordering() {

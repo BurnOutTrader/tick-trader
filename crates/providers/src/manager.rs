@@ -168,24 +168,16 @@ impl UpstreamManager for ProviderManager {
         Ok(Vec::new())
     }
 
-    async fn get_instruments_map(
+    async fn get_securities(
         &self,
         provider: ProviderKind,
-    ) -> Result<
-        Vec<(
-            tt_types::securities::symbols::Instrument,
-            FuturesContract,
-        )>,
-    > {
+    ) -> Result<Vec<(tt_types::securities::symbols::Instrument, FuturesContract)>> {
         self.ensure_clients(provider).await?;
         if let Some(md) = self.md.get(&provider) {
             let map = md.instruments_map().await.unwrap_or_default();
             let mut out = Vec::with_capacity(map.len());
             for (inst, fc) in map.into_iter() {
-                out.push((
-                    inst.clone(),
-                    fc,
-                ));
+                out.push((inst.clone(), fc));
             }
             return Ok(out);
         }

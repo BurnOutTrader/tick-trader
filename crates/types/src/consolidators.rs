@@ -1,10 +1,10 @@
 use crate::data::core::{Bbo, Candle, Tick, TickBar};
-use crate::securities::hours::market_hours::{next_session_after, session_bounds, MarketHours};
+use crate::data::models::{Resolution, TradeSide};
+use crate::securities::hours::market_hours::{MarketHours, next_session_after, session_bounds};
 use crate::securities::symbols::Instrument;
 use chrono::{DateTime, Duration, TimeZone, Utc};
-use rust_decimal::{dec, Decimal};
+use rust_decimal::{Decimal, dec};
 use std::sync::Arc;
-use crate::data::models::{Resolution, Side};
 // ===================== Helpers =====================
 
 fn end_inclusive(end: DateTime<Utc>) -> DateTime<Utc> {
@@ -105,9 +105,9 @@ impl TicksToTickBarsConsolidator {
 
         self.vol += tk.volume;
         match tk.side {
-            Side::Buy => self.ask_vol += tk.volume,
-            Side::Sell => self.bid_vol += tk.volume,
-            Side::None => {}
+            TradeSide::Buy => self.ask_vol += tk.volume,
+            TradeSide::Sell => self.bid_vol += tk.volume,
+            TradeSide::None => {}
         }
         self.count += 1;
 
@@ -305,9 +305,9 @@ impl TicksToCandlesConsolidator {
         self.c = Some(tk.price);
         self.vol += tk.volume;
         match tk.side {
-            Side::Buy => self.ask_vol += tk.volume,
-            Side::Sell => self.bid_vol += tk.volume,
-            Side::None => {}
+            TradeSide::Buy => self.ask_vol += tk.volume,
+            TradeSide::Sell => self.bid_vol += tk.volume,
+            TradeSide::None => {}
         }
         None
     }

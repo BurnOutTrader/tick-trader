@@ -3,7 +3,8 @@ use std::fmt::Display;
 use std::hash::Hash;
 use strum_macros::Display;
 
-#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Copy, Hash, Ord, PartialOrd, Archive, RkyvDeserialize, RkyvSerialize)]
+#[archive(check_bytes)]
 pub enum ProjectXTenant {
     Topstep,
     AlphaFutures,
@@ -68,8 +69,8 @@ impl RithmicSystem {
     }
 }
 
-#[derive(RkyvDeserialize)]
-#[allow(unused)]
+#[derive(RkyvDeserialize, RkyvSerialize, Archive)]
+#[archive(check_bytes)]
 pub struct RithmicCredentials {
     pub(crate) user: String,
     pub(crate) server_name: RithmicServer,
@@ -115,13 +116,14 @@ impl RithmicCredentials {
     Clone,
     Eq,
     PartialEq,
-    Debug,
     Hash,
     PartialOrd,
     Ord,
     Display,
     Copy,
+    Debug,
 )]
+#[archive(check_bytes)]
 pub enum RithmicSystem {
     #[strum(serialize = "Rithmic 04 Colo")]
     Rithmic04Colo,
@@ -162,40 +164,31 @@ impl RithmicSystem {
         let binding = env_str.to_lowercase();
         let s = binding.as_str();
         match s {
-            "RITHMIC_04_COLO" => Some(RithmicSystem::Rithmic04Colo),
-            "RITHMIC_01" => Some(RithmicSystem::Rithmic01),
-            "RITHMIC_PAPER_TRADING" => Some(RithmicSystem::RithmicPaperTrading),
-            "TOPSTEPTRADER" => Some(RithmicSystem::TopstepTrader),
-            "SPEEDUP" => Some(RithmicSystem::SpeedUp),
-            "TRADEFUNDRR" => Some(RithmicSystem::TradeFundrr),
-            "UPROFITTRADER" => Some(RithmicSystem::UProfitTrader),
-            "APEX" => Some(RithmicSystem::Apex),
-            "MESCAPITAL" => Some(RithmicSystem::MESCapital),
-            "THETRADINGPIT" => Some(RithmicSystem::TheTradingPit),
-            "FUNDENDFUTURESNETWORK" => Some(RithmicSystem::FundedFuturesNetwork),
-            "BULENOX" => Some(RithmicSystem::Bulenox),
-            "PROPSHOPTRADER" => Some(RithmicSystem::PropShopTrader),
-            "4PROPTRADER" => Some(RithmicSystem::FourPropTrader),
-            "FASTTRACKTRADING" => Some(RithmicSystem::FastTrackTrading),
-            "TEST" => Some(RithmicSystem::Test),
+            "rithmic_04_colo" => Some(RithmicSystem::Rithmic04Colo),
+            "rithmic_01" => Some(RithmicSystem::Rithmic01),
+            "rithmic_paper_trading" => Some(RithmicSystem::RithmicPaperTrading),
+            "topsteptrader" => Some(RithmicSystem::TopstepTrader),
+            "speedup" => Some(RithmicSystem::SpeedUp),
+            "tradefundrr" => Some(RithmicSystem::TradeFundrr),
+            "uprofittrader" => Some(RithmicSystem::UProfitTrader),
+            "apex" => Some(RithmicSystem::Apex),
+            "mescapital" => Some(RithmicSystem::MESCapital),
+            "thetradingpit" => Some(RithmicSystem::TheTradingPit),
+            "fundendfuturesnetwork" => Some(RithmicSystem::FundedFuturesNetwork),
+            "bulenox" => Some(RithmicSystem::Bulenox),
+            "propshoptrader" => Some(RithmicSystem::PropShopTrader),
+            "4proptrader" => Some(RithmicSystem::FourPropTrader),
+            "fasttracktrading" => Some(RithmicSystem::FastTrackTrading),
+            "test" => Some(RithmicSystem::Test),
             _ => None,
         }
     }
 }
 
 #[derive(
-    Archive,
-    RkyvDeserialize,
-    RkyvSerialize,
-    Clone,
-    Eq,
-    PartialEq,
-    Debug,
-    Hash,
-    PartialOrd,
-    Ord,
-    Display,
+    Archive, RkyvDeserialize, RkyvSerialize, Clone, Eq, PartialEq, Hash, PartialOrd, Ord, Display,
 )]
+#[archive(check_bytes)]
 pub enum RithmicServer {
     Chicago,
     Sydney,
@@ -212,7 +205,8 @@ pub enum RithmicServer {
     Test,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
+#[derive(Clone, Debug,  Eq, Ord, PartialOrd, PartialEq, Copy, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
+#[archive(check_bytes)]
 pub enum ProviderKind {
     ProjectX(ProjectXTenant),
     Rithmic(RithmicSystem),

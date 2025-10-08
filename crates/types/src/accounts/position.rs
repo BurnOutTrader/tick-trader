@@ -140,10 +140,10 @@ impl PositionLedger {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
     use super::*;
     use crate::securities::symbols::Instrument;
     use rust_decimal::prelude::FromPrimitive;
+    use std::str::FromStr;
 
     #[test]
     fn accumulate_and_cross_flat() {

@@ -276,9 +276,9 @@ pub fn extract_month_year(instrument: &Instrument) -> Option<(char, u8)> {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
     use super::*;
     use crate::securities::symbols::Instrument;
+    use std::str::FromStr;
 
     #[test]
     fn test_extract_month_year_two_letter_root() {

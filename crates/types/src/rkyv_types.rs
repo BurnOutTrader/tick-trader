@@ -1,10 +1,14 @@
-use chrono::TimeZone;
+/*use chrono::{TimeZone, Datelike};
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
+use rust_decimal::Decimal;
+use rkyv::with::{ArchiveWith, SerializeWith, DeserializeWith};
+use rkyv::{Archive as _, Serialize as _, Deserialize as _};
 
 // Remote derive wrappers and helpers for external types that don't natively implement rkyv
 
 // ===== chrono::DateTime<Utc> =====
-#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Clone, Copy, PartialEq, Eq, Hash)]
+
 #[rkyv(remote = chrono::DateTime<chrono::Utc>)]
 pub struct DateTimeUtcDef {
     // Store as (secs, nanos) to avoid overflow on extreme ranges
@@ -32,7 +36,8 @@ impl From<DateTimeUtcDef> for chrono::DateTime<chrono::Utc> {
 }
 
 // ===== rust_decimal::Decimal =====
-#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Clone, Copy, PartialEq, Eq, Hash)]
+
 #[rkyv(remote = rust_decimal::Decimal)]
 pub struct DecimalDef {
     #[rkyv(getter = crate::rkyv_types::dec_mantissa)]
@@ -54,14 +59,31 @@ impl From<DecimalDef> for rust_decimal::Decimal {
     }
 }
 
-// Note on containers (Vec/Option/etc):
-// These adapters implement ArchiveWith/SerializeWith/DeserializeWith for the bare types
-// (Decimal and DateTime<Utc>) only. In rkyv 0.8, you cannot apply the adapter directly to a
-// container like Vec<Decimal> or Option<DateTime<Utc>>. If you need container support, adapt
-// the element type (e.g., define a new wrapper type for the element) or create a container-
-// specific adapter. The types in this crate use the adapters on direct fields.
+// ===== chrono::NaiveDate =====
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Clone, Copy, PartialEq, Eq, Hash)]
+
+#[rkyv(remote = chrono::NaiveDate)]
+pub struct NaiveDateDef {
+    #[rkyv(getter = crate::rkyv_types::date_year)]
+    pub year: i32,
+    #[rkyv(getter = crate::rkyv_types::date_month)]
+    pub month: u32,
+    #[rkyv(getter = crate::rkyv_types::date_day)]
+    pub day: u32,
+}
+
+pub fn date_year(d: &chrono::NaiveDate) -> i32 { d.year() }
+pub fn date_month(d: &chrono::NaiveDate) -> u32 { d.month() }
+pub fn date_day(d: &chrono::NaiveDate) -> u32 { d.day() }
+
+impl From<NaiveDateDef> for chrono::NaiveDate {
+    fn from(value: NaiveDateDef) -> Self {
+        chrono::NaiveDate::from_ymd_opt(value.year, value.month, value.day)
+            .expect("invalid date")
+    }
+}
 
 // For convenience re-export common names if needed by callers
 pub use DateTimeUtcDef as RkyvDateTimeUtc;
 pub use DecimalDef as RkyvDecimal;
-
+pub use NaiveDateDef as RkyvNaiveDate;*/

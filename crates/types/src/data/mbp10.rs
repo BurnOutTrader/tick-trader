@@ -1,17 +1,22 @@
 //! MBP-10 record type (Databento-style aggregated book updates)
 //! "Base data type" for MDP-10/MBP-10 translated into our engine types.
-use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
+use crate::securities::symbols::Instrument;
+use chrono::TimeDelta;
 pub use chrono::{DateTime, Utc};
-use chrono::{TimeDelta};
+use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use rust_decimal::Decimal;
 use strum_macros::Display;
-use crate::securities::symbols::Instrument;
+use crate::data::core::TickBar;
+use crate::wire::Bytes;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, Archive, RkyvDeserialize, RkyvSerialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Display, Archive, RkyvDeserialize, RkyvSerialize,
+)]
+#[archive(check_bytes)]
 pub enum BookSide {
-    Ask,   // 'A'
-    Bid,   // 'B'
-    None,  // 'N' or unknown
+    Ask,  // 'A'
+    Bid,  // 'B'
+    None, // 'N' or unknown
 }
 
 impl From<u8> for BookSide {
@@ -35,16 +40,8 @@ impl From<BookSide> for u8 {
     }
 }
 /// Order/event action (unknown bytes map to `None`).
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    Archive,
-    RkyvDeserialize,
-    RkyvSerialize,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
+#[archive(check_bytes)]
 pub enum Action {
     Add,    // 'A'
     Modify, // 'M'
@@ -86,87 +83,94 @@ impl From<Action> for u8 {
 
 /// Flags bitfield (serde/rkyv-friendly newtype).
 #[repr(transparent)]
-#[derive(
-    Debug,
-    Copy,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    Archive,
-    RkyvDeserialize,
-    RkyvSerialize,
-)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
+#[archive(check_bytes)]
 pub struct Flags(pub u8);
 
 impl Flags {
-    pub const F_LAST: u8 = 1 << 7;                // 128
-    pub const F_TOB: u8 = 1 << 6;                 // 64
-    pub const F_SNAPSHOT: u8 = 1 << 5;            // 32
-    pub const F_MBP: u8 = 1 << 4;                 // 16
-    pub const F_BAD_TS_RECV: u8 = 1 << 3;         // 8
-    pub const F_MAYBE_BAD_BOOK: u8 = 1 << 2;      // 4
-    pub const F_PUBLISHER_SPECIFIC: u8 = 1 << 1;  // 2
+    pub const F_LAST: u8 = 1 << 7; // 128
+    pub const F_TOB: u8 = 1 << 6; // 64
+    pub const F_SNAPSHOT: u8 = 1 << 5; // 32
+    pub const F_MBP: u8 = 1 << 4; // 16
+    pub const F_BAD_TS_RECV: u8 = 1 << 3; // 8
+    pub const F_MAYBE_BAD_BOOK: u8 = 1 << 2; // 4
+    pub const F_PUBLISHER_SPECIFIC: u8 = 1 << 1; // 2
 
-    #[inline] pub fn contains(self, mask: u8) -> bool { self.0 & mask != 0 }
-    #[inline] pub fn is_last(self) -> bool { self.contains(Self::F_LAST) }
-    #[inline] pub fn is_tob(self) -> bool { self.contains(Self::F_TOB) }
-    #[inline] pub fn is_snapshot(self) -> bool { self.contains(Self::F_SNAPSHOT) }
-    #[inline] pub fn is_mbp(self) -> bool { self.contains(Self::F_MBP) }
-    #[inline] pub fn bad_ts_recv(self) -> bool { self.contains(Self::F_BAD_TS_RECV) }
-    #[inline] pub fn maybe_bad_book(self) -> bool { self.contains(Self::F_MAYBE_BAD_BOOK) }
+    #[inline]
+    pub fn contains(self, mask: u8) -> bool {
+        self.0 & mask != 0
+    }
+    #[inline]
+    pub fn is_last(self) -> bool {
+        self.contains(Self::F_LAST)
+    }
+    #[inline]
+    pub fn is_tob(self) -> bool {
+        self.contains(Self::F_TOB)
+    }
+    #[inline]
+    pub fn is_snapshot(self) -> bool {
+        self.contains(Self::F_SNAPSHOT)
+    }
+    #[inline]
+    pub fn is_mbp(self) -> bool {
+        self.contains(Self::F_MBP)
+    }
+    #[inline]
+    pub fn bad_ts_recv(self) -> bool {
+        self.contains(Self::F_BAD_TS_RECV)
+    }
+    #[inline]
+    pub fn maybe_bad_book(self) -> bool {
+        self.contains(Self::F_MAYBE_BAD_BOOK)
+    }
 }
 
-impl From<u8> for Flags { fn from(v: u8) -> Self { Flags(v) } }
-impl From<Flags> for u8 { fn from(f: Flags) -> u8 { f.0 } }
+impl From<u8> for Flags {
+    fn from(v: u8) -> Self {
+        Flags(v)
+    }
+}
+impl From<Flags> for u8 {
+    fn from(f: Flags) -> u8 {
+        f.0
+    }
+}
 
 /// Optional aggregated book levels. When present, vectors align by index as level depth.
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    Archive,
-    RkyvDeserialize,
-    RkyvSerialize,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
+#[archive(check_bytes)]
 pub struct BookLevels {
-    // NOTE: container adapters (Vec<Decimal>) are not implemented in rkyv_types.rs.
-    // Removing the serde helper here; to support rkyv you must wrap the element type or
-    // provide a container-specific adapter.
+    // Price vectors in integer nanos (scale 1e-9) for archive-friendly representation.
     pub bid_px: Vec<Decimal>,
     pub ask_px: Vec<Decimal>,
-    pub bid_sz: Vec<u32>,
-    pub ask_sz: Vec<u32>,
-    pub bid_ct: Vec<u32>,
-    pub ask_ct: Vec<u32>,
+    pub bid_sz: Vec<Decimal>,
+    pub ask_sz: Vec<Decimal>,
+    pub bid_ct: Vec<Decimal>,
+    pub ask_ct: Vec<Decimal>,
 }
 
 impl BookLevels {
     pub fn empty() -> Self {
-        Self { bid_px: vec![], ask_px: vec![], bid_sz: vec![], ask_sz: vec![], bid_ct: vec![], ask_ct: vec![] }
+        Self {
+            bid_px: vec![],
+            ask_px: vec![],
+            bid_sz: vec![],
+            ask_sz: vec![],
+            bid_ct: vec![],
+            ask_ct: vec![],
+        }
     }
 }
 
 /// MBP-10 record mapped to engine-friendly types.
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    Archive,
-    RkyvDeserialize,
-    RkyvSerialize,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
+#[archive(check_bytes)]
 pub struct Mbp10 {
     pub instrument: Instrument,
     /// Capture-server receive time (UTC).
-    #[rkyv(with = "crate::rkyv_types::DateTimeUtcDef")]
     pub ts_recv: DateTime<Utc>,
     /// Matching engine receive time (UTC).
-    #[rkyv(with = "crate::rkyv_types::DateTimeUtcDef")]
     pub ts_event: DateTime<Utc>,
 
     /// Record type sentinel (always 10 for MBP-10).
@@ -181,7 +185,6 @@ pub struct Mbp10 {
     pub depth: u8,
 
     /// Order price (wire is i64 nanos). Stored as Decimal (scale 9).
-    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
     pub price: Decimal,
 
     /// Order quantity.
@@ -197,6 +200,22 @@ pub struct Mbp10 {
 
     /// Optional aggregated book snapshot/levels.
     pub book: Option<BookLevels>,
+}
+
+impl Bytes<Self> for Mbp10 {
+    fn from_bytes(archived: &[u8]) -> anyhow::Result<Mbp10> {
+        // If the archived bytes do not end with the delimiter, proceed as before
+        match rkyv::from_bytes::<Mbp10>(archived) {
+            //Ignore this warning: Trait `Deserialize<ResponseType, SharedDeserializeMap>` is not implemented for `ArchivedRequestType` [E0277]
+            Ok(response) => Ok(response),
+            Err(e) => Err(anyhow::Error::msg(e.to_string())),
+        }
+    }
+
+    fn to_bytes(&self) -> Vec<u8> {
+        let vec = rkyv::to_bytes::<_, 1024>(self).unwrap();
+        vec.into()
+    }
 }
 
 /// Build an `Mbp10` from wire-precision primitives.
@@ -220,12 +239,12 @@ pub fn make_mbp10(
     sequence: u32,
     // Optional aggregated levels; pass `None` if not present.
     levels: Option<(
-        Vec<i64>, // bid_px nanos
-        Vec<i64>, // ask_px nanos
-        Vec<u32>, // bid_sz
-        Vec<u32>, // ask_sz
-        Vec<u32>, // bid_ct
-        Vec<u32>, // ask_ct
+        Vec<Decimal>, // bid_px nanos
+        Vec<Decimal>, // ask_px nanos
+        Vec<Decimal>, // bid_sz
+        Vec<Decimal>, // ask_sz
+        Vec<Decimal>, // bid_ct
+        Vec<Decimal>, // ask_ct
     )>,
 ) -> Option<Mbp10> {
     // Convert epoch nanos to DateTime<Utc> safely.
@@ -235,12 +254,6 @@ pub fn make_mbp10(
         DateTime::from_timestamp(secs, sub)
     }
 
-    // Decimal from integer nanos (scale 9).
-    #[inline]
-    fn dec_from_nanos(n: i64) -> Decimal {
-        Decimal::from_i128_with_scale(n as i128, 9)
-    }
-
     let ts_recv = dt_from_ns(ts_recv_ns)?;
     let ts_event = dt_from_ns(ts_event_ns)?;
 
@@ -248,11 +261,11 @@ pub fn make_mbp10(
     let side = BookSide::from(side_b);
     let flags = Flags::from(flags_b);
 
-    let price = dec_from_nanos(price_nanos);
+    let price = Decimal::from_i128_with_scale(price_nanos as i128, 9);
 
     let book = levels.map(|(bp, ap, bsz, asz, bct, act)| BookLevels {
-        bid_px: bp.into_iter().map(dec_from_nanos).collect(),
-        ask_px: ap.into_iter().map(dec_from_nanos).collect(),
+        bid_px: bp,
+        ask_px: ap,
         bid_sz: bsz,
         ask_sz: asz,
         bid_ct: bct,

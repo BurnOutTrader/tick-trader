@@ -1,6 +1,6 @@
+use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use std::fmt;
 use std::str::FromStr;
-use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 
 /// 16-byte globally unique identifier used for internal IDs.
 /// Stored as raw bytes for compact rkyv representation.
@@ -17,6 +17,7 @@ use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
     RkyvDeserialize,
     RkyvSerialize,
 )]
+#[archive(check_bytes)]
 #[repr(transparent)]
 pub struct Guid(pub [u8; 16]);
 

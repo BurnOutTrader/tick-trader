@@ -6,7 +6,7 @@ use ahash::{AHashMap, AHashSet};
 use rust_decimal::Decimal;
 use rust_decimal::prelude::FromPrimitive;
 use tokio::sync::mpsc;
-use crate::wire::encode;
+use crate::wire::Bytes;
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct AccountState {
@@ -57,9 +57,7 @@ impl AccountActor {
 
     fn apply(&mut self, ev: AccountEvent) {
         // Append to WAL first, then apply side effects.
-        if let Ok(bytes) = encode(&ev) {
-            self.wal.push(bytes);
-        }
+        self.wal.push(ev.clone().to_bytes());
         match ev {
             AccountEvent::Order(oe) => self.apply_order_event(oe),
             AccountEvent::Exec(exe) => self.apply_exec(exe),
@@ -232,9 +230,9 @@ impl AccountActor {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
     use super::*;
     use crate::securities::symbols::Instrument;
+    use std::str::FromStr;
 
     fn inst(code: &str) -> Instrument {
         Instrument::from_str(code).unwrap()

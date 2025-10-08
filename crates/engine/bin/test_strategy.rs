@@ -1,14 +1,15 @@
+use rust_decimal::Decimal;
 use std::collections::BTreeMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
-use rust_decimal::Decimal;
+use rust_decimal::prelude::Zero;
 use tokio::sync::Mutex;
 use tokio::time::sleep;
 use tracing::info;
 use tracing::level_filters::LevelFilter;
 use tt_bus::ClientMessageBus;
-use tt_engine::engine::{EngineRuntime, EngineHandle, Strategy};
+use tt_engine::engine::{EngineHandle, EngineRuntime, Strategy};
 use tt_types::accounts::events::AccountDelta;
 use tt_types::data::mbp10::{Action as MbpAction, BookLevels, BookSide as MbpSide, Mbp10};
 use tt_types::keys::{SymbolKey, Topic};
@@ -24,8 +25,8 @@ struct LastTrade {
 
 #[derive(Default, Debug, Clone)]
 struct OrderBook {
-    bids: BTreeMap<Decimal, u32>,
-    asks: BTreeMap<Decimal, u32>,
+    bids: BTreeMap<Decimal, Decimal>,
+    asks: BTreeMap<Decimal, Decimal>,
     last_trade: LastTrade,
 }
 
@@ -37,16 +38,18 @@ impl OrderBook {
 
     fn seed_from_snapshot(&mut self, book: &BookLevels) {
         self.clear();
-        for (i, px) in book.bid_px.iter().enumerate() {
-            let sz = *book.bid_sz.get(i).unwrap_or(&0);
-            if sz > 0 {
-                self.bids.insert(px.clone(), sz);
+        for (i, px_nanos) in book.bid_px.iter().enumerate() {
+            let px = Decimal::from_i128_with_scale(*px_nanos as i128, 9);
+            let sz = *book.bid_sz.get(i).unwrap_or(&Decimal::zero());
+            if sz > Decimal::zero() {
+                self.bids.insert(px, sz);
             }
         }
-        for (i, px) in book.ask_px.iter().enumerate() {
-            let sz = *book.ask_sz.get(i).unwrap_or(&0);
-            if sz > 0 {
-                self.asks.insert(px.clone(), sz);
+        for (i, px_nanos) in book.ask_px.iter().enumerate() {
+            let px = Decimal::from_i128_with_scale(*px_nanos as i128, 9);
+            let sz = *book.ask_sz.get(i).unwrap_or(&Decimal::zero());
+            if sz > Decimal::zero() {
+                self.asks.insert(px, sz);
             }
         }
     }
@@ -155,8 +158,8 @@ impl Strategy for TestStrategy {
                 ProviderKind::ProjectX(ProjectXTenant::Topstep),
             ),
         )
-            .await
-            .unwrap();
+        .await
+        .unwrap();
         self.engine = Some(h);
     }
     async fn on_stop(&mut self) {

@@ -1,82 +1,108 @@
+use crate::data::models::{BarClose, Price, Resolution, TradeSide, Volume};
 pub use crate::securities::symbols::Exchange;
 use crate::securities::symbols::Instrument;
-pub use chrono::{DateTime, Utc};
 use chrono::TimeZone;
+pub use chrono::{DateTime, Utc};
+use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 pub use rust_decimal::Decimal;
-use crate::data::models::{BarClose, Price, Resolution, Side, Volume};
-use rkyv::{Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
+use crate::wire::{Bytes, WireMessage};
 
 /// A single executed trade (tick).
 ///
 /// Represents the smallest atomic piece of trade data.
 /// Often used as input for tick charts or indicators.
-#[derive(rkyv::Archive, RkyvDeserialize, RkyvSerialize, Debug, PartialEq, Clone)]
-#[rkyv(compare(PartialEq), derive(Debug))]
+#[derive(rkyv::Archive, RkyvDeserialize, RkyvSerialize, PartialEq, Clone, Debug)]
+#[archive(check_bytes)]
 pub struct Tick {
     /// Symbol identifier (e.g. `"MNQ"`, `"AAPL"`).
     pub symbol: String,
     /// Symbol identifier (e.g. `"MNQ.Z25"`).
     pub instrument: Instrument,
     /// Trade price.
-    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
+
     pub price: Price,
     /// Trade size (quantity).
-    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
+
     pub volume: Volume,
     /// UTC timestamp of the trade.
-    #[rkyv(with = "crate::rkyv_types::DateTimeUtcDef")]
     pub time: DateTime<Utc>,
     /// Whether the trade was buyer- or seller-initiated.
-    pub side: Side,
+    pub side: TradeSide,
 
     pub venue_seq: Option<u32>,
 }
-/// Convert an archived Tick's time to chrono::DateTime<Utc> without deserializing the full Tick.
-/*pub fn archived_tick_time(archived: &ArchivedTick) -> DateTime<Utc> {
-    // The archived field type depends on your remote adapter, so just convert manually
-    let secs = archived.time.secs();
-    let nanos = archived.time.nanos();
-    Utc.timestamp_opt(secs, nanos).single().expect("invalid timestamp")
-}*/
+
+impl Bytes<Self> for Tick {
+    fn from_bytes(archived: &[u8]) -> anyhow::Result<Tick> {
+        // If the archived bytes do not end with the delimiter, proceed as before
+        match rkyv::from_bytes::<Tick>(archived) {
+            //Ignore this warning: Trait `Deserialize<ResponseType, SharedDeserializeMap>` is not implemented for `ArchivedRequestType` [E0277]
+            Ok(response) => Ok(response),
+            Err(e) => Err(anyhow::Error::msg(e.to_string())),
+        }
+    }
+
+    fn to_bytes(&self) -> Vec<u8> {
+        let vec = rkyv::to_bytes::<_, 1024>(self).unwrap();
+        vec.into()
+    }
+}
 
 /// A candlestick / bar of aggregated trades.
 ///
 /// Produced by consolidating ticks or vendor-provided candles.
-#[derive(rkyv::Archive, RkyvDeserialize, RkyvSerialize, Debug, PartialEq, Clone)]
-#[rkyv(compare(PartialEq), derive(Debug))]
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, PartialEq, Clone, Debug)]
+#[archive(check_bytes)]
 pub struct Candle {
     /// Symbol identifier (e.g. `"MNQ"`, `"AAPL"`).
     pub symbol: String,
     /// Symbol identifier (e.g. `"MNQ.Z25"`).
     pub instrument: Instrument,
     /// Start time of the candle (inclusive).
-    #[rkyv(with = "crate::rkyv_types::DateTimeUtcDef")]
+
     pub time_start: DateTime<Utc>,
     /// End time of the candle (exclusive).
-    #[rkyv(with = "crate::rkyv_types::DateTimeUtcDef")]
+
     pub time_end: DateTime<Utc>,
     /// Open price.
-    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
+
     pub open: Price,
     /// High price.
-    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
+
     pub high: Price,
     /// Low price.
-    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
+
     pub low: Price,
-    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
+
     pub close: Price,
     /// Total traded volume.
-    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
+
     pub volume: Volume,
     /// Volume executed at the ask.
-    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
+
     pub ask_volume: Volume,
     /// Volume executed at the bid.
-    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
+
     pub bid_volume: Volume,
     /// Resolution used to build this candle.
     pub resolution: Resolution,
+}
+
+
+impl Bytes<Self> for Candle {
+    fn from_bytes(archived: &[u8]) -> anyhow::Result<Candle> {
+        // If the archived bytes do not end with the delimiter, proceed as before
+        match rkyv::from_bytes::<Candle>(archived) {
+            //Ignore this warning: Trait `Deserialize<ResponseType, SharedDeserializeMap>` is not implemented for `ArchivedRequestType` [E0277]
+            Ok(response) => Ok(response),
+            Err(e) => Err(anyhow::Error::msg(e.to_string())),
+        }
+    }
+
+    fn to_bytes(&self) -> Vec<u8> {
+        let vec = rkyv::to_bytes::<_, 1024>(self).unwrap();
+        vec.into()
+    }
 }
 
 impl Candle {
@@ -101,60 +127,76 @@ impl Candle {
     }
 }
 
-#[derive(rkyv::Archive, RkyvDeserialize, RkyvSerialize, Debug, PartialEq, Clone)]
-#[rkyv(compare(PartialEq), derive(Debug))]
+#[derive(rkyv::Archive, RkyvDeserialize, RkyvSerialize, PartialEq, Clone, Debug)]
+#[archive(check_bytes)]
 pub struct TickBar {
     /// Symbol identifier (e.g. `"MNQ"`, `"AAPL"`).
     pub symbol: String,
     /// Symbol identifier (e.g. `"MNQ.Z25"`).
     pub instrument: Instrument,
     /// Start time of the candle (inclusive).
-    #[rkyv(with = "crate::rkyv_types::DateTimeUtcDef")]
+
     pub time_start: DateTime<Utc>,
     /// End time of the candle (exclusive).
-    #[rkyv(with = "crate::rkyv_types::DateTimeUtcDef")]
+
     pub time_end: DateTime<Utc>,
     /// Open price.
-    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
+
     pub open: Price,
     /// High price.
-    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
+
     pub high: Price,
     /// Low price.
-    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
+
     pub low: Price,
-    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
+
     pub close: Price,
     /// Total traded volume.
-    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
+
     pub volume: Volume,
     /// Volume executed at the ask.
-    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
+
     pub ask_volume: Volume,
     /// Volume executed at the bid.
-    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
+
     pub bid_volume: Volume,
+}
+
+impl Bytes<Self> for TickBar {
+    fn from_bytes(archived: &[u8]) -> anyhow::Result<TickBar> {
+        // If the archived bytes do not end with the delimiter, proceed as before
+        match rkyv::from_bytes::<TickBar>(archived) {
+            //Ignore this warning: Trait `Deserialize<ResponseType, SharedDeserializeMap>` is not implemented for `ArchivedRequestType` [E0277]
+            Ok(response) => Ok(response),
+            Err(e) => Err(anyhow::Error::msg(e.to_string())),
+        }
+    }
+
+    fn to_bytes(&self) -> Vec<u8> {
+        let vec = rkyv::to_bytes::<_, 1024>(self).unwrap();
+        vec.into()
+    }
 }
 
 /// Best bid and offer (BBO).
 ///
 /// A lightweight snapshot of the top of the order book.
-#[derive(rkyv::Archive, RkyvDeserialize, RkyvSerialize, Debug, PartialEq, Clone)]
-#[rkyv(compare(PartialEq), derive(Debug))]
+#[derive(rkyv::Archive, RkyvDeserialize, RkyvSerialize, PartialEq, Clone, Debug)]
+#[archive(check_bytes)]
 pub struct Bbo {
     /// Symbol identifier (e.g. `"MNQ"`, `"AAPL"`).
     pub symbol: String,
     /// Symbol identifier (e.g. `"MNQ.Z25"`).
     pub instrument: Instrument,
-    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
+
     pub bid: Price,
-    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
+
     pub bid_size: Volume,
-    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
+
     pub ask: Price,
-    #[rkyv(with = "crate::rkyv_types::DecimalDef")]
+
     pub ask_size: Volume,
-    #[rkyv(with = "crate::rkyv_types::DateTimeUtcDef")]
+
     pub time: DateTime<Utc>, // normalized event time
 
     // ---- Optional cross-vendor metadata ----
@@ -167,6 +209,22 @@ pub struct Bbo {
 
     /// Whether this record is a snapshot/seed vs. incremental (many feeds set this).
     pub is_snapshot: Option<bool>,
+}
+
+impl Bytes<Self> for Bbo {
+    fn from_bytes(archived: &[u8]) -> anyhow::Result<Bbo> {
+        // If the archived bytes do not end with the delimiter, proceed as before
+        match rkyv::from_bytes::<Bbo>(archived) {
+            //Ignore this warning: Trait `Deserialize<ResponseType, SharedDeserializeMap>` is not implemented for `ArchivedRequestType` [E0277]
+            Ok(response) => Ok(response),
+            Err(e) => Err(anyhow::Error::msg(e.to_string())),
+        }
+    }
+
+    fn to_bytes(&self) -> Vec<u8> {
+        let vec = rkyv::to_bytes::<_, 1024>(self).unwrap();
+        vec.into()
+    }
 }
 
 #[cfg(test)]

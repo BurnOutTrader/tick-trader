@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 async-trait = { workspace = true}
+bytecheck = {workspace = true}
 chrono = { workspace = true}
 chrono-tz = {workspace = true}
 dotenvy = {workspace = true}

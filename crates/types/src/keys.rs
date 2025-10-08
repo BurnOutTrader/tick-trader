@@ -9,9 +9,11 @@ use std::sync::RwLock;
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[archive(check_bytes)]
 pub struct TopicId(pub u8);
 
-#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, PartialEq, Clone, Copy, Eq, Hash)]
+#[archive(check_bytes)]
 pub enum Topic {
     Ticks = 1,
     Quotes = 2,
@@ -47,7 +49,7 @@ impl Display for Topic {
 impl Topic {
     pub fn id(self) -> TopicId {
         use crate::keys::Topic::{
-            AccountEvt, Candles1d, Candles1h, Candles1m, Candles1s, MBP10, Fills, Orders,
+            AccountEvt, Candles1d, Candles1h, Candles1m, Candles1s, Fills, MBP10, Orders,
             Positions, Quotes, Ticks,
         };
         let id = match self {
@@ -68,12 +70,15 @@ impl Topic {
 }
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[archive(check_bytes)]
 pub struct KeyId(pub u32);
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[archive(check_bytes)]
 pub struct ProviderId(pub u16);
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[archive(check_bytes)]
 pub struct BrokerId(pub u16);
 
 static INTERN: Lazy<RwLock<Interner>> = Lazy::new(|| RwLock::new(Interner::default()));
@@ -115,17 +120,22 @@ pub fn resolve_key(id: KeyId) -> Option<String> {
 }
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq, Eq, Hash)]
+#[archive(check_bytes)]
 pub struct SymbolKey {
     pub instrument: Instrument, // UPPER
     pub provider: ProviderKind, // provider kind (may include tenant/affiliation)
 }
 impl SymbolKey {
     pub fn new(instrument: Instrument, provider: ProviderKind) -> Self {
-        Self { instrument, provider }
+        Self {
+            instrument,
+            provider,
+        }
     }
 }
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq, Eq, Hash)]
+#[archive(check_bytes)]
 pub struct AccountKey {
     pub provider: ProviderKind,    // provider kind
     pub account_name: AccountName, // as-is

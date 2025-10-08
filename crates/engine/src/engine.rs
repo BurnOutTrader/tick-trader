@@ -249,11 +249,7 @@ impl EngineHandle {
         let (tx, rx) = oneshot::channel();
         self.inner.pending.insert(corr_id, tx);
         let req = make(corr_id);
-        let _ = self
-            .inner
-            .bus
-            .handle_request(&self.inner.sub_id, req)
-            .await;
+        let _ = self.inner.bus.handle_request(&self.inner.sub_id, req).await;
         rx
     }
 
@@ -314,7 +310,7 @@ impl EngineHandle {
     pub async fn get_instruments_map(
         &self,
         provider: ProviderKind,
-    ) -> anyhow::Result<Vec<(Instrument, FuturesContract)>> {
+    ) -> anyhow::Result<Vec<FuturesContract>> {
         use tokio::time::timeout;
         use tt_types::wire::{InstrumentsMapRequest, Response as WireResp};
         let rx = self
@@ -333,7 +329,10 @@ impl EngineHandle {
         let _ = self
             .inner
             .bus
-            .handle_request(&self.inner.sub_id, tt_types::wire::Request::PlaceOrder(spec))
+            .handle_request(
+                &self.inner.sub_id,
+                tt_types::wire::Request::PlaceOrder(spec),
+            )
             .await?;
         Ok(())
     }
@@ -341,7 +340,10 @@ impl EngineHandle {
         let _ = self
             .inner
             .bus
-            .handle_request(&self.inner.sub_id, tt_types::wire::Request::CancelOrder(spec))
+            .handle_request(
+                &self.inner.sub_id,
+                tt_types::wire::Request::CancelOrder(spec),
+            )
             .await?;
         Ok(())
     }
@@ -349,7 +351,10 @@ impl EngineHandle {
         let _ = self
             .inner
             .bus
-            .handle_request(&self.inner.sub_id, tt_types::wire::Request::ReplaceOrder(spec))
+            .handle_request(
+                &self.inner.sub_id,
+                tt_types::wire::Request::ReplaceOrder(spec),
+            )
             .await?;
         Ok(())
     }
@@ -367,18 +372,33 @@ impl EngineHandle {
         let st = self.inner.state.lock().await;
         st.last_accounts.clone()
     }
-    pub async fn orders_for_instrument(&self, instr: &Instrument) -> Vec<tt_types::accounts::events::OrderUpdate> {
+    pub async fn orders_for_instrument(
+        &self,
+        instr: &Instrument,
+    ) -> Vec<tt_types::accounts::events::OrderUpdate> {
         let st = self.inner.state.lock().await;
         st.last_orders
             .as_ref()
-            .map(|ob| ob.orders.iter().filter(|o| &o.instrument == instr).cloned().collect())
+            .map(|ob| {
+                ob.orders
+                    .iter()
+                    .filter(|o| &o.instrument == instr)
+                    .cloned()
+                    .collect()
+            })
             .unwrap_or_default()
     }
-    pub async fn find_position_delta(&self, instr: &Instrument) -> Option<tt_types::accounts::events::PositionDelta> {
+    pub async fn find_position_delta(
+        &self,
+        instr: &Instrument,
+    ) -> Option<tt_types::accounts::events::PositionDelta> {
         let st = self.inner.state.lock().await;
-        st.last_positions
-            .as_ref()
-            .and_then(|pb| pb.positions.iter().find(|p| &p.instrument == instr).cloned())
+        st.last_positions.as_ref().and_then(|pb| {
+            pb.positions
+                .iter()
+                .find(|p| &p.instrument == instr)
+                .cloned()
+        })
     }
     pub async fn is_long(&self, instr: &Instrument) -> bool {
         self.find_position_delta(instr)
@@ -433,7 +453,9 @@ impl EngineHandle {
                     })
                 })
                 .await;
-            if let Ok(Ok(WireResp::InstrumentsResponse(ir))) = timeout(Duration::from_secs(3), rx).await {
+            if let Ok(Ok(WireResp::InstrumentsResponse(ir))) =
+                timeout(Duration::from_secs(3), rx).await
+            {
                 sec_map.insert(provider, ir.instruments);
             }
         }
@@ -494,7 +516,7 @@ impl EngineRuntime {
     pub async fn get_instruments_map(
         &self,
         provider: ProviderKind,
-    ) -> anyhow::Result<Vec<(Instrument, FuturesContract)>> {
+    ) -> anyhow::Result<Vec<FuturesContract>> {
         use tokio::time::timeout;
         use tt_types::wire::{InstrumentsMapRequest, Response as WireResp};
         let rx = self
@@ -638,7 +660,9 @@ impl EngineRuntime {
             .bus
             .handle_request(
                 &self.sub_id.as_ref().expect("engine started"),
-                tt_types::wire::Request::UnsubscribeAccount(tt_types::wire::UnsubscribeAccount { key }),
+                tt_types::wire::Request::UnsubscribeAccount(tt_types::wire::UnsubscribeAccount {
+                    key,
+                }),
             )
             .await?;
         Ok(())
@@ -666,7 +690,10 @@ impl EngineRuntime {
     where
         I: IntoIterator<Item = tt_types::accounts::account::AccountName>,
     {
-        let keys = names.into_iter().map(|account_name| AccountKey { provider, account_name });
+        let keys = names.into_iter().map(|account_name| AccountKey {
+            provider,
+            account_name,
+        });
         self.initialize_accounts(keys).await
     }
 
@@ -689,7 +716,10 @@ impl EngineRuntime {
     ) -> Option<tt_types::accounts::events::PositionDelta> {
         let st = self.state.lock().await;
         st.last_positions.as_ref().and_then(|pb| {
-            pb.positions.iter().find(|p| &p.instrument == instrument).cloned()
+            pb.positions
+                .iter()
+                .find(|p| &p.instrument == instrument)
+                .cloned()
         })
     }
     pub async fn orders_for_instrument(
@@ -700,14 +730,21 @@ impl EngineRuntime {
         st.last_orders
             .as_ref()
             .map(|ob| {
-                ob.orders.iter().filter(|o| &o.instrument == instrument).cloned().collect()
+                ob.orders
+                    .iter()
+                    .filter(|o| &o.instrument == instrument)
+                    .cloned()
+                    .collect()
             })
             .unwrap_or_default()
     }
 
     /// Return cached securities list for a provider (may be empty if not fetched yet)
     pub fn securities_for(&self, provider: ProviderKind) -> Vec<Instrument> {
-        self.securities_by_provider.get(&provider).map(|v| v.value().clone()).unwrap_or_default()
+        self.securities_by_provider
+            .get(&provider)
+            .map(|v| v.value().clone())
+            .unwrap_or_default()
     }
 
     /// Ensure that we fetch instruments from the vendor now and refresh every hour.
@@ -730,10 +767,16 @@ impl EngineRuntime {
             // Use bus-level correlation to avoid depending on EngineRuntime internals
             let rx = bus
                 .request_with_corr(|corr_id| {
-                    WireReq::InstrumentsRequest(InstrumentsRequest { provider, pattern: None, corr_id })
+                    WireReq::InstrumentsRequest(InstrumentsRequest {
+                        provider,
+                        pattern: None,
+                        corr_id,
+                    })
                 })
                 .await;
-            if let Ok(Ok(WireResp::InstrumentsResponse(ir))) = timeout(Duration::from_secs(3), rx).await {
+            if let Ok(Ok(WireResp::InstrumentsResponse(ir))) =
+                timeout(Duration::from_secs(3), rx).await
+            {
                 sec_map.insert(provider, ir.instruments);
             }
         }
@@ -795,7 +838,11 @@ impl EngineRuntime {
             sub_id: None,
             rx: None,
             task: None,
-            state: Arc::new(Mutex::new(EngineAccountsState { last_orders: None, last_positions: None, last_accounts: None })),
+            state: Arc::new(Mutex::new(EngineAccountsState {
+                last_orders: None,
+                last_positions: None,
+                last_accounts: None,
+            })),
             next_corr_id: Arc::new(AtomicU64::new(1)),
             pending: Arc::new(DashMap::new()),
             securities_by_provider: Arc::new(DashMap::new()),
@@ -803,7 +850,10 @@ impl EngineRuntime {
         }
     }
 
-    pub async fn start<S: Strategy>(&mut self, strategy: Arc<Mutex<S>>) -> anyhow::Result<EngineHandle> {
+    pub async fn start<S: Strategy>(
+        &mut self,
+        strategy: Arc<Mutex<S>>,
+    ) -> anyhow::Result<EngineHandle> {
         let (tx, rx) = mpsc::channel::<Response>(1024);
         let sub_id = self.bus.add_client(tx).await;
         self.sub_id = Some(sub_id.clone());
@@ -816,9 +866,19 @@ impl EngineRuntime {
             tokio::spawn(async move {
                 let mut strat = strategy_clone.lock().await;
                 for topic in strat.desired_topics().into_iter() {
-                    let sub = Subscribe { topic, latest_only: false, from_seq: 0 };
-                    if let Err(e) = bus_clone.handle_request(&sub_id_clone, Request::Subscribe(sub)).await {
-                        warn!("failed to send legacy topic subscribe for {:?}: {}", topic, e);
+                    let sub = Subscribe {
+                        topic,
+                        latest_only: false,
+                        from_seq: 0,
+                    };
+                    if let Err(e) = bus_clone
+                        .handle_request(&sub_id_clone, Request::Subscribe(sub))
+                        .await
+                    {
+                        warn!(
+                            "failed to send legacy topic subscribe for {:?}: {}",
+                            topic, e
+                        );
                     }
                 }
             });
@@ -836,7 +896,9 @@ impl EngineRuntime {
             watching_providers: self.watching_providers.clone(),
             state: self.state.clone(),
         };
-        let handle = EngineHandle { inner: Arc::new(shared) };
+        let handle = EngineHandle {
+            inner: Arc::new(shared),
+        };
         // Start processing task BEFORE invoking strategy.on_start so correlated responses can be handled during on_start
         let strategy_for_task = strategy.clone();
         let handle_task = tokio::spawn(async move {
@@ -867,35 +929,87 @@ impl EngineRuntime {
                 }
                 match resp {
                     Response::TickBatch(TickBatch { ticks, .. }) => {
-                        for t in ticks { let mut strat = strategy_for_task.lock().await; strat.on_tick(t).await; }
+                        for t in ticks {
+                            let mut strat = strategy_for_task.lock().await;
+                            strat.on_tick(t).await;
+                        }
                     }
                     Response::QuoteBatch(QuoteBatch { quotes, .. }) => {
-                        for q in quotes { let mut strat = strategy_for_task.lock().await; strat.on_quote(q).await; }
+                        for q in quotes {
+                            let mut strat = strategy_for_task.lock().await;
+                            strat.on_quote(q).await;
+                        }
                     }
                     Response::BarBatch(BarBatch { bars, .. }) => {
-                        for b in bars { let mut strat = strategy_for_task.lock().await; strat.on_bar(b).await; }
+                        for b in bars {
+                            let mut strat = strategy_for_task.lock().await;
+                            strat.on_bar(b).await;
+                        }
                     }
                     Response::MBP10(ob) => {
-                        let mut strat = strategy_for_task.lock().await; strat.on_mbp10(ob.event).await;
+                        let mut strat = strategy_for_task.lock().await;
+                        strat.on_mbp10(ob.event).await;
                     }
                     Response::OrdersBatch(ob) => {
-                        { let mut st = state.lock().await; st.last_orders = Some(ob.clone()); }
-                        { let mut strat = strategy_for_task.lock().await; strat.on_orders_batch(ob.clone()).await; }
+                        {
+                            let mut st = state.lock().await;
+                            st.last_orders = Some(ob.clone());
+                        }
+                        {
+                            let mut strat = strategy_for_task.lock().await;
+                            strat.on_orders_batch(ob.clone()).await;
+                        }
                     }
                     Response::PositionsBatch(pb) => {
-                        { let mut st = state.lock().await; st.last_positions = Some(pb.clone()); }
-                        { let mut strat = strategy_for_task.lock().await; strat.on_positions_batch(pb.clone()).await; }
+                        {
+                            let mut st = state.lock().await;
+                            st.last_positions = Some(pb.clone());
+                        }
+                        {
+                            let mut strat = strategy_for_task.lock().await;
+                            strat.on_positions_batch(pb.clone()).await;
+                        }
                     }
                     Response::AccountDeltaBatch(ab) => {
-                        { let mut st = state.lock().await; st.last_accounts = Some(ab.clone()); }
-                        { let mut strat = strategy_for_task.lock().await; strat.on_account_delta(ab.accounts).await; }
+                        {
+                            let mut st = state.lock().await;
+                            st.last_accounts = Some(ab.clone());
+                        }
+                        {
+                            let mut strat = strategy_for_task.lock().await;
+                            strat.on_account_delta(ab.accounts).await;
+                        }
                     }
-                    Response::Tick(t) => { let mut strat = strategy_for_task.lock().await; strat.on_tick(t).await; }
-                    Response::Quote(q) => { let mut strat = strategy_for_task.lock().await; strat.on_quote(q).await; }
-                    Response::Bar(b) => { let mut strat = strategy_for_task.lock().await; strat.on_bar(b).await; }
-                    Response::Pong(_) | Response::InstrumentsResponse(_) | Response::InstrumentsMapResponse(_) | Response::VendorData(_) | Response::AnnounceShm(_) | Response::AccountInfoResponse(_) => {}
-                    Response::SubscribeResponse { topic, instrument, success } => { let mut strat = strategy_for_task.lock().await; strat.on_subscribe(instrument, topic, success).await; }
-                    Response::UnsubscribeResponse { topic, instrument } => { let mut strat = strategy_for_task.lock().await; strat.on_unsubscribe(instrument, topic).await; }
+                    Response::Tick(t) => {
+                        let mut strat = strategy_for_task.lock().await;
+                        strat.on_tick(t).await;
+                    }
+                    Response::Quote(q) => {
+                        let mut strat = strategy_for_task.lock().await;
+                        strat.on_quote(q).await;
+                    }
+                    Response::Bar(b) => {
+                        let mut strat = strategy_for_task.lock().await;
+                        strat.on_bar(b).await;
+                    }
+                    Response::Pong(_)
+                    | Response::InstrumentsResponse(_)
+                    | Response::InstrumentsMapResponse(_)
+                    | Response::VendorData(_)
+                    | Response::AnnounceShm(_)
+                    | Response::AccountInfoResponse(_) => {}
+                    Response::SubscribeResponse {
+                        topic,
+                        instrument,
+                        success,
+                    } => {
+                        let mut strat = strategy_for_task.lock().await;
+                        strat.on_subscribe(instrument, topic, success).await;
+                    }
+                    Response::UnsubscribeResponse { topic, instrument } => {
+                        let mut strat = strategy_for_task.lock().await;
+                        strat.on_unsubscribe(instrument, topic).await;
+                    }
                 }
             }
             let mut strat = strategy_for_task.lock().await;

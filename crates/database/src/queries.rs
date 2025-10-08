@@ -3,14 +3,14 @@ use crate::layout::Layout;
 use crate::models::SeqBound;
 use crate::paths::{provider_kind_to_db_string, topic_to_db_string};
 use ahash::AHashMap;
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use chrono::{DateTime, Utc};
-use duckdb::{params, Connection, OptionalExt};
+use duckdb::{Connection, OptionalExt, params};
 use rust_decimal::Decimal;
 use serde_json::Value as JsonValue;
 use std::str::FromStr;
-use tt_types::data::models::{Resolution, Side};
 use tt_types::data::core::{Bbo, Candle, Tick};
+use tt_types::data::models::{Resolution, TradeSide};
 use tt_types::keys::Topic;
 use tt_types::providers::ProviderKind;
 use tt_types::securities::symbols::{Exchange, Instrument, MarketType};
@@ -385,9 +385,9 @@ pub fn get_ticks_in_range(
         let exchange =
             Exchange::from_str(&exch).ok_or_else(|| anyhow!("unknown exchange '{exch}'"))?;
         let side = match side_str.as_deref() {
-            Some("Buy") | Some("B") => Side::Buy,
-            Some("Sell") | Some("S") => Side::Sell,
-            _ => Side::None,
+            Some("Buy") | Some("B") => TradeSide::Buy,
+            Some("Sell") | Some("S") => TradeSide::Sell,
+            _ => TradeSide::None,
         };
 
         out.push(Tick {

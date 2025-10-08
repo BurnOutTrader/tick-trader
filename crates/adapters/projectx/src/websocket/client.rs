@@ -14,7 +14,7 @@ use serde_json::Value;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{error, info};
@@ -23,16 +23,18 @@ use tt_bus::Router;
 use tt_types::accounts::events::{
     AccountDelta, ClientOrderId, OrderUpdate, PositionDelta, ProviderOrderId,
 };
-use tt_types::data::core::{Tick};
-use tt_types::data::models::{Price, Side, Volume};
+use tt_types::data::core::Tick;
+use tt_types::data::models::{Price, TradeSide, Volume};
 use tt_types::keys::Topic;
 use tt_types::providers::ProjectXTenant;
 use tt_types::securities::futures_helpers::{extract_month_year, extract_root, sanitize_code};
 use tt_types::securities::symbols::Instrument;
-use tt_types::wire::{encode, AccountDeltaBatch, OrdersBatch, PositionsBatch};
+use tt_types::wire::{AccountDeltaBatch, Bytes, OrdersBatch, PositionsBatch};
 // Map ProjectX depth items to MBP10 incremental updates and publish individually
-use tt_types::data::mbp10::{Mbp10, Action as MbpAction, BookSide as MbpSide, Flags as MbpFlags, BookLevels};
 use rust_decimal::prelude::FromPrimitive as _;
+use tt_types::data::mbp10::{
+    Action as MbpAction, BookLevels, BookSide as MbpSide, Flags as MbpFlags, Mbp10,
+};
 
 #[allow(unused)]
 /// Realtime client scaffold for ProjectX hubs
@@ -114,7 +116,11 @@ pub fn parse_px_instrument(input: &str) -> String {
         let mut chars = expiry.chars();
         let month = chars.next().unwrap_or('Z');
         let yy: String = chars.collect();
-        let yy2 = if yy.len() == 1 { format!("0{}", yy) } else { yy };
+        let yy2 = if yy.len() == 1 {
+            format!("0{}", yy)
+        } else {
+            yy
+        };
         return format!("{}.{}{}", root, month, yy2);
     } else if parts.len() >= 2 {
         // Fallback: root-only PX id -> produce continuous instrument ROOT (no expiry)
@@ -606,22 +612,31 @@ impl PxWebSocketClient {
                                 let args_opt = val.get("arguments").and_then(|a| a.as_array());
                                 if let Some(args) = args_opt {
                                     // contract id is first arg when present
-                                    let instrument_opt = args.get(0)
+                                    let instrument_opt = args
+                                        .get(0)
                                         .and_then(|v| v.as_str())
                                         .and_then(|s| Instrument::try_parse_dotted(s).ok());
                                     // data is second arg when present, otherwise first
-                                    let maybe_data = if args.len() >= 2 { Some(&args[1]) } else { args.get(0) };
+                                    let maybe_data = if args.len() >= 2 {
+                                        Some(&args[1])
+                                    } else {
+                                        args.get(0)
+                                    };
 
                                     let mut quotes: Vec<GatewayQuote> = Vec::new();
                                     if let Some(data_val) = maybe_data {
                                         if let Some(arr) = data_val.as_array() {
                                             for item in arr {
-                                                if let Ok(q) = serde_json::from_value::<GatewayQuote>(item.clone()) {
+                                                if let Ok(q) = serde_json::from_value::<GatewayQuote>(
+                                                    item.clone(),
+                                                ) {
                                                     quotes.push(q);
                                                 }
                                             }
                                         } else if data_val.is_object() {
-                                            if let Ok(q) = serde_json::from_value::<GatewayQuote>(data_val.clone()) {
+                                            if let Ok(q) = serde_json::from_value::<GatewayQuote>(
+                                                data_val.clone(),
+                                            ) {
                                                 quotes.push(q);
                                             }
                                         }
@@ -631,39 +646,59 @@ impl PxWebSocketClient {
                                     }
 
                                     if let Some(instrument) = instrument_opt {
-                                            let symbol = extract_root(&instrument);
-                                            let provider = tt_types::providers::ProviderKind::ProjectX(self.firm);
-                                            let key = tt_types::keys::SymbolKey { instrument: instrument.clone(), provider };
+                                        let symbol = extract_root(&instrument);
+                                        let provider =
+                                            tt_types::providers::ProviderKind::ProjectX(self.firm);
+                                        let key = tt_types::keys::SymbolKey {
+                                            instrument: instrument.clone(),
+                                            provider,
+                                        };
 
-                                            let mut published = 0usize;
-                                            for px_quote in quotes.into_iter() {
-                                                let bid = Price::from_f64(px_quote.best_bid).unwrap_or_default();
-                                                let ask = Price::from_f64(px_quote.best_ask).unwrap_or_default();
-                                                let bid_size = Volume::from(0);
-                                                let ask_size = Volume::from(0);
-                                                let time = DateTime::<Utc>::from_str(px_quote.timestamp.as_str())
-                                                    .or_else(|_| DateTime::<Utc>::from_str(px_quote.last_updated.as_str()))
-                                                    .unwrap_or_else(|_| Utc::now());
-                                                let bbo = tt_types::data::core::Bbo {
-                                                    symbol: symbol.clone(),
-                                                    instrument: instrument.clone(),
-                                                    bid,
-                                                    bid_size,
-                                                    ask,
-                                                    ask_size,
-                                                    time,
-                                                    bid_orders: None,
-                                                    ask_orders: None,
-                                                    venue_seq: None,
-                                                    is_snapshot: Some(false),
-                                                };
-                                                let buf = match tt_types::wire::encode(&bbo) { Ok(buf) => buf, Err(e) => { error!("failed to encode message: {}", e); continue; } };
-                                                tt_shm::write_snapshot(Topic::Quotes, &key, &buf.to_vec());
-                                                if let Err(e) = self.bus.publish_quote(bbo).await { log::warn!("failed to publish quote: {}", e); } else { published += 1; }
+                                        let mut published = 0usize;
+                                        for px_quote in quotes.into_iter() {
+                                            let bid = Price::from_f64(px_quote.best_bid)
+                                                .unwrap_or_default();
+                                            let ask = Price::from_f64(px_quote.best_ask)
+                                                .unwrap_or_default();
+                                            let bid_size = Volume::from(0);
+                                            let ask_size = Volume::from(0);
+                                            let time = DateTime::<Utc>::from_str(
+                                                px_quote.timestamp.as_str(),
+                                            )
+                                            .or_else(|_| {
+                                                DateTime::<Utc>::from_str(
+                                                    px_quote.last_updated.as_str(),
+                                                )
+                                            })
+                                            .unwrap_or_else(|_| Utc::now());
+                                            let bbo = tt_types::data::core::Bbo {
+                                                symbol: symbol.clone(),
+                                                instrument: instrument.clone(),
+                                                bid,
+                                                bid_size,
+                                                ask,
+                                                ask_size,
+                                                time,
+                                                bid_orders: None,
+                                                ask_orders: None,
+                                                venue_seq: None,
+                                                is_snapshot: Some(false),
+                                            };
+                                            let buf = bbo.to_bytes();
+                                            tt_shm::write_snapshot(
+                                                Topic::Quotes,
+                                                &key,
+                                                &buf,
+                                            );
+                                            if let Err(e) = self.bus.publish_quote(bbo).await {
+                                                log::warn!("failed to publish quote: {}", e);
+                                            } else {
+                                                published += 1;
                                             }
-                                            if published == 0 {
-                                                info!(target: "projectx.ws", "GatewayQuote: parsed but no valid quotes for {}", instrument);
-                                            }
+                                        }
+                                        if published == 0 {
+                                            info!(target: "projectx.ws", "GatewayQuote: parsed but no valid quotes for {}", instrument);
+                                        }
                                     } else {
                                         info!(target: "projectx.ws", "GatewayQuote: could not derive instrument from args: {:?}", args);
                                     }
@@ -674,24 +709,33 @@ impl PxWebSocketClient {
                                 let args_opt = val.get("arguments").and_then(|a| a.as_array());
                                 if let Some(args) = args_opt {
                                     // First arg is the full contract id (e.g., "CON.F.US.MNQ.Z25"). Use it to derive Instrument.
-                                    let instrument_opt = args.get(0)
-                                                                            .and_then(|v| v.as_str())
-                                                                            .and_then(|s| Instrument::try_parse_dotted(s).ok());
+                                    let instrument_opt = args
+                                        .get(0)
+                                        .and_then(|v| v.as_str())
+                                        .and_then(|s| Instrument::try_parse_dotted(s).ok());
 
                                     // Second arg is either an array of trade objects or a single object
-                                    let maybe_data = if args.len() >= 2 { Some(&args[1]) } else { args.get(0) };
+                                    let maybe_data = if args.len() >= 2 {
+                                        Some(&args[1])
+                                    } else {
+                                        args.get(0)
+                                    };
 
                                     let mut trades: Vec<GatewayTrade> = Vec::new();
                                     if let Some(data_val) = maybe_data {
                                         if let Some(arr) = data_val.as_array() {
                                             // Deserialize an array of GatewayTrade
                                             for item in arr {
-                                                if let Ok(t) = serde_json::from_value::<GatewayTrade>(item.clone()) {
+                                                if let Ok(t) = serde_json::from_value::<GatewayTrade>(
+                                                    item.clone(),
+                                                ) {
                                                     trades.push(t);
                                                 }
                                             }
                                         } else if data_val.is_object() {
-                                            if let Ok(t) = serde_json::from_value::<GatewayTrade>(data_val.clone()) {
+                                            if let Ok(t) = serde_json::from_value::<GatewayTrade>(
+                                                data_val.clone(),
+                                            ) {
                                                 trades.push(t);
                                             }
                                         }
@@ -704,34 +748,77 @@ impl PxWebSocketClient {
 
                                     // Resolve instrument once
                                     if let Some(instrument) = instrument_opt {
-                                            let symbol = extract_root(&instrument);
-                                            let provider = tt_types::providers::ProviderKind::ProjectX(self.firm);
-                                            let key = tt_types::keys::SymbolKey { instrument: instrument.clone(), provider };
+                                        let symbol = extract_root(&instrument);
+                                        let provider =
+                                            tt_types::providers::ProviderKind::ProjectX(self.firm);
+                                        let key = tt_types::keys::SymbolKey {
+                                            instrument: instrument.clone(),
+                                            provider,
+                                        };
 
-                                            let mut published = 0usize;
-                                            for px_trade in trades.into_iter() {
-                                                let price = match Price::from_f64(px_trade.price) {
-                                                    Some(p) => p,
-                                                    None => { log::warn!("invalid price for {}", px_trade.price); continue; }
-                                                };
-                                                let volume = match Volume::from_i64(px_trade.volume) {
-                                                    Some(s) => s,
-                                                    None => { log::warn!("invalid size for {}", px_trade.volume); continue; }
-                                                };
-                                                let side = match px_trade.r#type { 0 => Side::Buy, 1 => Side::Sell, _ => Side::None };
-                                                let time = DateTime::<Utc>::from_str(px_trade.timestamp.as_str()).unwrap_or_else(|e| {
-                                                    log::warn!("invalid timestamp for {}: {}", px_trade.timestamp, e);
-                                                    Utc::now()
-                                                });
-                                                let tick = Tick { symbol: symbol.clone(), instrument: instrument.clone(), price, volume, time, side, venue_seq: None };
-                                                // Write Tick snapshot to SHM
-                                                let buf = match tt_types::wire::encode(&tick) { Ok(buf) => buf, Err(e) => { error!("failed to encode message: {}", e); continue; } };
-                                                tt_shm::write_snapshot(Topic::Ticks, &key, &buf.to_vec());
-                                                if let Err(e) = self.bus.publish_tick(tick).await { log::warn!("failed to publish tick: {}", e); } else { published += 1; }
+                                        let mut published = 0usize;
+                                        for px_trade in trades.into_iter() {
+                                            let price = match Price::from_f64(px_trade.price) {
+                                                Some(p) => p,
+                                                None => {
+                                                    log::warn!(
+                                                        "invalid price for {}",
+                                                        px_trade.price
+                                                    );
+                                                    continue;
+                                                }
+                                            };
+                                            let volume = match Volume::from_i64(px_trade.volume) {
+                                                Some(s) => s,
+                                                None => {
+                                                    log::warn!(
+                                                        "invalid size for {}",
+                                                        px_trade.volume
+                                                    );
+                                                    continue;
+                                                }
+                                            };
+                                            let side = match px_trade.r#type {
+                                                0 => TradeSide::Buy,
+                                                1 => TradeSide::Sell,
+                                                _ => TradeSide::None,
+                                            };
+                                            let time = DateTime::<Utc>::from_str(
+                                                px_trade.timestamp.as_str(),
+                                            )
+                                            .unwrap_or_else(|e| {
+                                                log::warn!(
+                                                    "invalid timestamp for {}: {}",
+                                                    px_trade.timestamp,
+                                                    e
+                                                );
+                                                Utc::now()
+                                            });
+                                            let tick = Tick {
+                                                symbol: symbol.clone(),
+                                                instrument: instrument.clone(),
+                                                price,
+                                                volume,
+                                                time,
+                                                side,
+                                                venue_seq: None,
+                                            };
+                                            // Write Tick snapshot to SHM
+                                            let buf = tick.to_bytes();
+                                            tt_shm::write_snapshot(
+                                                Topic::Ticks,
+                                                &key,
+                                                &buf,
+                                            );
+                                            if let Err(e) = self.bus.publish_tick(tick).await {
+                                                log::warn!("failed to publish tick: {}", e);
+                                            } else {
+                                                published += 1;
                                             }
-                                            if published == 0 {
-                                                info!(target: "projectx.ws", "GatewayTrade: parsed but no valid ticks for {}", instrument);
-                                            }
+                                        }
+                                        if published == 0 {
+                                            info!(target: "projectx.ws", "GatewayTrade: parsed but no valid ticks for {}", instrument);
+                                        }
                                     } else {
                                         info!(target: "projectx.ws", "GatewayTrade: could not derive instrument from args: {:?}", args);
                                     }
@@ -742,188 +829,267 @@ impl PxWebSocketClient {
                                 let args_opt = val.get("arguments").and_then(|a| a.as_array());
                                 if let Some(args) = args_opt {
                                     // contract id is first arg; data is second when present
-                                    let instr_opt = args.get(0)
+                                    let instr_opt = args
+                                        .get(0)
                                         .and_then(|v| v.as_str())
                                         .and_then(|s| Instrument::try_parse_dotted(s).ok());
-                                    let data_val = if args.len() >= 2 { Some(&args[1]) } else { args.get(0) };
+                                    let data_val = if args.len() >= 2 {
+                                        Some(&args[1])
+                                    } else {
+                                        args.get(0)
+                                    };
 
                                     if let Some(instrument) = instr_opt {
-                                            let symbol = extract_root(&instrument);
-                                            let provider = tt_types::providers::ProviderKind::ProjectX(self.firm);
-                                            let key = tt_types::keys::SymbolKey { instrument: instrument.clone(), provider };
+                                        let symbol = extract_root(&instrument);
+                                        let provider =
+                                            tt_types::providers::ProviderKind::ProjectX(self.firm);
+                                        let key = tt_types::keys::SymbolKey {
+                                            instrument: instrument.clone(),
+                                            provider,
+                                        };
 
-                                            // Normalize payload to a vector of depth items
-                                            let mut items: Vec<models::GatewayDepth> = Vec::new();
-                                            if let Some(data) = data_val {
-                                                if data.is_array() {
-                                                    if let Some(arr) = data.as_array() {
-                                                        for item in arr {
-                                                            if let Ok(d) = serde_json::from_value::<models::GatewayDepth>(item.clone()) {
-                                                                items.push(d);
-                                                            }
-                                                        }
-                                                    }
-                                                } else if data.is_object() {
-                                                    if let Ok(d) = serde_json::from_value::<models::GatewayDepth>(data.clone()) {
-                                                        items.push(d);
-                                                    }
-                                                }
-                                            }
-
-                                            if items.is_empty() {
-                                                return;
-                                            }
-
-                                            // If we received a batch array, opportunistically compose an aggregated top-10 book snapshot
-                                            // from the batch to align with Databento optional book levels.
-                                            let mut attach_snapshot_book: Option<BookLevels> = None;
-                                            if let Some(data) = data_val {
+                                        // Normalize payload to a vector of depth items
+                                        let mut items: Vec<models::GatewayDepth> = Vec::new();
+                                        if let Some(data) = data_val {
+                                            if data.is_array() {
                                                 if let Some(arr) = data.as_array() {
-                                                    // Collect levels per side keyed by price
-                                                    use std::collections::BTreeMap;
-                                                    // For bids sort by price desc; for asks sort asc
-                                                    let mut bid_map: BTreeMap<i64, u32> = BTreeMap::new();
-                                                    let mut ask_map: BTreeMap<i64, u32> = BTreeMap::new();
-                                                    for itv in arr.iter() {
-                                                        if let Ok(di) = serde_json::from_value::<models::GatewayDepth>(itv.clone()) {
-                                                            // Determine side as in event mapping
-                                                            match di.r#type {
-                                                                1 | 3 | 10 => {
-                                                                    // Ask side: use total volume at price for book
-                                                                    let px_nanos = (di.price * 1_000_000_000.0).round() as i64;
-                                                                    let sz = if di.volume < 0 { 0 } else { (di.volume as u64).min(u32::MAX as u64) as u32 };
-                                                                    // For asks we want ascending sort; BTreeMap is ascending by key
-                                                                    ask_map.insert(px_nanos, sz);
-                                                                }
-                                                                2 | 4 | 9 => {
-                                                                    // Bid side
-                                                                    let px_nanos = (di.price * 1_000_000_000.0).round() as i64;
-                                                                    let sz = if di.volume < 0 { 0 } else { (di.volume as u64).min(u32::MAX as u64) as u32 };
-                                                                    bid_map.insert(px_nanos, sz);
-                                                                }
-                                                                _ => {}
+                                                    for item in arr {
+                                                        if let Ok(d) = serde_json::from_value::<
+                                                            models::GatewayDepth,
+                                                        >(
+                                                            item.clone()
+                                                        ) {
+                                                            items.push(d);
+                                                        }
+                                                    }
+                                                }
+                                            } else if data.is_object() {
+                                                if let Ok(d) =
+                                                    serde_json::from_value::<models::GatewayDepth>(
+                                                        data.clone(),
+                                                    )
+                                                {
+                                                    items.push(d);
+                                                }
+                                            }
+                                        }
+
+                                        if items.is_empty() {
+                                            return;
+                                        }
+
+                                        // If we received a batch array, opportunistically compose an aggregated top-10 book snapshot
+                                        // from the batch to align with Databento optional book levels.
+                                        let mut attach_snapshot_book: Option<BookLevels> = None;
+                                        if let Some(data) = data_val {
+                                            if let Some(arr) = data.as_array() {
+                                                // Collect levels per side keyed by price
+                                                use std::collections::BTreeMap;
+                                                // For bids sort by price desc; for asks sort asc
+                                                let mut bid_map: BTreeMap<Decimal, u32> =
+                                                    BTreeMap::new();
+                                                let mut ask_map: BTreeMap<Decimal, u32> =
+                                                    BTreeMap::new();
+                                                for itv in arr.iter() {
+                                                    if let Ok(di) = serde_json::from_value::<
+                                                        models::GatewayDepth,
+                                                    >(
+                                                        itv.clone()
+                                                    ) {
+                                                        // Determine side as in event mapping
+                                                        match di.r#type {
+                                                            1 | 3 | 10 => {
+                                                                // Ask side: use total volume at price for book
+                                                                let px_nanos = (di.price
+                                                                    * 1_000_000_000.0)
+                                                                    .round()
+                                                                    as i64;
+                                                                let sz = if di.volume < 0 {
+                                                                    0
+                                                                } else {
+                                                                    (di.volume as u64)
+                                                                        .min(u32::MAX as u64)
+                                                                        as u32
+                                                                };
+                                                                // For asks we want ascending sort; BTreeMap is ascending by key
+                                                                ask_map.insert(px_nanos, sz);
                                                             }
+                                                            2 | 4 | 9 => {
+                                                                // Bid side
+                                                                let px_nanos = (di.price
+                                                                    * 1_000_000_000.0)
+                                                                    .round()
+                                                                    as i64;
+                                                                let sz = if di.volume < 0 {
+                                                                    0
+                                                                } else {
+                                                                    (di.volume as u64)
+                                                                        .min(u32::MAX as u64)
+                                                                        as u32
+                                                                };
+                                                                bid_map.insert(px_nanos, sz);
+                                                            }
+                                                            _ => {}
                                                         }
                                                     }
-                                                    if !bid_map.is_empty() || !ask_map.is_empty() {
-                                                        // Extract top 10 bids (highest first) and asks (lowest first)
-                                                        let mut bid_px: Vec<Decimal> = Vec::new();
-                                                        let mut bid_sz: Vec<u32> = Vec::new();
-                                                        for (px, sz) in bid_map.iter().rev().take(10) { // highest first
-                                                            bid_px.push(Decimal::from_i128_with_scale(*px as i128, 9));
-                                                            bid_sz.push(*sz);
-                                                        }
-                                                        let mut ask_px: Vec<Decimal> = Vec::new();
-                                                        let mut ask_sz: Vec<u32> = Vec::new();
-                                                        for (px, sz) in ask_map.iter().take(10) { // lowest first
-                                                            ask_px.push(Decimal::from_i128_with_scale(*px as i128, 9));
-                                                            ask_sz.push(*sz);
-                                                        }
-                                                        // Order counts not available from PX depth payload; set zeros to keep alignment
-                                                        let bid_ct = vec![0u32; bid_px.len()];
-                                                        let ask_ct = vec![0u32; ask_px.len()];
-                                                        attach_snapshot_book = Some(BookLevels { bid_px, ask_px, bid_sz, ask_sz, bid_ct, ask_ct });
+                                                }
+                                                if !bid_map.is_empty() || !ask_map.is_empty() {
+                                                    // Extract top 10 bids (highest first) and asks (lowest first)
+                                                    let mut bid_px: Vec<Decimal> = Vec::new();
+                                                    let mut bid_sz: Vec<Decimal> = Vec::new();
+                                                    for (px, sz) in bid_map.iter().rev().take(10) {
+                                                        // highest first
+                                                        bid_px.push(*px);
+                                                        bid_sz.push(*sz);
                                                     }
+                                                    let mut ask_px: Vec<i64> = Vec::new();
+                                                    let mut ask_sz: Vec<u32> = Vec::new();
+                                                    for (px, sz) in ask_map.iter().take(10) {
+                                                        // lowest first
+                                                        ask_px.push(*px);
+                                                        ask_sz.push(*sz);
+                                                    }
+                                                    // Order counts not available from PX depth payload; set zeros to keep alignment
+                                                    let bid_ct = vec![0u32; bid_px.len()];
+                                                    let ask_ct = vec![0u32; ask_px.len()];
+                                                    attach_snapshot_book = Some(BookLevels {
+                                                        bid_px,
+                                                        ask_px,
+                                                        bid_sz,
+                                                        ask_sz,
+                                                        bid_ct,
+                                                        ask_ct,
+                                                    });
+                                                }
+                                            }
+                                        }
+
+                                        let mut published = 0usize;
+                                        let mut first_in_batch = true;
+                                        for it in items.into_iter() {
+                                            // Map side using API DomType definitions
+                                            // Ask(1), BestAsk(3), NewBestAsk(10) => Ask; Bid(2), BestBid(4), NewBestBid(9) => Bid; others => None
+                                            let side = match it.r#type {
+                                                1 | 3 | 10 => MbpSide::Ask,
+                                                2 | 4 | 9 => MbpSide::Bid,
+                                                _ => MbpSide::None,
+                                            };
+                                            // Map action to engine Action per API:
+                                            // Unknown(0), Low(7), High(8) => None
+                                            // Reset(6) => Clear
+                                            // Trade(5) => Trade
+                                            // Fill(11) => Fill
+                                            // Otherwise (Ask/Bid/BestAsk/BestBid/NewBest*) => Modify (set total volume at price)
+                                            let action = match it.r#type {
+                                                0 | 7 | 8 => MbpAction::None,
+                                                6 => MbpAction::Clear,
+                                                5 => MbpAction::Trade,
+                                                11 => MbpAction::Fill,
+                                                _ => MbpAction::Modify,
+                                            };
+
+                                            // Build Mbp10 with proper timestamp semantics
+                                            // ts_event: provider/event timestamp; ts_recv: local receive timestamp
+                                            let ts_event =
+                                                DateTime::<Utc>::from_str(it.timestamp.as_str())
+                                                    .unwrap_or_else(|_| Utc::now());
+                                            let ts_event_ns = (ts_event.timestamp() as u64)
+                                                .saturating_mul(1_000_000_000)
+                                                .saturating_add(
+                                                    ts_event.timestamp_subsec_nanos() as u64
+                                                );
+                                            let ts_recv = Utc::now();
+                                            let ts_recv_ns = (ts_recv.timestamp() as u64)
+                                                .saturating_mul(1_000_000_000)
+                                                .saturating_add(
+                                                    ts_recv.timestamp_subsec_nanos() as u64
+                                                );
+
+                                            // Compute ts_in_delta = ts_recv - ts_event (ns), clamp to i32
+                                            let mut bad_ts = false;
+                                            let delta_i128 =
+                                                (ts_recv_ns as i128) - (ts_event_ns as i128);
+                                            let ts_in_delta_i32 = if delta_i128 < 0
+                                                || delta_i128 > i32::MAX as i128
+                                            {
+                                                bad_ts = true;
+                                                0
+                                            } else {
+                                                delta_i128 as i32
+                                            };
+
+                                            // Use currentVolume for Trade/Fill; otherwise, use total volume at price
+                                            let use_current = matches!(it.r#type, 5 | 11);
+                                            let raw_size = if use_current {
+                                                it.current_volume
+                                            } else {
+                                                it.volume
+                                            };
+                                            let size_u32 = if raw_size < 0 {
+                                                0
+                                            } else {
+                                                (raw_size as u64).min(u32::MAX as u64) as u32
+                                            };
+                                            let mut flags = MbpFlags::from(MbpFlags::F_MBP);
+                                            if matches!(it.r#type, 3 | 4 | 9 | 10) {
+                                                // best bid/ask related
+                                                flags = MbpFlags(flags.0 | MbpFlags::F_TOB);
+                                            }
+                                            if bad_ts {
+                                                flags = MbpFlags(flags.0 | MbpFlags::F_BAD_TS_RECV);
+                                            }
+                                            // Attach aggregated book snapshot only once per batch if available
+                                            let mut book_opt = None;
+                                            if first_in_batch {
+                                                if let Some(bk) = attach_snapshot_book.clone() {
+                                                    flags =
+                                                        MbpFlags(flags.0 | MbpFlags::F_SNAPSHOT);
+                                                    book_opt = Some(bk);
                                                 }
                                             }
 
-                                            let mut published = 0usize;
-                                            let mut first_in_batch = true;
-                                            for it in items.into_iter() {
-                                                // Map side using API DomType definitions
-                                                // Ask(1), BestAsk(3), NewBestAsk(10) => Ask; Bid(2), BestBid(4), NewBestBid(9) => Bid; others => None
-                                                let side = match it.r#type {
-                                                    1 | 3 | 10 => MbpSide::Ask,
-                                                    2 | 4 | 9 => MbpSide::Bid,
-                                                    _ => MbpSide::None,
-                                                };
-                                                // Map action to engine Action per API:
-                                                // Unknown(0), Low(7), High(8) => None
-                                                // Reset(6) => Clear
-                                                // Trade(5) => Trade
-                                                // Fill(11) => Fill
-                                                // Otherwise (Ask/Bid/BestAsk/BestBid/NewBest*) => Modify (set total volume at price)
-                                                let action = match it.r#type {
-                                                    0 | 7 | 8 => MbpAction::None,
-                                                    6 => MbpAction::Clear,
-                                                    5 => MbpAction::Trade,
-                                                    11 => MbpAction::Fill,
-                                                    _ => MbpAction::Modify,
-                                                };
+                                            // Build directly instead of make_mbp10 to avoid decimal conversion corner cases
+                                            // Convert price to Decimal via integer nanos to avoid FP rounding issues
+                                            let price_nanos =
+                                                (it.price * 1_000_000_000.0).round() as i64;
+                                            let event = Mbp10 {
+                                                instrument: instrument.clone(),
+                                                ts_recv,
+                                                ts_event,
+                                                rtype: 10,
+                                                publisher_id: 0,
+                                                instrument_id: 0,
+                                                action,
+                                                side,
+                                                depth: it
+                                                    .index
+                                                    .unwrap_or(0)
+                                                    .try_into()
+                                                    .unwrap_or(0),
+                                                price: Decimal::from_i128_with_scale(
+                                                    price_nanos as i128,
+                                                    9,
+                                                ),
+                                                size: size_u32,
+                                                flags,
+                                                ts_in_delta: ts_in_delta_i32,
+                                                sequence: 0,
+                                                book: book_opt,
+                                            };
+                                            // info!("{:?}", event);
+                                            first_in_batch = false;
 
-                                                // Build Mbp10 with proper timestamp semantics
-                                                // ts_event: provider/event timestamp; ts_recv: local receive timestamp
-                                                let ts_event = DateTime::<Utc>::from_str(it.timestamp.as_str()).unwrap_or_else(|_| Utc::now());
-                                                let ts_event_ns = (ts_event.timestamp() as u64)
-                                                    .saturating_mul(1_000_000_000)
-                                                    .saturating_add(ts_event.timestamp_subsec_nanos() as u64);
-                                                let ts_recv = Utc::now();
-                                                let ts_recv_ns = (ts_recv.timestamp() as u64)
-                                                    .saturating_mul(1_000_000_000)
-                                                    .saturating_add(ts_recv.timestamp_subsec_nanos() as u64);
-
-                                                // Compute ts_in_delta = ts_recv - ts_event (ns), clamp to i32
-                                                let mut bad_ts = false;
-                                                let delta_i128 = (ts_recv_ns as i128) - (ts_event_ns as i128);
-                                                let ts_in_delta_i32 = if delta_i128 < 0 || delta_i128 > i32::MAX as i128 {
-                                                    bad_ts = true;
-                                                    0
-                                                } else {
-                                                    delta_i128 as i32
-                                                };
-
-                                                // Use currentVolume for Trade/Fill; otherwise, use total volume at price
-                                                let use_current = matches!(it.r#type, 5 | 11);
-                                                let raw_size = if use_current { it.current_volume } else { it.volume };
-                                                let size_u32 = if raw_size < 0 { 0 } else { (raw_size as u64).min(u32::MAX as u64) as u32 };
-                                                let mut flags = MbpFlags::from(MbpFlags::F_MBP);
-                                                if matches!(it.r#type, 3 | 4 | 9 | 10) { // best bid/ask related
-                                                    flags = MbpFlags(flags.0 | MbpFlags::F_TOB);
-                                                }
-                                                if bad_ts {
-                                                    flags = MbpFlags(flags.0 | MbpFlags::F_BAD_TS_RECV);
-                                                }
-                                                // Attach aggregated book snapshot only once per batch if available
-                                                let mut book_opt = None;
-                                                if first_in_batch {
-                                                    if let Some(bk) = attach_snapshot_book.clone() {
-                                                        flags = MbpFlags(flags.0 | MbpFlags::F_SNAPSHOT);
-                                                        book_opt = Some(bk);
-                                                    }
-                                                }
-
-                                                // Build directly instead of make_mbp10 to avoid decimal conversion corner cases
-                                                // Convert price to Decimal via integer nanos to avoid FP rounding issues
-                                                let price_nanos = (it.price * 1_000_000_000.0).round() as i64;
-                                                let event = Mbp10 {
-                                                    instrument: instrument.clone(),
-                                                    ts_recv,
-                                                    ts_event,
-                                                    rtype: 10,
-                                                    publisher_id: 0,
-                                                    instrument_id: 0,
-                                                    action,
-                                                    side,
-                                                    depth: it.index.unwrap_or(0).try_into().unwrap_or(0),
-                                                    price: Decimal::from_i128_with_scale(price_nanos as i128, 9),
-                                                    size: size_u32,
-                                                    flags,
-                                                    ts_in_delta: ts_in_delta_i32,
-                                                    sequence: 0,
-                                                    book: book_opt,
-                                                };
-                                               // info!("{:?}", event);
-                                                first_in_batch = false;
-
-                                                if let Err(e) = self.bus.publish_mbp10_for_key(&key, event).await {
-                                                    log::warn!(target: "projectx.ws", "failed to publish MBP10: {}", e);
-                                                } else {
-                                                    published += 1;
-                                                }
+                                            if let Err(e) =
+                                                self.bus.publish_mbp10_for_key(&key, event).await
+                                            {
+                                                log::warn!(target: "projectx.ws", "failed to publish MBP10: {}", e);
+                                            } else {
+                                                published += 1;
                                             }
-                                            if published == 0 {
-                                                info!(target: "projectx.ws", "GatewayDepth: parsed but no valid updates for instrument");
-                                            }
+                                        }
+                                        if published == 0 {
+                                            info!(target: "projectx.ws", "GatewayDepth: parsed but no valid updates for instrument");
+                                        }
                                     } else {
                                         info!(target: "projectx.ws", "GatewayDepth: could not derive instrument from args: {:?}", args);
                                     }
@@ -953,7 +1119,7 @@ impl PxWebSocketClient {
                                     equity: balance,
                                     day_realized_pnl: dec!(0),
                                     open_pnl: dec!(0),
-                                    ts_ns: Utc::now().timestamp_nanos_opt().unwrap_or(0),
+                                    ts_ns: Utc::now(),
                                     can_trade: account.can_trade,
                                 };
                                 let batch = AccountDeltaBatch {
@@ -975,14 +1141,15 @@ impl PxWebSocketClient {
                                         }
                                     };
                                 // Build identifiers
-                                let instrument =
-                                    match Instrument::try_parse_dotted(order.contract_id.as_str()) {
-                                        Ok(i) => i,
-                                        Err(e) => {
-                                            error!("error parsing instrument: {:?}", e);
-                                            return;
-                                        }
-                                    };
+                                let instrument = match Instrument::try_parse_dotted(
+                                    order.contract_id.as_str(),
+                                ) {
+                                    Ok(i) => i,
+                                    Err(e) => {
+                                        error!("error parsing instrument: {:?}", e);
+                                        return;
+                                    }
+                                };
 
                                 let _limit_px = order.limit_price.map(|p| Price::from_f64(p));
                                 let _stop_px = order.stop_price.map(|p| Price::from_f64(p));
@@ -1051,9 +1218,7 @@ impl PxWebSocketClient {
                                     position.size
                                 };
                                 let ts_ns = DateTime::<Utc>::from_str(&position.creation_timestamp)
-                                    .unwrap_or_else(|_| Utc::now())
-                                    .timestamp_nanos_opt()
-                                    .unwrap_or(0);
+                                    .unwrap_or_else(|_| Utc::now());
                                 let pd = PositionDelta {
                                     instrument: instrument_id,
                                     net_qty_before: 0,
@@ -1076,7 +1241,7 @@ impl PxWebSocketClient {
                             "GatewayUserTrade" => {
                                 let seq = match Utc::now().timestamp_nanos_opt() {
                                     None => u64::MIN,
-                                    Some(ts) => ts as u64
+                                    Some(ts) => ts as u64,
                                 };
                                 let trade =
                                     match serde_json::from_value::<GatewayUserTrade>(val.clone()) {
@@ -1099,9 +1264,9 @@ impl PxWebSocketClient {
                                 let symbol = extract_root(&instrument_id);
 
                                 let side = if trade.side == 0 {
-                                    Side::Buy
+                                    TradeSide::Buy
                                 } else {
-                                    Side::Sell
+                                    TradeSide::Sell
                                 };
 
                                 let last_px = Price::from_f64(trade.price);

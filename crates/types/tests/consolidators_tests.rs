@@ -1,19 +1,19 @@
-use std::str::FromStr;
 use chrono::{Duration, TimeZone, Utc};
 use rust_decimal::Decimal;
-use tt_types::data::core::{Bbo, Candle, Tick};
+use std::str::FromStr;
 use tt_types::consolidators::{
     BboToCandlesConsolidator, CandlesToCandlesConsolidator, TicksToCandlesConsolidator,
     TicksToTickBarsConsolidator,
 };
-use tt_types::data::models::{Resolution, Side};
+use tt_types::data::core::{Bbo, Candle, Tick};
+use tt_types::data::models::{Resolution, TradeSide};
 use tt_types::securities::symbols::Instrument;
 
 fn d(v: i64) -> Decimal {
     Decimal::from_i128_with_scale(v as i128, 0)
 }
 
-fn tick(sym: &str, t_ns: i64, px: i64, sz: i64, side: Side) -> Tick {
+fn tick(sym: &str, t_ns: i64, px: i64, sz: i64, side: TradeSide) -> Tick {
     let ts = chrono::DateTime::<Utc>::from_timestamp(
         t_ns.div_euclid(1_000_000_000),
         t_ns.rem_euclid(1_000_000_000) as u32,
@@ -95,15 +95,15 @@ fn ticks_to_m1_single_bar() {
         .unwrap();
     // 3 ticks within the first minute bucket
     assert!(
-        cons.update_tick(&tick(symbol, base + 100_000_000, 10000, 1, Side::Buy))
+        cons.update_tick(&tick(symbol, base + 100_000_000, 10000, 1, TradeSide::Buy))
             .is_none()
     );
     assert!(
-        cons.update_tick(&tick(symbol, base + 200_000_000, 10005, 2, Side::Sell))
+        cons.update_tick(&tick(symbol, base + 200_000_000, 10005, 2, TradeSide::Sell))
             .is_none()
     );
     assert!(
-        cons.update_tick(&tick(symbol, base + 500_000_000, 10003, 3, Side::Buy))
+        cons.update_tick(&tick(symbol, base + 500_000_000, 10003, 3, TradeSide::Buy))
             .is_none()
     );
 
@@ -114,7 +114,7 @@ fn ticks_to_m1_single_bar() {
             base + 60_000_000_000 + 1_000_000,
             10002,
             1,
-            Side::Sell,
+            TradeSide::Sell,
         ))
         .expect("expected 1m bar on minute crossover");
 
@@ -158,7 +158,7 @@ fn ticks_to_tickbars_two_bars() {
             base + (i as i64) * 1_000_000,
             10000 + i as i64,
             1,
-            if i % 2 == 0 { Side::Buy } else { Side::Sell },
+            if i % 2 == 0 { TradeSide::Buy } else { TradeSide::Sell },
         )) {
             outs.push(tb);
         }

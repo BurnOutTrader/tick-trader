@@ -119,7 +119,9 @@ async fn main() -> anyhow::Result<()> {
     // Wire upstream manager (providers) into the router for first/last sub notifications
     let mgr = Arc::new(tt_providers::manager::ProviderManager::new(router.clone()));
 
-   let cs = mgr.get_instruments_map(ProviderKind::ProjectX(ProjectXTenant::Topstep)).await?;
+    let cs = mgr
+        .get_securities(ProviderKind::ProjectX(ProjectXTenant::Topstep))
+        .await?;
     /*for (i, c) in cs {
         let req = HistoricalRequest {
             provider_kind: ProviderKind::ProjectX(ProjectXTenant::Topstep),
@@ -132,7 +134,7 @@ async fn main() -> anyhow::Result<()> {
         mgr.update_historical_database(req).await?;
     }*/
 
-  /*  let req = HistoricalRequest {
+    /*  let req = HistoricalRequest {
         provider_kind: ProviderKind::ProjectX(ProjectXTenant::Topstep),
         topic: Topic::Candles1m,
         instrument: Instrument::from_str("MNQZ5").unwrap(),

@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Duration, NaiveDate, TimeZone, Utc};
 use duckdb;
 use std::collections::{HashMap, HashSet};
@@ -12,7 +12,9 @@ use tt_types::data::core::{Candle, Exchange};
 use tt_types::data::models::Resolution;
 use tt_types::keys::Topic;
 use tt_types::providers::{ProjectXTenant, ProviderKind};
-use tt_types::securities::hours::market_hours::{hours_for_exchange, next_session_after, MarketHours};
+use tt_types::securities::hours::market_hours::{
+    MarketHours, hours_for_exchange, next_session_after,
+};
 use tt_types::securities::symbols::Instrument;
 
 const GAP_TOLERANCE_BARS: i64 = 200; // ignore gaps of 3 bars (minutes) or fewer
@@ -178,8 +180,8 @@ fn main() -> Result<()> {
     let mut total_gaps: usize = 0;
 
     // summary counters
-    let mut n_gap_events: usize = 0;      // number of gap occurrences (events), excluding small tolerated gaps
-    let mut n_overlap_events: usize = 0;  // number of early-start/overlap occurrences
+    let mut n_gap_events: usize = 0; // number of gap occurrences (events), excluding small tolerated gaps
+    let mut n_overlap_events: usize = 0; // number of early-start/overlap occurrences
 
     if candles.is_empty() {
         failures.push("No candles returned".to_string());
@@ -327,7 +329,10 @@ fn main() -> Result<()> {
     } else {
         eprintln!(
             "Integrity checks FAILED ({} issues) — summary: large gap events = {}, missing 1m bars = {}, early/overlaps = {}",
-            failures.len(), n_gap_events, total_gaps, n_overlap_events
+            failures.len(),
+            n_gap_events,
+            total_gaps,
+            n_overlap_events
         );
 
         let to_show = failures.len().min(MAX_FAILURE_LINES);

@@ -1,9 +1,10 @@
+use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use rust_decimal::Decimal;
 use std::fmt::Display;
 use std::str::FromStr;
-use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
+#[archive(check_bytes)]
 pub struct AccountName(String);
 impl FromStr for AccountName {
     type Err = String;
@@ -30,10 +31,10 @@ impl AsRef<str> for AccountName {
 }
 
 #[derive(Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize)]
+#[archive(check_bytes)]
 pub struct AccountSnapShot {
     pub name: AccountName,
     pub id: i64,
-    #[rkyv(with = crate::rkyv_types::DecimalDef)]
     pub balance: Decimal,
     pub can_trade: bool,
 }

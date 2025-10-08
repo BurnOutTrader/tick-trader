@@ -1,15 +1,30 @@
 use chrono::{Datelike, NaiveDate};
+use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use std::fmt::Display;
 use std::str::FromStr;
 use strum_macros::Display;
-use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Hash,  Eq, Ord, PartialOrd, Archive, RkyvDeserialize, RkyvSerialize)]
+#[archive(check_bytes)]
 pub enum SecurityType {
     Future,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Archive, RkyvDeserialize, RkyvSerialize, Display, PartialOrd)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Archive,
+    RkyvDeserialize,
+    RkyvSerialize,
+    Display,
+    PartialOrd,
+    Ord
+)]
+#[archive(check_bytes)]
 pub enum Exchange {
     CME,
     CBOT,
@@ -59,7 +74,10 @@ impl Exchange {
         })
     }
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Archive, RkyvDeserialize, RkyvSerialize, Display)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Archive, RkyvDeserialize, RkyvSerialize, Display,
+)]
+#[archive(check_bytes)]
 pub enum MarketType {
     Futures,
 }
@@ -86,7 +104,8 @@ impl FromStr for Exchange {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, Archive, RkyvDeserialize, RkyvSerialize)]
+#[archive(check_bytes)]
 pub enum Currency {
     USD,
     EUR,
@@ -113,7 +132,8 @@ impl Currency {
 }
 
 /// Example canonical: `MNQ.Z25` or continuous contracts `MNQ.C.0`
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Archive, RkyvDeserialize, RkyvSerialize)]
+#[archive(check_bytes)]
 pub struct Instrument(pub String);
 
 impl Instrument {
@@ -133,7 +153,13 @@ impl Instrument {
         }
         let out = match digs.len() {
             1 => digs.to_string(),
-            2 => if digs.starts_with('0') { digs[1..].to_string() } else { digs.to_string() },
+            2 => {
+                if digs.starts_with('0') {
+                    digs[1..].to_string()
+                } else {
+                    digs.to_string()
+                }
+            }
             4 => digs[2..].to_string(),
             _ => return Err(anyhow!("invalid year length: {}", digs.len())),
         };
