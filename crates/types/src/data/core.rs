@@ -31,10 +31,7 @@ pub struct Tick {
 
 impl Bytes<Self> for Tick {
     fn from_bytes(archived: &[u8]) -> anyhow::Result<Tick> {
-        // Ensure alignment for rkyv by copying into an AlignedVec first
-        let mut aligned = AlignedVec::new();
-        aligned.extend_from_slice(archived);
-        match rkyv::from_bytes::<Tick>(&aligned) {
+        match rkyv::from_bytes::<Tick>(archived) {
             Ok(response) => Ok(response),
             Err(e) => Err(anyhow::Error::msg(e.to_string())),
         }
@@ -42,12 +39,7 @@ impl Bytes<Self> for Tick {
 
     fn to_aligned_bytes(&self) -> AlignedVec {
         // Serialize directly into an AlignedVec for maximum compatibility with rkyv
-        rkyv::to_bytes::<_, 1024>(self).expect("rkyv::to_bytes failed")
-    }
-
-    fn to_bytes(&self) -> Vec<u8> {
-        let vec = rkyv::to_bytes::<_, 1024>(self).unwrap();
-        vec.into()
+        rkyv::to_bytes::<_, 256>(self).expect("rkyv::to_bytes failed")
     }
 }
 
@@ -90,11 +82,6 @@ impl Bytes<Self> for Candle {
             Ok(response) => Ok(response),
             Err(e) => Err(anyhow::Error::msg(e.to_string())),
         }
-    }
-
-    fn to_bytes(&self) -> Vec<u8> {
-        let vec = rkyv::to_bytes::<_, 1024>(self).unwrap();
-        vec.into()
     }
 
     fn to_aligned_bytes(&self) -> AlignedVec {
@@ -162,11 +149,6 @@ impl Bytes<Self> for TickBar {
         }
     }
 
-    fn to_bytes(&self) -> Vec<u8> {
-        let vec = rkyv::to_bytes::<_, 1024>(self).unwrap();
-        vec.into()
-    }
-
     fn to_aligned_bytes(&self) -> AlignedVec {
         // Serialize directly into an AlignedVec for maximum compatibility with rkyv
         rkyv::to_bytes::<_, 256>(self).expect("rkyv::to_bytes failed")
@@ -217,11 +199,6 @@ impl Bytes<Self> for Bbo {
     fn to_aligned_bytes(&self) -> AlignedVec {
         // Serialize directly into an AlignedVec for maximum compatibility with rkyv
         rkyv::to_bytes::<_, 256>(self).expect("rkyv::to_bytes failed")
-    }
-
-    fn to_bytes(&self) -> Vec<u8> {
-        let vec = rkyv::to_bytes::<_, 1024>(self).unwrap();
-        vec.into()
     }
 }
 

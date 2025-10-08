@@ -143,11 +143,6 @@ impl Bytes<Self> for AccountEvent {
         // Serialize directly into an AlignedVec for maximum compatibility with rkyv
         rkyv::to_bytes::<_, 1024>(self).expect("rkyv::to_bytes failed")
     }
-
-    fn to_bytes(&self) -> Vec<u8> {
-        let vec = rkyv::to_bytes::<_, 256>(self).unwrap();
-        vec.into()
-    }
 }
 
 // Outbound projections

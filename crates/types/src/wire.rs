@@ -472,10 +472,10 @@ pub enum WireMessage {
 }
 impl Bytes<Self> for WireMessage {
     fn from_bytes(data: &[u8]) -> anyhow::Result<WireMessage> {
-        // rkyv requires proper alignment of the archived bytes. LengthDelimitedCodec
-        // does not guarantee alignment of the underlying slice, so ensure alignment by
-        // copying into an AlignedVec before deserializing.
-        let mut aligned = AlignedVec::new();
+        // Ensure rkyv-required alignment by copying into an AlignedVec before deserializing.
+        // Network/UDS transports don't preserve alignment of the destination buffer, and
+        // tokio/bytes may yield slices with only 4-byte alignment.
+        let mut aligned = AlignedVec::with_capacity(data.len());
         aligned.extend_from_slice(data);
         match rkyv::from_bytes::<WireMessage>(&aligned) {
             Ok(response) => Ok(response),
@@ -487,11 +487,6 @@ impl Bytes<Self> for WireMessage {
         // Serialize directly into an AlignedVec for maximum compatibility with rkyv
         rkyv::to_bytes::<_, 1024>(self).expect("rkyv::to_bytes failed")
     }
-
-    fn to_bytes(&self) -> Vec<u8> {
-        // Convert the AlignedVec into a Vec<u8> without copying
-        self.to_aligned_bytes().into()
-    }
 }
 
 pub trait Bytes<T> {
@@ -501,14 +496,10 @@ pub trait Bytes<T> {
     // Note: network transports don't preserve alignment guarantees across processes;
     // the receiver should still ensure alignment before deserializing.
     fn to_aligned_bytes(&self) -> AlignedVec where Self: Sized { unreachable!("default impl should be overridden") }
-
-    fn to_bytes(&self) -> Vec<u8>;
 }
 
 pub trait VecBytes<T> {
     fn vec_to_aligned(data: &Vec<T>) -> AlignedVec;
-
-    fn vec_to_bytes(data: &Vec<T>) -> Vec<u8>;
 
     fn from_array_bytes(data: &Vec<u8>) -> anyhow::Result<Vec<T>>;
 }
