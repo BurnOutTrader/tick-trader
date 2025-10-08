@@ -16,7 +16,6 @@ use tt_database::init::init_db;
 use tt_types::accounts::events::AccountDelta;
 use tt_types::data::core::{Bbo, Candle, Tick};
 use tt_types::data::mbp10::Mbp10;
-use tt_types::data::models::Resolution;
 use tt_types::keys::{AccountKey, SymbolKey, Topic};
 use tt_types::providers::ProviderKind;
 use tt_types::securities::security::FuturesContract;
@@ -214,9 +213,6 @@ pub enum DataTopic {
     Candles1m,
     Candles1h,
     Candles1d,
-    CandlesConsolidated(Resolution),
-    QuoteBarsConsolidated(Resolution),
-    TickBarsConsolidated(u32)
 }
 
 impl DataTopic {
@@ -229,9 +225,6 @@ impl DataTopic {
             DataTopic::Candles1m => Ok(Topic::Candles1m),
             DataTopic::Candles1h => Ok(Topic::Candles1h),
             DataTopic::Candles1d => Ok(Topic::Candles1d),
-            DataTopic::CandlesConsolidated(_) => Err(anyhow::anyhow!("Candles consolidated")),
-            DataTopic::QuoteBarsConsolidated(_) => Err(anyhow::anyhow!("Quote bars consolidated")),
-            DataTopic::TickBarsConsolidated(_) => Err(anyhow::anyhow!("Tick bars consolidated")),
         }
     }
 

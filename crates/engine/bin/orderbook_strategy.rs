@@ -1,4 +1,3 @@
-
 use rust_decimal::Decimal;
 use rust_decimal::prelude::Zero;
 use std::collections::BTreeMap;
@@ -19,19 +18,20 @@ use tt_types::securities::symbols::Instrument;
 use tt_types::wire;
 use tt_types::accounts::account::AccountName;
 
+#[allow(dead_code)]
 #[derive(Default, Debug, Clone)]
 struct LastTrade {
     price: Option<Decimal>,
     size: Option<Decimal>,
 }
-
+#[allow(dead_code)]
 #[derive(Default, Debug, Clone)]
 struct OrderBook {
     bids: BTreeMap<Decimal, Decimal>,
     asks: BTreeMap<Decimal, Decimal>,
     last_trade: LastTrade,
 }
-
+#[allow(dead_code)]
 impl OrderBook {
     fn clear(&mut self) {
         self.bids.clear();
@@ -146,7 +146,7 @@ struct OrderBookStrategy {
     last_cancel_at: Option<Instant>,
     min_cancel_interval: Duration,
 }
-
+#[allow(dead_code)]
 impl OrderBookStrategy {
     fn new(cfg: StrategyConfig) -> Self {
         Self {
@@ -350,11 +350,14 @@ impl Strategy for OrderBookStrategy {
     }
     async fn on_unsubscribe(&mut self, _instrument: Instrument, data_topic: DataTopic) { println!("{:?}", data_topic); }
     fn accounts(&self) -> Vec<AccountKey> {
-        let account = AccountKey::new(ProviderKind::ProjectX(ProjectXTenant::Topstep), self.cfg.account_name.clone());
-        vec![account]
+        if let Some(cfg) = &self.cfg {
+            vec![AccountKey::new(cfg.provider, cfg.account_name.clone())]
+        } else {
+            vec![]
+        }
     }
 }
-
+#[allow(dead_code)]
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_max_level(LevelFilter::INFO).init();

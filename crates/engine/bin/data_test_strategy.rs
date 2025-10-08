@@ -8,6 +8,7 @@ use tracing::info;
 use tracing::level_filters::LevelFilter;
 use tt_bus::ClientMessageBus;
 use tt_engine::engine::{DataTopic, EngineHandle, EngineRuntime, Strategy};
+use tt_types::accounts::account::AccountName;
 use tt_types::accounts::events::AccountDelta;
 use tt_types::data::mbp10::Mbp10;
 use tt_types::keys::{AccountKey, SymbolKey};
@@ -75,7 +76,8 @@ impl Strategy for DataTestStrategy {
     }
 
     fn accounts(&self) -> Vec<AccountKey> {
-        let account = AccountKey::new(ProviderKind::ProjectX(ProjectXTenant::Topstep), self.cfg.account_name.clone());
+        let target_account_name = "PRAC-V2-64413-98419885";
+        let account = AccountKey::new(ProviderKind::ProjectX(ProjectXTenant::Topstep), AccountName::from_str(target_account_name).unwrap());
         vec![account]
     }
 }
