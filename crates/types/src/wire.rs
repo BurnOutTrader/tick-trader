@@ -471,10 +471,13 @@ pub enum WireMessage {
     Response(Response),
 }
 impl Bytes<Self> for WireMessage {
-    fn from_bytes(archived: &[u8]) -> anyhow::Result<WireMessage> {
-        // If the archived bytes do not end with the delimiter, proceed as before
-        match rkyv::from_bytes::<WireMessage>(archived) {
-            //Ignore this warning: Trait `Deserialize<ResponseType, SharedDeserializeMap>` is not implemented for `ArchivedRequestType` [E0277]
+    fn from_bytes(data: &[u8]) -> anyhow::Result<WireMessage> {
+        // rkyv requires proper alignment of the archived bytes. LengthDelimitedCodec
+        // does not guarantee alignment of the underlying slice, so ensure alignment by
+        // copying into an AlignedVec before deserializing.
+        let mut aligned = AlignedVec::new();
+        aligned.extend_from_slice(data);
+        match rkyv::from_bytes::<WireMessage>(&aligned) {
             Ok(response) => Ok(response),
             Err(e) => Err(anyhow::Error::msg(e.to_string())),
         }
