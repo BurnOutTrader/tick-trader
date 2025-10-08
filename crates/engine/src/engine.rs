@@ -1026,6 +1026,7 @@ impl EngineRuntime {
     }
 
     pub async fn stop(&mut self) -> anyhow::Result<()> {
+        info!("engine: stopping");
         let _ = self
             .bus
             .handle_request(
@@ -1039,6 +1040,7 @@ impl EngineRuntime {
             task.abort();
         }
         self.rx.take();
+        info!("engine: shutdown complete");
         Ok(())
     }
 
