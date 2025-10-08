@@ -9,10 +9,10 @@ use tokio::time::sleep;
 use tracing::info;
 use tracing::level_filters::LevelFilter;
 use tt_bus::ClientMessageBus;
-use tt_engine::engine::{EngineHandle, EngineRuntime, Strategy};
+use tt_engine::engine::{DataTopic, EngineHandle, EngineRuntime, Strategy};
 use tt_types::accounts::events::AccountDelta;
 use tt_types::data::mbp10::{Action as MbpAction, BookLevels, BookSide as MbpSide, Mbp10};
-use tt_types::keys::{SymbolKey, Topic};
+use tt_types::keys::SymbolKey;
 use tt_types::providers::{ProjectXTenant, ProviderKind};
 use tt_types::securities::symbols::Instrument;
 use tt_types::wire;
@@ -126,24 +126,15 @@ struct TestStrategy {
     engine: Option<EngineHandle>,
     // Since MBP10 events don't carry the instrument explicitly in the payload routed to strategies,
     // and this test subscribes to a single instrument, keep a single rolling book.
-    books: OrderBook,
+    book: OrderBook,
 }
 
 #[async_trait::async_trait]
 impl Strategy for TestStrategy {
-    fn desired_topics(&mut self) -> std::collections::HashSet<Topic> {
-        use std::collections::HashSet;
-        let mut s = HashSet::new();
-        // Keep legacy topic subscribe light; exact key subscribe happens in on_start
-        s.insert(Topic::MBP10);
-        s.insert(Topic::Ticks);
-        s
-    }
-
     async fn on_start(&mut self, h: EngineHandle) {
         info!("strategy start");
         h.subscribe_key(
-            Topic::MBP10,
+            DataTopic::MBP10,
             SymbolKey::new(
                 Instrument::from_str("MNQ.Z25").unwrap(),
                 ProviderKind::ProjectX(ProjectXTenant::Topstep),
@@ -152,7 +143,7 @@ impl Strategy for TestStrategy {
         .await
         .unwrap();
         h.subscribe_key(
-            Topic::Ticks,
+            DataTopic::Ticks,
             SymbolKey::new(
                 Instrument::from_str("MNQ.Z25").unwrap(),
                 ProviderKind::ProjectX(ProjectXTenant::Topstep),
@@ -174,7 +165,7 @@ impl Strategy for TestStrategy {
     async fn on_bar(&mut self, _b: tt_types::data::core::Candle) {}
 
     async fn on_mbp10(&mut self, d: Mbp10) {
-        let ob = &mut self.books;
+        let ob = &mut self.book;
 
         if let Some(ref book) = d.book {
             ob.seed_from_snapshot(book);
@@ -207,14 +198,14 @@ impl Strategy for TestStrategy {
             println!("{:?}", account_delta);
         }
     }
-    async fn on_subscribe(&mut self, instrument: Instrument, topic: Topic, success: bool) {
+    async fn on_subscribe(&mut self, instrument: Instrument, data_topic: DataTopic, success: bool) {
         println!(
             "Subscribed to {} on topic {:?}: Success: {}",
-            instrument, topic, success
+            instrument, data_topic, success
         );
     }
-    async fn on_unsubscribe(&mut self, _instrument: Instrument, topic: Topic) {
-        println!("{:?}", topic);
+    async fn on_unsubscribe(&mut self, _instrument: Instrument, data_topic: DataTopic) {
+        println!("{:?}", data_topic);
     }
 }
 
@@ -233,6 +224,6 @@ async fn main() -> anyhow::Result<()> {
 
     sleep(Duration::from_secs(60)).await;
 
-    let r = engine.stop().await?;
+    let _ = engine.stop().await?;
     Ok(())
 }

@@ -4,24 +4,25 @@ use crate::models::{
 use async_trait::async_trait;
 use dashmap::DashMap;
 use duckdb::Connection;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, mpsc, oneshot};
-use tracing::{info, warn};
+use tracing::info;
 use tt_bus::{ClientMessageBus, ClientSubId};
 use tt_database::init::init_db;
 use tt_types::accounts::events::AccountDelta;
 use tt_types::data::core::{Bbo, Candle, Tick};
 use tt_types::data::mbp10::Mbp10;
+use tt_types::data::models::Resolution;
 use tt_types::keys::{AccountKey, SymbolKey, Topic};
 use tt_types::providers::ProviderKind;
 use tt_types::securities::security::FuturesContract;
 use tt_types::securities::symbols::Instrument;
 use tt_types::server_side::traits::{MarketDataProvider, ProbeStatus, ProviderParams};
-use tt_types::wire::{AccountDeltaBatch, BarBatch, Kick, OrdersBatch, PositionsBatch, QuoteBatch, Request, Response, Subscribe, TickBatch};
+use tt_types::wire::{AccountDeltaBatch, BarBatch, Kick, OrdersBatch, PositionsBatch, QuoteBatch, Request, Response, TickBatch};
 
 #[derive(Default)]
 pub struct Caches {
@@ -175,7 +176,6 @@ impl<P: MarketDataProvider + 'static> Engine<P> {
 
 #[async_trait]
 pub trait Strategy: Send + Sync + 'static {
-    fn desired_topics(&mut self) -> HashSet<Topic>;
 
     async fn on_start(&mut self, _h: EngineHandle) {}
 
@@ -196,9 +196,53 @@ pub trait Strategy: Send + Sync + 'static {
     /// Receive snapshots of account state, these are messages, not mutable objects.
     async fn on_account_delta(&mut self, _accounts: Vec<AccountDelta>) {}
 
-    async fn on_subscribe(&mut self, _instrument: Instrument, _topic: Topic, _success: bool) {}
+    async fn on_subscribe(&mut self, _instrument: Instrument, _data_topic: DataTopic, _success: bool) {}
 
-    async fn on_unsubscribe(&mut self, _instrument: Instrument, _topic: Topic) {}
+    async fn on_unsubscribe(&mut self, _instrument: Instrument, _data_topic: DataTopic) {}
+}
+
+#[derive(Clone, Debug, Copy)]
+pub enum DataTopic {
+    Ticks,
+    Quotes,
+    MBP10,
+    Candles1s,
+    Candles1m,
+    Candles1h,
+    Candles1d,
+    CandlesConsolidated(Resolution),
+    QuoteBarsConsolidated(Resolution),
+    TickBarsConsolidated(u32)
+}
+
+impl DataTopic {
+    pub(crate) fn to_topic_or_err(&self) -> anyhow::Result<Topic> {
+        match self {
+            DataTopic::Ticks => Ok(Topic::Ticks),
+            DataTopic::Quotes => Ok(Topic::Quotes),
+            DataTopic::MBP10 => Ok(Topic::MBP10),
+            DataTopic::Candles1s => Ok(Topic::Candles1s),
+            DataTopic::Candles1m => Ok(Topic::Candles1m),
+            DataTopic::Candles1h => Ok(Topic::Candles1h),
+            DataTopic::Candles1d => Ok(Topic::Candles1d),
+            DataTopic::CandlesConsolidated(_) => Err(anyhow::anyhow!("Candles consolidated")),
+            DataTopic::QuoteBarsConsolidated(_) => Err(anyhow::anyhow!("Quote bars consolidated")),
+            DataTopic::TickBarsConsolidated(_) => Err(anyhow::anyhow!("Tick bars consolidated")),
+        }
+    }
+
+    pub fn from(topic: Topic) -> Self {
+        match topic {
+            Topic::Ticks => DataTopic::Ticks,
+            Topic::Quotes => DataTopic::Quotes,
+            Topic::MBP10 => DataTopic::MBP10,
+            Topic::Candles1s => DataTopic::Candles1s,
+            Topic::Candles1m => DataTopic::Candles1m,
+            Topic::Candles1h => DataTopic::Candles1h,
+            Topic::Candles1d => DataTopic::Candles1d,
+            _ => unimplemented!("Topic: {} not added to engine handling", topic),
+        }
+    }
 }
 
 struct EngineAccountsState {
@@ -253,7 +297,8 @@ impl EngineHandle {
     }
 
     // Market data
-    pub async fn subscribe_key(&self, topic: Topic, key: SymbolKey) -> anyhow::Result<()> {
+    pub async fn subscribe_key(&self, data_topic: DataTopic, key: SymbolKey) -> anyhow::Result<()> {
+        let topic = data_topic.to_topic_or_err()?;
         // Ensure vendor watch is running for this provider
         self.ensure_vendor_securities_watch(key.provider).await;
         let _ = self
@@ -272,7 +317,8 @@ impl EngineHandle {
         Ok(())
     }
 
-    pub async fn unsubscribe_key(&self, topic: Topic, key: SymbolKey) -> anyhow::Result<()> {
+    pub async fn unsubscribe_key(&self, data_topic: DataTopic, key: SymbolKey) -> anyhow::Result<()> {
+        let topic = data_topic.to_topic_or_err()?;
         let _ = self
             .inner
             .bus
@@ -580,8 +626,9 @@ impl EngineRuntime {
     }
 
     // Convenience: subscribe/unsubscribe by key without exposing sender
-    pub async fn subscribe_key(&self, topic: Topic, key: SymbolKey) -> anyhow::Result<()> {
+    pub async fn subscribe_key(&self, data_topic: DataTopic, key: SymbolKey) -> anyhow::Result<()> {
         // Ensure vendor securities refresh is active for this provider
+        let topic = data_topic.to_topic_or_err()?;
         self.ensure_vendor_securities_watch(key.provider).await;
         let _ = self
             .bus
@@ -598,7 +645,8 @@ impl EngineRuntime {
         Ok(())
     }
 
-    pub async fn unsubscribe_key(&self, topic: Topic, key: SymbolKey) -> anyhow::Result<()> {
+    pub async fn unsubscribe_key(&self, data_topic: DataTopic, key: SymbolKey) -> anyhow::Result<()> {
+        let topic = data_topic.to_topic_or_err()?;
         self.unsubscribe_symbol(topic, key).await
     }
 
@@ -858,31 +906,6 @@ impl EngineRuntime {
         let sub_id = self.bus.add_client(tx).await;
         self.sub_id = Some(sub_id.clone());
         self.rx = Some(rx);
-        // Keep legacy topic-level subscribe for low churn, but do it non-blocking to avoid stalling start
-        {
-            let sub_id_clone = sub_id.clone();
-            let bus_clone = self.bus.clone();
-            let strategy_clone = strategy.clone();
-            tokio::spawn(async move {
-                let mut strat = strategy_clone.lock().await;
-                for topic in strat.desired_topics().into_iter() {
-                    let sub = Subscribe {
-                        topic,
-                        latest_only: false,
-                        from_seq: 0,
-                    };
-                    if let Err(e) = bus_clone
-                        .handle_request(&sub_id_clone, Request::Subscribe(sub))
-                        .await
-                    {
-                        warn!(
-                            "failed to send legacy topic subscribe for {:?}: {}",
-                            topic, e
-                        );
-                    }
-                }
-            });
-        }
         let rx = self.rx.take().expect("rx present after start");
         let state = self.state.clone();
         let pending = self.pending.clone();
@@ -1003,12 +1026,14 @@ impl EngineRuntime {
                         instrument,
                         success,
                     } => {
+                        let data_topic = DataTopic::from(topic);
                         let mut strat = strategy_for_task.lock().await;
-                        strat.on_subscribe(instrument, topic, success).await;
+                        strat.on_subscribe(instrument, data_topic, success).await;
                     }
                     Response::UnsubscribeResponse { topic, instrument } => {
+                        let data_topic = DataTopic::from(topic);
                         let mut strat = strategy_for_task.lock().await;
-                        strat.on_unsubscribe(instrument, topic).await;
+                        strat.on_unsubscribe(instrument, data_topic).await;
                     }
                 }
             }

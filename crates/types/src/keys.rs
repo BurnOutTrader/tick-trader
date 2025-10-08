@@ -26,6 +26,9 @@ pub enum Topic {
     Positions = 9,
     Orders = 10,
     Fills = 11,
+    // Umbrella topics for subscription convenience
+    MarketData = 12,
+    Other = 13,
 }
 
 impl Display for Topic {
@@ -42,6 +45,8 @@ impl Display for Topic {
             Self::Positions => write!(f, "Positions"),
             Self::Orders => write!(f, "Orders"),
             Self::Fills => write!(f, "Fills"),
+            Self::MarketData => write!(f, "MarketData"),
+            Self::Other => write!(f, "Other"),
         }
     }
 }
@@ -50,7 +55,7 @@ impl Topic {
     pub fn id(self) -> TopicId {
         use crate::keys::Topic::{
             AccountEvt, Candles1d, Candles1h, Candles1m, Candles1s, Fills, MBP10, Orders,
-            Positions, Quotes, Ticks,
+            Positions, Quotes, Ticks, MarketData, Other,
         };
         let id = match self {
             Ticks => 1,
@@ -64,8 +69,23 @@ impl Topic {
             Positions => 9,
             Orders => 10,
             Fills => 11,
+            MarketData => 12,
+            Other => 13,
         };
         TopicId(id)
+    }
+
+    pub fn is_market_data(&self) -> bool {
+        matches!(
+            self,
+            Topic::Ticks
+                | Topic::Quotes
+                | Topic::MBP10
+                | Topic::Candles1s
+                | Topic::Candles1m
+                | Topic::Candles1h
+                | Topic::Candles1d
+        )
     }
 }
 
