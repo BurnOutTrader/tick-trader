@@ -45,7 +45,9 @@ impl Strategy for DataTestStrategy {
     async fn on_quote(&mut self, q: tt_types::data::core::Bbo) {
         println!("{:?}", q);
     }
-    async fn on_bar(&mut self, b: tt_types::data::core::Candle) {println!("{:?}", b) }
+    async fn on_bar(&mut self, b: tt_types::data::core::Candle) {
+        println!("{:?}", b)
+    }
 
     async fn on_mbp10(&mut self, d: Mbp10) {
         println!(
@@ -77,7 +79,10 @@ impl Strategy for DataTestStrategy {
 
     fn accounts(&self) -> Vec<AccountKey> {
         let target_account_name = "PRAC-V2-64413-98419885";
-        let account = AccountKey::new(ProviderKind::ProjectX(ProjectXTenant::Topstep), AccountName::from_str(target_account_name).unwrap());
+        let account = AccountKey::new(
+            ProviderKind::ProjectX(ProjectXTenant::Topstep),
+            AccountName::from_str(target_account_name).unwrap(),
+        );
         vec![account]
     }
 }

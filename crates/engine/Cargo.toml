@@ -10,6 +10,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true }
+chrono = {workspace = true}
 tokio-util = { workspace = true }
 futures-util = { workspace = true }
 bytes = { workspace = true }
@@ -20,6 +21,7 @@ tt-shm = { path = "../shm" }
 dashmap = { workspace = true }
 duckdb = {workspace = true}
 rust_decimal = {workspace = true}
+ahash = { workspace = true }
 
 [[bin]]
 name = "tt-engine-test_strategy"

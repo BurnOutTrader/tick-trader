@@ -1750,6 +1750,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "orderbook_scalper"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "dashmap",
+ "dotenvy",
+ "duckdb",
+ "futures-util",
+ "rust_decimal",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "tt-bus",
+ "tt-database",
+ "tt-engine",
+ "tt-shm",
+ "tt-types",
+]
+
+[[package]]
 name = "ordered-float"
 version = "2.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2900,9 +2923,11 @@ dependencies = [
 name = "tt-engine"
 version = "0.1.0"
 dependencies = [
+ "ahash 0.8.12",
  "anyhow",
  "async-trait",
  "bytes",
+ "chrono",
  "dashmap",
  "dotenvy",
  "duckdb",

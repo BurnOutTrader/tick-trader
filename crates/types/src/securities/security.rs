@@ -55,7 +55,7 @@ impl FuturesContract {
         };
         let quote_ccy = match quote_ccy {
             None => Currency::USD,
-            Some(c) => c
+            Some(c) => c,
         };
         Some(Self {
             root,

@@ -8,7 +8,7 @@ members = [
     "crates/providers",
     "crates/shm",
     "crates/database"
-]
+, "crates/a_strategies/examples/orderbook_scalper"]
 resolver = "2"
 
 [workspace.package]

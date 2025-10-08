@@ -6,12 +6,12 @@ use crate::websocket::client::{PxWebSocketClient, px_format_from_instrument};
 use ahash::AHashMap;
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
-use std::str::FromStr;
-use std::sync::Arc;
 use dashmap::DashMap;
 use log::info;
 use rust_decimal::Decimal;
 use rust_decimal::prelude::FromPrimitive;
+use std::str::FromStr;
+use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::error;
 use tt_bus::Router;
@@ -23,8 +23,8 @@ use tt_types::keys::{AccountKey, SymbolKey, Topic};
 use tt_types::providers::{ProjectXTenant, ProviderKind};
 use tt_types::securities::futures_helpers::{extract_month_year, extract_root};
 use tt_types::securities::security::FuturesContract;
-use tt_types::securities::symbols::{get_symbol_info, Currency, Exchange, SecurityType};
 use tt_types::securities::symbols::Instrument;
+use tt_types::securities::symbols::{Currency, Exchange, SecurityType, get_symbol_info};
 use tt_types::server_side::traits::{
     CommandAck, ConnectionState, DisconnectReason, ExecutionProvider, HistoricalDataProvider,
     MarketDataProvider, ProviderSessionSpec,
@@ -54,10 +54,7 @@ impl PXClient {
         Ok(())
     }
 
-    pub async fn manual_update_instruments(
-        &self,
-        live_only: bool,
-    ) -> anyhow::Result<()> {
+    pub async fn manual_update_instruments(&self, live_only: bool) -> anyhow::Result<()> {
         let resp: ContractSearchResponse = self
             .http
             .inner
@@ -86,7 +83,7 @@ impl PXClient {
                     continue;
                 }
             };
-            let tick_value =  match Decimal::from_f64(inst.tick_value) {
+            let tick_value = match Decimal::from_f64(inst.tick_value) {
                 Some(tick) => tick,
                 None => return Err(anyhow::anyhow!("Failed to convert tick value to decimal")),
             };
@@ -102,7 +99,7 @@ impl PXClient {
                 self.provider_kind.clone(),
                 tick_value,
                 Some(Currency::USD),
-                tick_size
+                tick_size,
             ) {
                 None => continue,
                 Some(s) => s,
@@ -483,7 +480,10 @@ impl MarketDataProvider for PXClient {
             let provider = ProviderKind::ProjectX(firm);
             let dotted = crate::websocket::client::parse_px_instrument(instrument);
             let instrument = Instrument::try_parse_dotted(&dotted).ok()?;
-            Some(SymbolKey { instrument, provider })
+            Some(SymbolKey {
+                instrument,
+                provider,
+            })
         }
         let firm = match self.provider_kind {
             ProviderKind::ProjectX(firm) => firm,
@@ -569,9 +569,7 @@ impl ExecutionProvider for PXClient {
     }
 
     async fn subscribe_account_events(&self, account_key: &AccountKey) -> anyhow::Result<()> {
-        let id = self
-            .account_id(account_key.account_name.clone())
-            .await?;
+        let id = self.account_id(account_key.account_name.clone()).await?;
         match self.websocket.subscribe_user_account(id).await {
             Ok(_) => {
                 let mut lock = self.account_subscriptions.write().await;
@@ -586,25 +584,19 @@ impl ExecutionProvider for PXClient {
     }
 
     async fn unsubscribe_account_events(&self, account_key: &AccountKey) -> anyhow::Result<()> {
-        let id = self
-            .account_id(account_key.account_name.clone())
-            .await?;
+        let id = self.account_id(account_key.account_name.clone()).await?;
         let lock = self.account_subscriptions.write().await;
         let _ = lock.iter().position(|k| k == account_key);
         self.websocket.unsubscribe_user_account(id).await
     }
 
     async fn subscribe_positions(&self, account_key: &AccountKey) -> anyhow::Result<()> {
-        let id = self
-            .account_id(account_key.account_name.clone())
-            .await?;
+        let id = self.account_id(account_key.account_name.clone()).await?;
         self.websocket.subscribe_account_positions(id).await
     }
 
     async fn unsubscribe_positions(&self, account_key: &AccountKey) -> anyhow::Result<()> {
-        let id = self
-            .account_id(account_key.account_name.clone())
-            .await?;
+        let id = self.account_id(account_key.account_name.clone()).await?;
         self.websocket.unsubscribe_account_positions(id).await
     }
 
@@ -614,16 +606,12 @@ impl ExecutionProvider for PXClient {
     }
 
     async fn subscribe_order_updates(&self, account_key: &AccountKey) -> anyhow::Result<()> {
-        let id = self
-            .account_id(account_key.account_name.clone())
-            .await?;
+        let id = self.account_id(account_key.account_name.clone()).await?;
         self.websocket.subscribe_account_orders(id).await
     }
 
     async fn unsubscribe_order_updates(&self, account_key: &AccountKey) -> anyhow::Result<()> {
-        let id = self
-            .account_id(account_key.account_name.clone())
-            .await?;
+        let id = self.account_id(account_key.account_name.clone()).await?;
         self.websocket.unsubscribe_account_orders(id).await
     }
 
@@ -690,26 +678,32 @@ impl ExecutionProvider for PXClient {
                             ok: r.success,
                             message: r.error_message,
                         }
-                    },
+                    }
                     Err(e) => {
                         info!("PlaceOrder Error: {:?}", e);
                         CommandAck {
                             ok: false,
                             message: Some(format!("place_order error: {}", e)),
                         }
-                    },
-                }
+                    }
+                };
             }
             error!("PlaceOrder Error No Instrument: {:?}", s);
             return CommandAck {
                 ok: false,
-                message: Some(format!("cancel_order error: No instrument found on {:?} for : {:?}", self.provider_kind, spec.key.instrument)),
-            }
+                message: Some(format!(
+                    "cancel_order error: No instrument found on {:?} for : {:?}",
+                    self.provider_kind, spec.key.instrument
+                )),
+            };
         }
         error!("PlaceOrder Error No account: {:?}", s);
         CommandAck {
             ok: false,
-            message: Some(format!("cancel_order error: No account found on {:?} client for : {}", self.provider_kind, spec.account_name)),
+            message: Some(format!(
+                "cancel_order error: No account found on {:?} client for : {}",
+                self.provider_kind, spec.account_name
+            )),
         }
     }
 
@@ -728,11 +722,7 @@ impl ExecutionProvider for PXClient {
             };
         };
         if let Some(account) = self.internal_accounts.get(&spec.account_name) {
-            let res = self
-                .http
-                .inner
-                .cancel_order(account.id, order_id)
-                .await;
+            let res = self.http.inner.cancel_order(account.id, order_id).await;
             return match res {
                 Ok(r) => CommandAck {
                     ok: r.success,
@@ -742,11 +732,14 @@ impl ExecutionProvider for PXClient {
                     ok: false,
                     message: Some(format!("cancel_order error: {}", e)),
                 },
-            }
+            };
         }
         CommandAck {
             ok: false,
-            message: Some(format!("cancel_order error: No account found on {:?} client for : {}", self.provider_kind, spec.account_name)),
+            message: Some(format!(
+                "cancel_order error: No account found on {:?} client for : {}",
+                self.provider_kind, spec.account_name
+            )),
         }
     }
 
@@ -783,11 +776,14 @@ impl ExecutionProvider for PXClient {
                     ok: false,
                     message: Some(format!("modify_order error: {}", e)),
                 },
-            }
+            };
         }
         CommandAck {
             ok: false,
-            message: Some(format!("cancel_order error: No account found on {:?} client for : {}", self.provider_kind, spec.account_name)),
+            message: Some(format!(
+                "cancel_order error: No account found on {:?} client for : {}",
+                self.provider_kind, spec.account_name
+            )),
         }
     }
 

@@ -303,6 +303,11 @@ impl ProviderManager {
                     tracing::error!(provider=?kind, error=%e, "ProviderManager: connect_to_market failed");
                     return Err(e);
                 }
+                // Connect execution side as well so account streams and order APIs are ready
+                if let Err(e) = ex.connect_to_broker(kind, self.session.clone()).await {
+                    tracing::error!(provider=?kind, error=%e, "ProviderManager: connect_to_broker failed");
+                    return Err(e);
+                }
                 // Build workers (shards) that share the same underlying MD provider
                 for shard in 0..self.shards {
                     let w = Arc::new(crate::worker::InprocessWorker::new(

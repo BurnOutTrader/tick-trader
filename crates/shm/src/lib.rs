@@ -164,7 +164,7 @@ impl ShmReader {
 
     /// Attempt a single seqlock read. Returns (seq, payload) on success.
     pub fn read_with_seq(&self) -> Option<(u32, Vec<u8>)> {
-        use std::sync::atomic::{fence, Ordering};
+        use std::sync::atomic::{Ordering, fence};
         if self.mmap.len() < header_len() {
             return None;
         }
@@ -199,9 +199,8 @@ impl ShmReader {
 }
 
 // Global readers registry
-static READERS: once_cell::sync::Lazy<
-    DashMap<(Topic, SymbolKey), Arc<ShmReader>>,
-> = once_cell::sync::Lazy::new(|| DashMap::new());
+static READERS: once_cell::sync::Lazy<DashMap<(Topic, SymbolKey), Arc<ShmReader>>> =
+    once_cell::sync::Lazy::new(|| DashMap::new());
 
 pub fn ensure_reader(topic: Topic, key: &SymbolKey) -> Option<Arc<ShmReader>> {
     if let Some(r) = READERS.get(&(topic, key.clone())) {

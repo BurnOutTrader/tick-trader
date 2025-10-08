@@ -54,8 +54,8 @@ impl Display for Topic {
 impl Topic {
     pub fn id(self) -> TopicId {
         use crate::keys::Topic::{
-            AccountEvt, Candles1d, Candles1h, Candles1m, Candles1s, Fills, MBP10, Orders,
-            Positions, Quotes, Ticks, MarketData, Other,
+            AccountEvt, Candles1d, Candles1h, Candles1m, Candles1s, Fills, MBP10, MarketData,
+            Orders, Other, Positions, Quotes, Ticks,
         };
         let id = match self {
             Ticks => 1,

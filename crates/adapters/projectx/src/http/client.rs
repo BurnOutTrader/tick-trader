@@ -1,6 +1,5 @@
 use std::{sync::Arc, time::Duration};
-use tt_types::providers::{ProjectXTenant};
-
+use tt_types::providers::ProjectXTenant;
 
 use crate::http::inner_client::PxHttpInnerClient;
 #[allow(unused_imports)]
@@ -91,8 +90,6 @@ impl PxHttpClient {
         });
         *self.inner.bg_task.write().await = Some(handle);
     }
-
-
 
     pub fn kill(&self) {
         let _ = self.inner.stop_tx.send(true);

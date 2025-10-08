@@ -21,7 +21,8 @@ use tt_types::providers::ProviderKind;
 use tt_types::securities::security::FuturesContract;
 use tt_types::securities::symbols::Instrument;
 use tt_types::server_side::traits::{MarketDataProvider, ProbeStatus, ProviderParams};
-use tt_types::wire::{AccountDeltaBatch, BarBatch, Kick, OrdersBatch, PositionsBatch, QuoteBatch, Request, Response, TickBatch};
+use tt_types::wire::{AccountDeltaBatch, BarBatch, Kick, OrdersBatch, PositionsBatch, QuoteBatch, Request, Response, TickBatch, Trade};
+use crate::portfolio::PortfolioManager;
 
 #[derive(Default)]
 pub struct Caches {
@@ -195,6 +196,8 @@ pub trait Strategy: Send + Sync + 'static {
     /// Receive snapshots of account state, these are messages, not mutable objects.
     async fn on_account_delta(&mut self, _accounts: Vec<AccountDelta>) {}
 
+    async fn on_trades_closed(&mut self, trades: Vec<Trade>) {}
+
     async fn on_subscribe(&mut self, _instrument: Instrument, _data_topic: DataTopic, _success: bool) {}
 
     async fn on_unsubscribe(&mut self, _instrument: Instrument, _data_topic: DataTopic) {}
@@ -262,6 +265,7 @@ pub struct EngineRuntime {
     watching_providers: Arc<DashMap<ProviderKind, ()>>,
     // Active SHM polling tasks keyed by (topic,key)
     shm_tasks: Arc<DashMap<(Topic, SymbolKey), tokio::task::JoinHandle<()>>>,
+    portfolio_manager: Arc<PortfolioManager>
 }
 
 // Shared view used by EngineHandle
@@ -273,6 +277,7 @@ pub(crate) struct EngineRuntimeShared {
     securities_by_provider: Arc<DashMap<ProviderKind, Vec<Instrument>>>,
     watching_providers: Arc<DashMap<ProviderKind, ()>>,
     state: Arc<Mutex<EngineAccountsState>>,
+    portfolio_manager: Arc<PortfolioManager>
 }
 
 #[derive(Clone)]
@@ -877,6 +882,7 @@ impl EngineRuntime {
     }
 
     pub fn new(bus: Arc<ClientMessageBus>) -> Self {
+        let instruments = Arc::new(DashMap::new());
         Self {
             bus,
             sub_id: None,
@@ -889,9 +895,10 @@ impl EngineRuntime {
             })),
             next_corr_id: Arc::new(AtomicU64::new(1)),
             pending: Arc::new(DashMap::new()),
-            securities_by_provider: Arc::new(DashMap::new()),
+            securities_by_provider: instruments.clone(),
             watching_providers: Arc::new(DashMap::new()),
             shm_tasks: Arc::new(DashMap::new()),
+            portfolio_manager: Arc::new(PortfolioManager::new(instruments)),
         }
     }
 
@@ -899,7 +906,7 @@ impl EngineRuntime {
         &mut self,
         strategy: Arc<Mutex<S>>,
     ) -> anyhow::Result<EngineHandle> {
-        let (tx, rx) = mpsc::channel::<Response>(1024);
+        let (tx, rx) = mpsc::channel::<Response>(2048);
         let sub_id = self.bus.add_client(tx).await;
         self.sub_id = Some(sub_id.clone());
         self.rx = Some(rx);
@@ -915,6 +922,7 @@ impl EngineRuntime {
             securities_by_provider: self.securities_by_provider.clone(),
             watching_providers: self.watching_providers.clone(),
             state: self.state.clone(),
+            portfolio_manager: self.portfolio_manager.clone(),
         };
         let handle = EngineHandle {
             inner: Arc::new(shared),
@@ -1011,12 +1019,9 @@ impl EngineRuntime {
                         let mut strat = strategy_for_task.lock().await;
                         strat.on_bar(b).await;
                     }
-                    Response::Pong(_)
-                    | Response::InstrumentsResponse(_)
-                    | Response::InstrumentsMapResponse(_)
-                    | Response::VendorData(_)
-                    | Response::AnnounceShm(_)
-                    | Response::AccountInfoResponse(_) => {}
+                    Response::AnnounceShm(_) => {
+                        //todo, we need to prefer this, run a benchmark, if slower or same, remove shm
+                    }
                     Response::SubscribeResponse {
                         topic,
                         instrument,
@@ -1031,6 +1036,15 @@ impl EngineRuntime {
                         let mut strat = strategy_for_task.lock().await;
                         strat.on_unsubscribe(instrument, data_topic).await;
                     }
+                    Response::ClosedTrades(t) => {
+                        let mut strat = strategy_for_task.lock().await;
+                        strat.on_trades_closed(t).await;
+                    }
+                    Response::Pong(_)
+                    | Response::InstrumentsResponse(_)
+                    | Response::InstrumentsMapResponse(_)
+                    | Response::VendorData(_)
+                    | Response::AccountInfoResponse(_) => {}
                 }
             }
             let mut strat = strategy_for_task.lock().await;

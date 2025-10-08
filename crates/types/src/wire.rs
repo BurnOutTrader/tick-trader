@@ -1,3 +1,4 @@
+use crate::accounts::account::AccountName;
 use crate::data::core::{Bbo, Candle, Tick};
 use crate::keys::{SymbolKey, Topic};
 use crate::providers::ProviderKind;
@@ -7,7 +8,26 @@ use ahash::HashMap;
 use chrono::{DateTime, Utc};
 use rkyv::AlignedVec;
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
-use crate::accounts::account::AccountName;
+use rust_decimal::Decimal;
+use crate::accounts::events::{ClientOrderId, Side};
+use crate::Guid;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
+#[archive(check_bytes)]
+pub struct Trade {
+    pub id: ClientOrderId,
+    pub provider: ProviderKind,
+    pub account_name: AccountName,
+    pub instrument: Instrument,
+    pub creation_time: DateTime<Utc>,
+    pub price: Decimal,
+    pub profit_and_loss: Decimal,
+    pub fees: Decimal,
+    pub side: Side,
+    pub size: Decimal,
+    pub voided: bool,
+    pub order_id: Guid,
+}
 
 /// Request to subscribe to a topic (coarse, topic-level interest)
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, PartialEq, Clone, Debug)]
@@ -450,6 +470,7 @@ pub enum Response {
     OrdersBatch(OrdersBatch),
     PositionsBatch(PositionsBatch),
     AccountDeltaBatch(AccountDeltaBatch),
+    ClosedTrades(Vec<Trade>),
     SubscribeResponse {
         topic: Topic,
         instrument: Instrument,
@@ -496,7 +517,12 @@ pub trait Bytes<T> {
     // Prefer this when you need rkyv-compatible alignment in the produced buffer.
     // Note: network transports don't preserve alignment guarantees across processes;
     // the receiver should still ensure alignment before deserializing.
-    fn to_aligned_bytes(&self) -> AlignedVec where Self: Sized { unreachable!("default impl should be overridden") }
+    fn to_aligned_bytes(&self) -> AlignedVec
+    where
+        Self: Sized,
+    {
+        unreachable!("default impl should be overridden")
+    }
 }
 
 pub trait VecBytes<T> {

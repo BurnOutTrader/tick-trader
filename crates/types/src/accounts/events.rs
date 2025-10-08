@@ -3,6 +3,8 @@ use crate::wire::Bytes;
 use chrono::{DateTime, Utc};
 use rkyv::{AlignedVec, Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use rust_decimal::Decimal;
+use crate::accounts::account::AccountName;
+use crate::providers::ProviderKind;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
 #[archive(check_bytes)]
@@ -30,7 +32,7 @@ impl ExecId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Archive, RkyvDeserialize, RkyvSerialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
 #[archive(check_bytes)]
 pub enum Side {
     Buy,
@@ -150,6 +152,7 @@ impl Bytes<Self> for AccountEvent {
 #[archive(check_bytes)]
 pub struct OrderUpdate {
     pub instrument: Instrument,
+    pub provider_kind: ProviderKind,
     pub provider_order_id: Option<ProviderOrderId>,
     pub client_order_id: Option<ClientOrderId>,
     pub state_code: u8,
@@ -165,6 +168,7 @@ pub struct OrderUpdate {
 #[archive(check_bytes)]
 pub struct PositionDelta {
     pub instrument: Instrument,
+    pub provider_kind: ProviderKind,
     pub net_qty_before: i64,
     pub net_qty_after: i64,
 
@@ -178,6 +182,9 @@ pub struct PositionDelta {
 #[derive(Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize)]
 #[archive(check_bytes)]
 pub struct AccountDelta {
+    pub provider_kind: ProviderKind,
+    pub name: AccountName,
+
     pub equity: Decimal,
 
     pub day_realized_pnl: Decimal,
@@ -185,5 +192,6 @@ pub struct AccountDelta {
     pub open_pnl: Decimal,
 
     pub ts_ns: DateTime<Utc>,
+
     pub can_trade: bool,
 }
