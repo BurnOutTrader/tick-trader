@@ -1087,6 +1087,12 @@ impl PxWebSocketClient {
                                             // info!("{:?}", event);
                                             first_in_batch = false;
 
+                                            // Write MBP10 snapshot/update to SHM before publishing
+                                            {
+                                                let buf = event.to_aligned_bytes();
+                                                tt_shm::write_snapshot(Topic::MBP10, &key, &buf);
+                                            }
+
                                             if let Err(e) =
                                                 self.bus.publish_mbp10_for_key(&key, event).await
                                             {
