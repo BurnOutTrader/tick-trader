@@ -927,7 +927,6 @@ impl EngineRuntime {
         let handle_task = tokio::spawn(async move {
             let mut rx = rx;
             while let Some(resp) = rx.recv().await {
-                info!("resp: {:?}", resp);
                 // Fulfill engine-local correlated callbacks first
                 match &resp {
                     Response::InstrumentsResponse(ir) => {
