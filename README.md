@@ -133,7 +133,7 @@ let _ = req_tx.send(Request::SubscribeKey(SubscribeKey { topic: Topic::Depth, ke
 
 ## 📈 Symbology quick reference
 
-- Instrument = ROOT + month code + year code (e.g., "MNQZ5" or "MNQZ25").
+- Instrument = ROOT + month code + year code (e.g., "MNQ.Z25" or "NQ.Z25").
 - Symbol = ROOT only (e.g., "MNQ").
 
 ```rust

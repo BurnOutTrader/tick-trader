@@ -683,7 +683,7 @@ impl PxWebSocketClient {
                                                 venue_seq: None,
                                                 is_snapshot: Some(false),
                                             };
-                                            let buf = bbo.to_bytes();
+                                            let buf = bbo.to_aligned_bytes();
                                             tt_shm::write_snapshot(Topic::Quotes, &key, &buf);
                                             if let Err(e) = self.bus.publish_quote(bbo).await {
                                                 log::warn!("failed to publish quote: {}", e);
@@ -799,7 +799,7 @@ impl PxWebSocketClient {
                                                 venue_seq: None,
                                             };
                                             // Write Tick snapshot to SHM
-                                            let buf = tick.to_bytes();
+                                            let buf = tick.to_aligned_bytes();
                                             tt_shm::write_snapshot(Topic::Ticks, &key, &buf);
                                             if let Err(e) = self.bus.publish_tick(tick).await {
                                                 log::warn!("failed to publish tick: {}", e);

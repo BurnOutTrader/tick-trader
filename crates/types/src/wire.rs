@@ -483,14 +483,24 @@ impl Bytes<Self> for WireMessage {
         }
     }
 
+    fn to_aligned_bytes(&self) -> AlignedVec {
+        // Serialize directly into an AlignedVec for maximum compatibility with rkyv
+        rkyv::to_bytes::<_, 1024>(self).expect("rkyv::to_bytes failed")
+    }
+
     fn to_bytes(&self) -> Vec<u8> {
-        let vec = rkyv::to_bytes::<_, 1024>(self).unwrap();
-        vec.into()
+        // Convert the AlignedVec into a Vec<u8> without copying
+        self.to_aligned_bytes().into()
     }
 }
 
 pub trait Bytes<T> {
-    fn from_bytes<'a>(data: &'a [u8]) -> anyhow::Result<T>;
+    fn from_bytes(data: &[u8]) -> anyhow::Result<T>;
+
+    // Prefer this when you need rkyv-compatible alignment in the produced buffer.
+    // Note: network transports don't preserve alignment guarantees across processes;
+    // the receiver should still ensure alignment before deserializing.
+    fn to_aligned_bytes(&self) -> AlignedVec where Self: Sized { unreachable!("default impl should be overridden") }
 
     fn to_bytes(&self) -> Vec<u8>;
 }
