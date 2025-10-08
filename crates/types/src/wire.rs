@@ -1,3 +1,4 @@
+use std::fmt::Display;
 use crate::accounts::account::AccountName;
 use crate::data::core::{Bbo, Candle, Tick};
 use crate::keys::{SymbolKey, Topic};
@@ -152,6 +153,14 @@ pub struct OrdersBatch {
     pub seq: u64,
     /// Orders in this batch
     pub orders: Vec<crate::accounts::events::OrderUpdate>,
+}
+
+impl OrdersBatch {
+    pub fn print(&self) {
+        for order in self.orders.iter() {
+            println!("OrderUpdate: {:?}, Provider: {:?}, Price: {}, Qty: {} ", order.instrument, order.state, order.avg_fill_px ,order.cum_qty);
+        }
+    }
 }
 
 /// Batch of position updates (lossless)

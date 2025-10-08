@@ -1,8 +1,10 @@
 use super::events::{ClientOrderId, ProviderOrderId, Side};
 use crate::securities::symbols::Instrument;
 use rust_decimal::Decimal;
+use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Archive, RkyvDeserialize, RkyvSerialize, )]
+#[archive(check_bytes)]
 pub enum OrderState {
     New,
     Acknowledged,

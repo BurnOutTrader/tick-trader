@@ -196,7 +196,7 @@ pub trait Strategy: Send + Sync + 'static {
     /// Receive snapshots of account state, these are messages, not mutable objects.
     async fn on_account_delta(&mut self, _accounts: Vec<AccountDelta>) {}
 
-    async fn on_trades_closed(&mut self, trades: Vec<Trade>) {}
+    async fn on_trades_closed(&mut self, _trades: Vec<Trade>) {}
 
     async fn on_subscribe(&mut self, _instrument: Instrument, _data_topic: DataTopic, _success: bool) {}
 

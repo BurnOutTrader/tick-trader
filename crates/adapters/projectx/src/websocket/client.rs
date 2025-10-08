@@ -22,15 +22,17 @@ use tt_bus::Router;
 use tt_types::accounts::account::AccountName;
 #[allow(unused)]
 use tt_types::accounts::events::{
-    AccountDelta, ClientOrderId, OrderUpdate, PositionDelta, ProviderOrderId,
+    AccountDelta, ClientOrderId, OrderUpdate, PositionDelta, ProviderOrderId, Side,
 };
+use tt_types::Guid;
+use tt_types::accounts::order::OrderState;
 use tt_types::data::core::Tick;
 use tt_types::data::models::{Price, TradeSide, Volume};
 use tt_types::keys::Topic;
 use tt_types::providers::{ProjectXTenant, ProviderKind};
 use tt_types::securities::futures_helpers::{extract_month_year, extract_root, sanitize_code};
 use tt_types::securities::symbols::Instrument;
-use tt_types::wire::{AccountDeltaBatch, Bytes, OrdersBatch, PositionsBatch};
+use tt_types::wire::{AccountDeltaBatch, Bytes, OrdersBatch, PositionsBatch, Trade};
 // Map ProjectX depth items to MBP10 incremental updates and publish individually
 use tt_types::data::mbp10::{
     Action as MbpAction, BookLevels, BookSide as MbpSide, Flags as MbpFlags, Mbp10,
@@ -101,6 +103,9 @@ pub struct PxWebSocketClient {
 
     // ---- Orders ----
     pending_orders: Arc<DashMap<Instrument, GatewayUserOrder>>,
+
+    // ---- Accounts ----
+    accounts_by_id: Arc<DashMap<i64, String>>,
 
     trades: Arc<DashMap<Instrument, Vec<GatewayUserTrade>>>,
 }
@@ -198,6 +203,8 @@ impl PxWebSocketClient {
             precisions: Arc::new(DashMap::new()),
             positions: Arc::new(Default::default()),
             pending_orders: Arc::new(Default::default()),
+            // Accounts map: id -> name
+            accounts_by_id: Arc::new(DashMap::new()),
             trades: Arc::new(DashMap::new()),
         };
         // Spawn background processors per hub to keep hot path free
@@ -1157,6 +1164,8 @@ impl PxWebSocketClient {
                                     }
 
                                     for account in items.into_iter() {
+                                        // Store account id -> name for later trade mapping
+                                        self.accounts_by_id.insert(account.id, account.name.clone());
                                         let balance = match Decimal::from_f64(account.balance) {
                                             Some(b) => b,
                                             None => {
@@ -1234,7 +1243,7 @@ impl PxWebSocketClient {
                                                 continue;
                                             }
                                         };
-                                        let state_code: u8 = models::map_status(order.status) as u8;
+                                        let state_code: OrderState= models::map_status(order.status);
                                         let cum_qty: i64 = order.fill_volume.unwrap_or(0);
                                         let leaves: i64 = (order.size - cum_qty).max(0);
                                         let avg_px = order
@@ -1251,7 +1260,7 @@ impl PxWebSocketClient {
                                                 order.id.to_string(),
                                             )),
                                             client_order_id: None,
-                                            state_code,
+                                            state: state_code,
                                             leaves,
                                             cum_qty,
                                             avg_fill_px: avg_px,
@@ -1353,37 +1362,73 @@ impl PxWebSocketClient {
                                 }
                             }
                             "GatewayUserTrade" => {
-                                /* let seq = match Utc::now().timestamp_nanos_opt() {
-                                    None => u64::MIN,
-                                    Some(ts) => ts as u64,
-                                };
-                                let trade =
-                                    match serde_json::from_value::<GatewayUserTrade>(val.clone()) {
-                                        Ok(t) => t,
-                                        Err(e) => {
-                                            error!("error parsing GatewayUserTrade: {}", e);
-                                            return;
+                                // Extract payloads from 'arguments' and unwrap wrappers: {action, data}
+                                let args_opt = val.get("arguments").and_then(|a| a.as_array());
+                                if let Some(args) = args_opt {
+                                    let maybe_data = if args.len() >= 2 { Some(&args[1]) } else { args.get(0) };
+                                    let mut items: Vec<GatewayUserTrade> = Vec::new();
+                                    if let Some(dv) = maybe_data {
+                                        if let Some(arr) = dv.as_array() {
+                                            for item in arr {
+                                                let obj = if item.is_object() {
+                                                    item.get("data").cloned().unwrap_or(item.clone())
+                                                } else { item.clone() };
+                                                if let Ok(t) = serde_json::from_value::<GatewayUserTrade>(obj) {
+                                                    items.push(t);
+                                                }
+                                            }
+                                        } else if dv.is_object() {
+                                            let obj = dv.get("data").cloned().unwrap_or(dv.clone());
+                                            if let Ok(t) = serde_json::from_value::<GatewayUserTrade>(obj) {
+                                                items.push(t);
+                                            }
                                         }
-                                    };
-
-                                let instrument_id = match Instrument::from_str(
-                                    &parse_px_instrument(trade.contract_id.as_str()),
-                                ) {
-                                    Ok(i) => i,
-                                    Err(e) => {
-                                        error!(target: "projectx.ws", "invalid instrument for trade: {} ({:?})", trade.contract_id, e);
-                                        return;
                                     }
-                                };
-                                let symbol = extract_root(&instrument_id);
+                                    if items.is_empty() { return; }
 
-                                let side = if trade.side == 0 {
-                                    TradeSide::Buy
-                                } else {
-                                    TradeSide::Sell
-                                };*/
-
-                                //info!(target: "projectx.ws", "GatewayUserTrade standardized: id={} order_id={} side={:?} px={} qty={} fees={}", trade.id, trade.order_id, side, trade.price, trade.size, trade.fees);
+                                    // Map ProjectX trades to wire::Trade
+                                    let mut out: Vec<Trade> = Vec::with_capacity(items.len());
+                                    for t in items.into_iter() {
+                                        let instrument = match Instrument::try_parse_dotted(t.contract_id.as_str()) {
+                                            Ok(i) => i,
+                                            Err(e) => {
+                                                error!(target: "projectx.ws", "invalid instrument for trade: {} ({:?})", t.contract_id, e);
+                                                continue;
+                                            }
+                                        };
+                                        let creation_time = DateTime::<Utc>::from_str(&t.creation_timestamp).unwrap_or_else(|_| Utc::now());
+                                        let price = Decimal::from_f64(t.price).unwrap_or(dec!(0));
+                                        let pnl = Decimal::from_f64(t.profit_and_loss).unwrap_or(dec!(0));
+                                        let fees = Decimal::from_f64(t.fees).unwrap_or(dec!(0));
+                                        let size = Decimal::from_i64(t.size).unwrap_or(dec!(0));
+                                        let side = match t.side { 0 => Side::Buy, 1 => Side::Sell, _ => Side::Buy };
+                                        let account_name = if let Some(name) = self.accounts_by_id.get(&t.account_id).map(|e| e.value().clone()) {
+                                            AccountName::new(name)
+                                        } else {
+                                            AccountName::new(t.account_id.to_string())
+                                        };
+                                        let trade = Trade {
+                                            id: ClientOrderId::new(),
+                                            provider: self.provider_kind,
+                                            account_name,
+                                            instrument,
+                                            creation_time,
+                                            price,
+                                            profit_and_loss: pnl,
+                                            fees,
+                                            side,
+                                            size,
+                                            voided: t.voided,
+                                            order_id: Guid::new_v4(),
+                                        };
+                                        out.push(trade);
+                                    }
+                                    if !out.is_empty() {
+                                        if let Err(e) = self.bus.publish_closed_trades(out).await {
+                                            error!(target: "projectx.ws", "failed to publish ClosedTrades: {:?}", e);
+                                        }
+                                    }
+                                }
                             }
                             _ => {}
                         }
@@ -1450,11 +1495,11 @@ impl PxWebSocketClient {
             }
         }
         {
-            /*let mut w = self.user_trades_subs.write().await;
+            let mut w = self.user_trades_subs.write().await;
             let s = account_id.to_string();
             if !w.contains(&account_id) {
                 w.push(account_id);
-            }*/
+            }
         }
         // Subscribe to per-account streams
         let id_val = Value::from(account_id);
