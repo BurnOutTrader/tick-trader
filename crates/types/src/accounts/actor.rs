@@ -233,6 +233,7 @@ mod tests {
     use super::*;
     use crate::securities::symbols::Instrument;
     use std::str::FromStr;
+    use chrono::Utc;
 
     fn inst(code: &str) -> Instrument {
         Instrument::from_str(code).unwrap()
@@ -353,7 +354,7 @@ mod tests {
         actor.apply(AccountEvent::Mark(MarkEvent {
             instrument: inst("MNQ.Z25"),
             mark_px: Decimal::from_i32(105).unwrap(),
-            ts_ns: 3,
+            ts_ns: Utc::now(),
         }));
         assert_eq!(actor.state.open_pnl, Decimal::from_i32(5).unwrap());
         // Fill the remaining 2 @ 110; realized pnl accumulates when crossing the opposite side later
@@ -366,7 +367,7 @@ mod tests {
             qty: 2,
             price: Decimal::from_i32(110).unwrap(),
             fee: Decimal::ZERO,
-            ts_ns: 4,
+            ts_ns: Utc::now(),
             provider_seq: Some(12),
             instrument: inst("MNQ.Z25"),
         }));
@@ -383,7 +384,7 @@ mod tests {
             qty: 3,
             price: Decimal::from_i32(120).unwrap(),
             fee: Decimal::ZERO,
-            ts_ns: 5,
+            ts_ns: Utc::now(),
             provider_seq: None,
             instrument: inst("MNQ.Z25"),
         }));
@@ -415,7 +416,7 @@ mod tests {
             client_order_id: None,
             provider_seq: Some(1),
             leaves_qty: Some(1),
-            ts_ns: 1,
+            ts_ns: Utc::now(),
         }));
         actor.apply(AccountEvent::Exec(ExecutionEvent {
             exec_id: ExecId::new(),
@@ -425,7 +426,7 @@ mod tests {
             qty: 1,
             price: Decimal::from_i32(100).unwrap(),
             fee: Decimal::ZERO,
-            ts_ns: 2,
+            ts_ns: Utc::now(),
             provider_seq: Some(2),
             instrument: inst("ES.Z25"),
         }));
@@ -436,7 +437,7 @@ mod tests {
             client_order_id: None,
             provider_seq: None,
             leaves_qty: None,
-            ts_ns: 3,
+            ts_ns: Utc::now(),
         }));
         let o = actor.orders_by_provider.get(&prov).unwrap();
         assert_eq!(o.state, OrderState::Canceled);
@@ -465,7 +466,7 @@ mod tests {
             client_order_id: None,
             provider_seq: Some(5),
             leaves_qty: Some(2),
-            ts_ns: 1,
+            ts_ns: Utc::now(),
         }));
         // Older cancel at seq 4 (should be ignored by can_apply)
         actor.apply(AccountEvent::Order(OrderEvent {
@@ -474,7 +475,7 @@ mod tests {
             client_order_id: None,
             provider_seq: Some(4),
             leaves_qty: None,
-            ts_ns: 2,
+            ts_ns: Utc::now(),
         }));
         let o = actor.orders_by_provider.get(&prov).unwrap();
         assert_eq!(o.state, OrderState::Acknowledged);
@@ -505,7 +506,7 @@ mod tests {
             client_order_id: None,
             provider_seq: Some(2),
             leaves_qty: Some(1),
-            ts_ns: 1,
+            ts_ns: Utc::now(),
         }));
         // Fill via exec (order last seq stays at 2)
         actor.apply(AccountEvent::Exec(ExecutionEvent {
@@ -516,7 +517,7 @@ mod tests {
             qty: 1,
             price: Decimal::from_i32(100).unwrap(),
             fee: Decimal::ZERO,
-            ts_ns: 2,
+            ts_ns: Utc::now(),
             provider_seq: Some(3),
             instrument: inst("MNQ.Z25"),
         }));
@@ -527,7 +528,7 @@ mod tests {
             client_order_id: None,
             provider_seq: Some(2),
             leaves_qty: None,
-            ts_ns: 3,
+            ts_ns: Utc::now(),
         }));
         let o = actor.orders_by_provider.get(&prov).unwrap();
         assert_eq!(o.state, OrderState::Canceled);
@@ -558,7 +559,7 @@ mod tests {
             client_order_id: None,
             provider_seq: Some(10),
             leaves_qty: Some(2),
-            ts_ns: 1,
+            ts_ns: Utc::now(),
         }));
         actor.apply(AccountEvent::Order(OrderEvent {
             kind: OrderEventKind::Canceled,
@@ -566,7 +567,7 @@ mod tests {
             client_order_id: None,
             provider_seq: Some(11),
             leaves_qty: None,
-            ts_ns: 2,
+            ts_ns: Utc::now(),
         }));
         // Late fill shows up (older seq) -> position updates to short 1
         actor.apply(AccountEvent::Exec(ExecutionEvent {
@@ -577,7 +578,7 @@ mod tests {
             qty: 1,
             price: Decimal::from_i32(200).unwrap(),
             fee: Decimal::ZERO,
-            ts_ns: 3,
+            ts_ns: Utc::now(),
             provider_seq: Some(9),
             instrument: inst("ES.Z25"),
         }));
@@ -614,7 +615,7 @@ mod tests {
             client_order_id: None,
             provider_seq: Some(7),
             leaves_qty: Some(1),
-            ts_ns: 1,
+            ts_ns: Utc::now(),
         }));
         actor.apply(AccountEvent::Order(OrderEvent {
             kind: OrderEventKind::Canceled,
@@ -622,7 +623,7 @@ mod tests {
             client_order_id: None,
             provider_seq: Some(8),
             leaves_qty: None,
-            ts_ns: 2,
+            ts_ns: Utc::now(),
         }));
         // Duplicate NewAck at same seq as first should not downgrade state
         actor.apply(AccountEvent::Order(OrderEvent {
@@ -635,7 +636,7 @@ mod tests {
             client_order_id: None,
             provider_seq: Some(7),
             leaves_qty: Some(1),
-            ts_ns: 3,
+            ts_ns: Utc::now(),
         }));
         let o = actor.orders_by_provider.get(&prov).unwrap();
         assert_eq!(o.state, OrderState::Canceled);
@@ -656,7 +657,7 @@ mod tests {
         actor.apply(AccountEvent::Correction(CorrectionEvent {
             exec_id_ref: ExecId::new(),
             delta_qty: -1,
-            ts_ns: 0,
+            ts_ns: Utc::now(),
         }));
         let after = actor.state.clone();
         assert_eq!(before.equity, after.equity);
@@ -684,7 +685,7 @@ mod tests {
             qty: 2,
             price: Decimal::from_i32(100).unwrap(),
             fee: Decimal::ZERO,
-            ts_ns: 1,
+            ts_ns: Utc::now(),
             provider_seq: None,
             instrument: inst("ES.Z25"),
         }));
@@ -696,7 +697,7 @@ mod tests {
             qty: 1,
             price: Decimal::from_i32(200).unwrap(),
             fee: Decimal::ZERO,
-            ts_ns: 2,
+            ts_ns: Utc::now(),
             provider_seq: None,
             instrument: inst("MNQ.Z25"),
         }));
@@ -704,12 +705,12 @@ mod tests {
         actor.apply(AccountEvent::Mark(MarkEvent {
             instrument: inst("ES.Z25"),
             mark_px: Decimal::from_i32(105).unwrap(),
-            ts_ns: 3,
+            ts_ns: Utc::now(),
         }));
         actor.apply(AccountEvent::Mark(MarkEvent {
             instrument: inst("MNQ.Z25"),
             mark_px: Decimal::from_i32(195).unwrap(),
-            ts_ns: 4,
+            ts_ns: Utc::now(),
         }));
         assert_eq!(actor.state.open_pnl, Decimal::from_i32(15).unwrap());
     }
@@ -737,7 +738,7 @@ mod tests {
             client_order_id: Some(ClientOrderId::new()),
             provider_seq: Some(1),
             leaves_qty: Some(1),
-            ts_ns: 1,
+            ts_ns: Utc::now(),
         }));
         // Exec
         actor.apply(AccountEvent::Exec(ExecutionEvent {
@@ -748,7 +749,7 @@ mod tests {
             qty: 1,
             price: Decimal::from_i32(100).unwrap(),
             fee: Decimal::ZERO,
-            ts_ns: 2,
+            ts_ns: Utc::now(),
             provider_seq: Some(2),
             instrument: inst("ES.Z25"),
         }));
@@ -760,7 +761,7 @@ mod tests {
         actor.apply(AccountEvent::Mark(MarkEvent {
             instrument: inst("ES.Z25"),
             mark_px: Decimal::from_i32(101).unwrap(),
-            ts_ns: 3,
+            ts_ns: Utc::now(),
         }));
 
         assert_eq!(actor.wal.len(), base_wal + 4);

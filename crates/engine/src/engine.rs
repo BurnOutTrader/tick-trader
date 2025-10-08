@@ -42,6 +42,7 @@ pub struct Engine<P: MarketDataProvider + 'static> {
 struct EngineInner {
     interest: HashMap<StreamKey, InterestEntry>,
     metrics: HashMap<StreamKey, StreamMetrics>,
+    #[allow(dead_code)]
     database: Connection,
     caches: Caches,
 }

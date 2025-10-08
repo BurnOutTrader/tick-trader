@@ -31,7 +31,6 @@ use tt_types::securities::futures_helpers::{extract_month_year, extract_root, sa
 use tt_types::securities::symbols::Instrument;
 use tt_types::wire::{AccountDeltaBatch, Bytes, OrdersBatch, PositionsBatch};
 // Map ProjectX depth items to MBP10 incremental updates and publish individually
-use rust_decimal::prelude::FromPrimitive as _;
 use tt_types::data::mbp10::{
     Action as MbpAction, BookLevels, BookSide as MbpSide, Flags as MbpFlags, Mbp10,
 };
@@ -1032,11 +1031,6 @@ impl PxWebSocketClient {
                                             } else {
                                                 it.volume
                                             };
-                                            let size_u32 = if raw_size < 0 {
-                                                0
-                                            } else {
-                                                (raw_size as u64).min(u32::MAX as u64) as u32
-                                            };
                                             let size_dec: Decimal = if raw_size < 0 {
                                                 Decimal::ZERO
                                             } else {
@@ -1251,7 +1245,7 @@ impl PxWebSocketClient {
                                 //info!(target: "projectx.ws", "GatewayUserPosition cached: id={} account_id={} contract={}", position.id, position.account_id, position.contract_id);
                             }
                             "GatewayUserTrade" => {
-                                let seq = match Utc::now().timestamp_nanos_opt() {
+                               /* let seq = match Utc::now().timestamp_nanos_opt() {
                                     None => u64::MIN,
                                     Some(ts) => ts as u64,
                                 };
@@ -1279,14 +1273,9 @@ impl PxWebSocketClient {
                                     TradeSide::Buy
                                 } else {
                                     TradeSide::Sell
-                                };
+                                };*/
 
-                                let last_px = Price::from_f64(trade.price);
-                                let last_qty = Volume::from_f64(trade.size as f64);
-                                let time_accepted =
-                                    DateTime::<Utc>::from_str(&trade.creation_timestamp)
-                                        .unwrap_or_else(|_| Utc::now());
-                                info!(target: "projectx.ws", "GatewayUserTrade standardized: id={} order_id={} side={:?} px={} qty={} fees={}", trade.id, trade.order_id, side, trade.price, trade.size, trade.fees);
+                                //info!(target: "projectx.ws", "GatewayUserTrade standardized: id={} order_id={} side={:?} px={} qty={} fees={}", trade.id, trade.order_id, side, trade.price, trade.size, trade.fees);
                             }
                             _ => {}
                         }

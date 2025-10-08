@@ -3,11 +3,10 @@ use crate::layout::Layout;
 use crate::models::SeqBound;
 use crate::paths::{provider_kind_to_db_string, topic_to_db_string};
 use ahash::AHashMap;
-use anyhow::{Context, anyhow};
+use anyhow::{anyhow};
 use chrono::{DateTime, Utc};
 use duckdb::{Connection, OptionalExt, params};
 use rust_decimal::Decimal;
-use serde_json::Value as JsonValue;
 use std::str::FromStr;
 use tt_types::data::core::{Bbo, Candle, Tick};
 use tt_types::data::models::{Resolution, TradeSide};
@@ -370,7 +369,6 @@ pub fn get_ticks_in_range(
     let mut out = Vec::new();
     while let Some(r) = rows.next()? {
         let sym: String = r.get(0)?;
-        let exch: String = r.get(1)?;
         let price_s: String = r.get(2)?;
         let size_s: String = r.get(3)?;
         let side_str: Option<String> = r.get(4)?;

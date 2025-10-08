@@ -8,9 +8,7 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::net::UnixListener;
 use tracing::level_filters::LevelFilter;
-use tt_bus::{Router, UpstreamManager};
-use tt_types::providers::{ProjectXTenant, ProviderKind};
-use tt_types::securities::symbols::Instrument;
+use tt_bus::{Router};
 
 #[cfg(target_os = "linux")]
 pub fn bind_uds(path: &str) -> io::Result<UnixListener> {
@@ -115,9 +113,6 @@ async fn main() -> anyhow::Result<()> {
     // Wire upstream manager (providers) into the router for first/last sub notifications
     let mgr = Arc::new(tt_providers::manager::ProviderManager::new(router.clone()));
 
-    let cs = mgr
-        .get_securities(ProviderKind::ProjectX(ProjectXTenant::Topstep))
-        .await?;
     /*for (i, c) in cs {
         let req = HistoricalRequest {
             provider_kind: ProviderKind::ProjectX(ProjectXTenant::Topstep),
