@@ -263,7 +263,7 @@ mod tests {
             client_order_id: Some(cli.clone()),
             provider_seq: Some(1),
             leaves_qty: Some(10),
-            ts_ns: 1,
+            ts_ns: Utc::now(),
         }));
         let o = actor.orders_by_provider.get(&prov).unwrap();
         assert_eq!(o.leaves, 10);
@@ -275,7 +275,7 @@ mod tests {
             client_order_id: Some(cli.clone()),
             provider_seq: Some(2),
             leaves_qty: None,
-            ts_ns: 2,
+            ts_ns: Utc::now(),
         }));
         let o = actor.orders_by_provider.get(&prov).unwrap();
         assert_eq!(o.qty, 6);
@@ -287,7 +287,7 @@ mod tests {
             client_order_id: Some(cli.clone()),
             provider_seq: Some(3),
             leaves_qty: None,
-            ts_ns: 3,
+            ts_ns: Utc::now(),
         }));
         let o = actor.orders_by_provider.get(&prov).unwrap();
         assert_eq!(o.state, OrderState::Canceled);
@@ -317,7 +317,7 @@ mod tests {
             client_order_id: None,
             provider_seq: Some(10),
             leaves_qty: Some(3),
-            ts_ns: 1,
+            ts_ns: Utc::now(),
         }));
         // Exec 1 @ 100
         let ex1 = ExecId::new();
@@ -329,7 +329,7 @@ mod tests {
             qty: 1,
             price: Decimal::from_i32(100).unwrap(),
             fee: Decimal::from_f32(0.5).unwrap(),
-            ts_ns: 2,
+            ts_ns: Utc::now(),
             provider_seq: Some(11),
             instrument: inst("MNQ.Z25"),
         }));
@@ -342,7 +342,7 @@ mod tests {
             qty: 1,
             price: Decimal::from_i32(100).unwrap(),
             fee: Decimal::from_f32(0.5).unwrap(),
-            ts_ns: 2,
+            ts_ns: Utc::now(),
             provider_seq: Some(11),
             instrument: inst("MNQ.Z25"),
         }));
