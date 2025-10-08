@@ -161,3 +161,17 @@ Why: so strategies can warm caches, run pre-trade checks, and do hybrid live+his
 - Missing portfolio events: call `activate_account_interest` with your account key(s).
 - Slow or missing response to a one-shot request: increase your timeout around `request_with_corr()` and check server logs.
 
+
+
+---
+
+## Zero-copy roadmap for strategies
+
+We are planning to introduce optional zero-copy data paths in the engine to reduce allocations and improve latency on high-rate feeds:
+
+- Archived views: The engine will retain incoming rkyv frames and expose `rkyv::Archived<T>` views internally, avoiding deserialize/copy where possible.
+- Dual APIs during transition: Strategy callbacks will continue to receive owned Rust structs for simplicity. Advanced users will be able to opt into alternate handlers or pull archived references for ultra-low latency paths.
+- SHM integration: For hot feeds with SHM snapshots, we will provide helpers to read aligned, memory-mapped snapshots and work with archived views without extra copies.
+- Safety and ergonomics: The existing owned-struct API remains supported; zero-copy will be additive and opt-in.
+
+Benefits: fewer allocations, less memcpy, lower CPU for tick/quote/depth bursts.

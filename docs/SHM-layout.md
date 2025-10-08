@@ -32,6 +32,14 @@ ttshm.Depth-ProjectX(TOPSTEP).MNQZ5
 |     16 |    4 | len      | Length in bytes of the current payload      |
 |     20 |  ... | payload  | rkyv-serialized snapshot bytes              |
 
+## 🔧 Alignment and payload format
+
+- Payload bytes are rkyv-serialized snapshots (e.g., Tick, Bbo, Mbp10).
+- Writers serialize into `rkyv::AlignedVec` and write the resulting bytes; this ensures producer-side alignment.
+- Readers must ensure alignment before calling `rkyv::from_bytes`:
+  - For a simple read, copy the payload into `AlignedVec` and then call `from_bytes`.
+  - For memory-mapped snapshots, map with alignment and only then read `Archived<T>` views directly. We plan to provide helper APIs for safe, zero-copy reads from SHM.
+
 ## 🔁 Seqlock protocol
 
 ✍️ Writers:

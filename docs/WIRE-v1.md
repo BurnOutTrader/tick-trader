@@ -13,6 +13,11 @@ This document summarizes the current control-plane and data-plane messages betwe
 
 All frames are rkyv-serialized `WireMessage::{Request, Response}` using length-delimited framing (max 8 MiB).
 
+Alignment and safety:
+- Writers serialize into `rkyv::AlignedVec` and then convert to `Vec<u8>`/`bytes::Bytes` for the transport codec.
+- Readers copy the incoming frame into an `AlignedVec` before `rkyv::from_bytes` to avoid underaligned archives (UDS framing does not guarantee alignment).
+- This keeps the network transport simple while preserving rkyv's alignment guarantees locally.
+
 ## 📥 Requests (client → Router)
 
 | Message                 | Fields                                   | Notes                                                        |
