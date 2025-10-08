@@ -2,7 +2,7 @@ use crate::http::client::PxHttpClient;
 use crate::http::credentials::PxCredential;
 use crate::http::error::PxError;
 use crate::http::models::{RetrieveBarsReq, RetrieveBarsResponse};
-use crate::websocket::client::{px_format_from_instrument, PxWebSocketClient};
+use crate::websocket::client::{PxWebSocketClient, px_format_from_instrument};
 use ahash::AHashMap;
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};

@@ -3,7 +3,7 @@ use crate::layout::Layout;
 use crate::models::SeqBound;
 use crate::paths::{provider_kind_to_db_string, topic_to_db_string};
 use ahash::AHashMap;
-use anyhow::{anyhow};
+use anyhow::anyhow;
 use chrono::{DateTime, Utc};
 use duckdb::{Connection, OptionalExt, params};
 use rust_decimal::Decimal;

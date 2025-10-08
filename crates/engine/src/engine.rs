@@ -178,7 +178,6 @@ impl<P: MarketDataProvider + 'static> Engine<P> {
 
 #[async_trait]
 pub trait Strategy: Send + Sync + 'static {
-
     fn desired_topics(&mut self) -> HashSet<Topic>;
 
     async fn on_start(&mut self, _h: EngineHandle) {}

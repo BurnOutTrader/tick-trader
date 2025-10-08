@@ -232,8 +232,8 @@ impl AccountActor {
 mod tests {
     use super::*;
     use crate::securities::symbols::Instrument;
-    use std::str::FromStr;
     use chrono::Utc;
+    use std::str::FromStr;
 
     fn inst(code: &str) -> Instrument {
         Instrument::from_str(code).unwrap()

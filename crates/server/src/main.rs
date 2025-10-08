@@ -8,7 +8,7 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::net::UnixListener;
 use tracing::level_filters::LevelFilter;
-use tt_bus::{Router};
+use tt_bus::Router;
 
 #[cfg(target_os = "linux")]
 pub fn bind_uds(path: &str) -> io::Result<UnixListener> {

@@ -1245,7 +1245,7 @@ impl PxWebSocketClient {
                                 //info!(target: "projectx.ws", "GatewayUserPosition cached: id={} account_id={} contract={}", position.id, position.account_id, position.contract_id);
                             }
                             "GatewayUserTrade" => {
-                               /* let seq = match Utc::now().timestamp_nanos_opt() {
+                                /* let seq = match Utc::now().timestamp_nanos_opt() {
                                     None => u64::MIN,
                                     Some(ts) => ts as u64,
                                 };
