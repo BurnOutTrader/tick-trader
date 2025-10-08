@@ -21,10 +21,7 @@ use tt_types::providers::ProviderKind;
 use tt_types::securities::security::FuturesContract;
 use tt_types::securities::symbols::Instrument;
 use tt_types::server_side::traits::{MarketDataProvider, ProbeStatus, ProviderParams};
-use tt_types::wire::{
-    AccountDeltaBatch, BarBatch, OrdersBatch, PositionsBatch, QuoteBatch, Request, Response,
-    Subscribe, TickBatch,
-};
+use tt_types::wire::{AccountDeltaBatch, BarBatch, Kick, OrdersBatch, PositionsBatch, QuoteBatch, Request, Response, Subscribe, TickBatch};
 
 #[derive(Default)]
 pub struct Caches {
@@ -1028,11 +1025,21 @@ impl EngineRuntime {
         Ok(handle)
     }
 
-    pub async fn stop(&mut self) {
+    pub async fn stop(&mut self) -> anyhow::Result<()> {
+        let _ = self
+            .bus
+            .handle_request(
+                &self.sub_id.as_ref().expect("engine started"),
+                tt_types::wire::Request::Kick(Kick{reason: Some("Shutting Down".to_string())})
+            );
         if let Some(handle) = self.task.take() {
             handle.abort();
         }
+        for task in self.shm_tasks.iter() {
+            task.abort();
+        }
         self.rx.take();
+        Ok(())
     }
 
     // Account state getters

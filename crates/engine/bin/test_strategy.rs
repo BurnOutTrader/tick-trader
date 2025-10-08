@@ -233,6 +233,6 @@ async fn main() -> anyhow::Result<()> {
 
     sleep(Duration::from_secs(60)).await;
 
-    engine.stop().await;
+    let r = engine.stop().await?;
     Ok(())
 }
