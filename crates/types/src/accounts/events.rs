@@ -1,12 +1,8 @@
 use crate::securities::symbols::Instrument;
+use crate::wire::Bytes;
 use chrono::{DateTime, Utc};
-use chrono::rkyv::ArchivedDateTime;
-use rkyv::{AlignedVec, Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
-use rkyv::ser::{serializers::AllocSerializer, Serializer};
+use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use rust_decimal::Decimal;
-
-use crate::Guid;
-use crate::wire::{Bytes, WireMessage};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
 #[archive(check_bytes)]
@@ -62,7 +58,6 @@ pub struct OrderEvent {
     pub ts_ns: DateTime<Utc>,
 }
 
-
 #[derive(Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize)]
 #[archive(check_bytes)]
 pub enum OrderEventKind {
@@ -97,7 +92,6 @@ pub struct ExecutionEvent {
     pub provider_seq: Option<u64>,
     pub instrument: Instrument,
 }
-
 
 #[derive(Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize)]
 #[archive(check_bytes)]
@@ -151,7 +145,6 @@ impl Bytes<Self> for AccountEvent {
     }
 }
 
-
 // Outbound projections
 #[derive(Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize)]
 #[archive(check_bytes)]
@@ -185,7 +178,6 @@ pub struct PositionDelta {
 #[derive(Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize)]
 #[archive(check_bytes)]
 pub struct AccountDelta {
-
     pub equity: Decimal,
 
     pub day_realized_pnl: Decimal,

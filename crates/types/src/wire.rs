@@ -1,17 +1,12 @@
-use ahash::HashMap;
 use crate::data::core::{Bbo, Candle, Tick};
 use crate::keys::{SymbolKey, Topic};
 use crate::providers::ProviderKind;
 use crate::securities::security::FuturesContract;
 use crate::securities::symbols::Instrument;
+use ahash::HashMap;
 use chrono::{DateTime, Utc};
-use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
-use rkyv::ser::serializers::AllocSerializer;
 use rkyv::AlignedVec;
-use rkyv::check_archived_root;
-use rkyv::validation::validators::DefaultValidator;
-use rkyv::Infallible;
-use anyhow::Context;
+use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 
 /// Request to subscribe to a topic (coarse, topic-level interest)
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, PartialEq, Clone, Debug)]
@@ -57,7 +52,6 @@ impl SubscribeKey {
 #[archive(check_bytes)]
 pub struct Ping {
     /// Nanosecond timestamp
-
     pub ts_ns: DateTime<Utc>,
 }
 /// Pong reply (heartbeat)
@@ -65,7 +59,6 @@ pub struct Ping {
 #[archive(check_bytes)]
 pub struct Pong {
     /// Nanosecond timestamp
-
     pub ts_ns: DateTime<Utc>,
 }
 

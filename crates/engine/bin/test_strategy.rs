@@ -1,9 +1,9 @@
 use rust_decimal::Decimal;
+use rust_decimal::prelude::Zero;
 use std::collections::BTreeMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
-use rust_decimal::prelude::Zero;
 use tokio::sync::Mutex;
 use tokio::time::sleep;
 use tracing::info;
@@ -20,7 +20,7 @@ use tt_types::wire;
 #[derive(Default, Debug, Clone)]
 struct LastTrade {
     price: Option<Decimal>,
-    size: Option<u32>,
+    size: Option<Decimal>,
 }
 
 #[derive(Default, Debug, Clone)]
@@ -38,15 +38,15 @@ impl OrderBook {
 
     fn seed_from_snapshot(&mut self, book: &BookLevels) {
         self.clear();
-        for (i, px_nanos) in book.bid_px.iter().enumerate() {
-            let px = Decimal::from_i128_with_scale(*px_nanos as i128, 9);
+        for (i, px) in book.bid_px.iter().enumerate() {
+            let px = *px;
             let sz = *book.bid_sz.get(i).unwrap_or(&Decimal::zero());
             if sz > Decimal::zero() {
                 self.bids.insert(px, sz);
             }
         }
-        for (i, px_nanos) in book.ask_px.iter().enumerate() {
-            let px = Decimal::from_i128_with_scale(*px_nanos as i128, 9);
+        for (i, px) in book.ask_px.iter().enumerate() {
+            let px = *px;
             let sz = *book.ask_sz.get(i).unwrap_or(&Decimal::zero());
             if sz > Decimal::zero() {
                 self.asks.insert(px, sz);
@@ -54,17 +54,17 @@ impl OrderBook {
         }
     }
 
-    fn apply_modify(&mut self, side: MbpSide, price: Decimal, size: u32) {
+    fn apply_modify(&mut self, side: MbpSide, price: Decimal, size: Decimal) {
         match side {
             MbpSide::Bid => {
-                if size == 0 {
+                if size.is_zero() {
                     self.bids.remove(&price);
                 } else {
                     self.bids.insert(price, size);
                 }
             }
             MbpSide::Ask => {
-                if size == 0 {
+                if size.is_zero() {
                     self.asks.remove(&price);
                 } else {
                     self.asks.insert(price, size);
@@ -74,27 +74,27 @@ impl OrderBook {
         }
     }
 
-    fn note_trade(&mut self, price: Decimal, size: u32) {
+    fn note_trade(&mut self, price: Decimal, size: Decimal) {
         self.last_trade.price = Some(price);
         self.last_trade.size = Some(size);
     }
 
-    fn best_bid(&self) -> Option<(Decimal, u32)> {
+    fn best_bid(&self) -> Option<(Decimal, Decimal)> {
         self.bids.iter().next_back().map(|(p, s)| (p.clone(), *s))
     }
-    fn best_ask(&self) -> Option<(Decimal, u32)> {
+    fn best_ask(&self) -> Option<(Decimal, Decimal)> {
         self.asks.iter().next().map(|(p, s)| (p.clone(), *s))
     }
 
     fn print_top_n(&self, n: usize) {
-        let mut bids: Vec<(Decimal, u32)> = self
+        let mut bids: Vec<(Decimal, Decimal)> = self
             .bids
             .iter()
             .rev()
             .take(n)
             .map(|(p, s)| (p.clone(), *s))
             .collect();
-        let asks: Vec<(Decimal, u32)> = self
+        let asks: Vec<(Decimal, Decimal)> = self
             .asks
             .iter()
             .take(n)

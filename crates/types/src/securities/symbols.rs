@@ -4,7 +4,19 @@ use std::fmt::Display;
 use std::str::FromStr;
 use strum_macros::Display;
 
-#[derive(Debug, Clone, Copy, PartialEq, Hash,  Eq, Ord, PartialOrd, Archive, RkyvDeserialize, RkyvSerialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Hash,
+    Eq,
+    Ord,
+    PartialOrd,
+    Archive,
+    RkyvDeserialize,
+    RkyvSerialize,
+)]
 #[archive(check_bytes)]
 pub enum SecurityType {
     Future,
@@ -22,7 +34,7 @@ pub enum SecurityType {
     RkyvSerialize,
     Display,
     PartialOrd,
-    Ord
+    Ord,
 )]
 #[archive(check_bytes)]
 pub enum Exchange {
@@ -104,7 +116,19 @@ impl FromStr for Exchange {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, Archive, RkyvDeserialize, RkyvSerialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Ord,
+    PartialOrd,
+    Archive,
+    RkyvDeserialize,
+    RkyvSerialize,
+)]
 #[archive(check_bytes)]
 pub enum Currency {
     USD,
@@ -132,7 +156,9 @@ impl Currency {
 }
 
 /// Example canonical: `MNQ.Z25` or continuous contracts `MNQ.C.0`
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Archive, RkyvDeserialize, RkyvSerialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Archive, RkyvDeserialize, RkyvSerialize,
+)]
 #[archive(check_bytes)]
 pub struct Instrument(pub String);
 
@@ -242,7 +268,7 @@ impl Instrument {
         if b.len() < 3 {
             return Err(anyhow!("too short for compact futures: {up}"));
         }
-        let mut i = b.len();
+        let i = b.len();
 
         // collect up to 4 trailing digits
         let mut dstart = i;

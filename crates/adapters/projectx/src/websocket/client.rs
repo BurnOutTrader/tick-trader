@@ -685,11 +685,7 @@ impl PxWebSocketClient {
                                                 is_snapshot: Some(false),
                                             };
                                             let buf = bbo.to_bytes();
-                                            tt_shm::write_snapshot(
-                                                Topic::Quotes,
-                                                &key,
-                                                &buf,
-                                            );
+                                            tt_shm::write_snapshot(Topic::Quotes, &key, &buf);
                                             if let Err(e) = self.bus.publish_quote(bbo).await {
                                                 log::warn!("failed to publish quote: {}", e);
                                             } else {
@@ -805,11 +801,7 @@ impl PxWebSocketClient {
                                             };
                                             // Write Tick snapshot to SHM
                                             let buf = tick.to_bytes();
-                                            tt_shm::write_snapshot(
-                                                Topic::Ticks,
-                                                &key,
-                                                &buf,
-                                            );
+                                            tt_shm::write_snapshot(Topic::Ticks, &key, &buf);
                                             if let Err(e) = self.bus.publish_tick(tick).await {
                                                 log::warn!("failed to publish tick: {}", e);
                                             } else {
@@ -840,7 +832,6 @@ impl PxWebSocketClient {
                                     };
 
                                     if let Some(instrument) = instr_opt {
-                                        let symbol = extract_root(&instrument);
                                         let provider =
                                             tt_types::providers::ProviderKind::ProjectX(self.firm);
                                         let key = tt_types::keys::SymbolKey {
@@ -886,9 +877,9 @@ impl PxWebSocketClient {
                                                 // Collect levels per side keyed by price
                                                 use std::collections::BTreeMap;
                                                 // For bids sort by price desc; for asks sort asc
-                                                let mut bid_map: BTreeMap<Decimal, u32> =
+                                                let mut bid_map: BTreeMap<Decimal, Decimal> =
                                                     BTreeMap::new();
-                                                let mut ask_map: BTreeMap<Decimal, u32> =
+                                                let mut ask_map: BTreeMap<Decimal, Decimal> =
                                                     BTreeMap::new();
                                                 for itv in arr.iter() {
                                                     if let Ok(di) = serde_json::from_value::<
@@ -904,15 +895,23 @@ impl PxWebSocketClient {
                                                                     * 1_000_000_000.0)
                                                                     .round()
                                                                     as i64;
-                                                                let sz = if di.volume < 0 {
-                                                                    0
+                                                                let px_dec =
+                                                                    Decimal::from_i128_with_scale(
+                                                                        px_nanos as i128,
+                                                                        9,
+                                                                    );
+                                                                let sz_dec: Decimal = if di.volume
+                                                                    < 0
+                                                                {
+                                                                    Decimal::ZERO
                                                                 } else {
-                                                                    (di.volume as u64)
-                                                                        .min(u32::MAX as u64)
-                                                                        as u32
+                                                                    Decimal::from(
+                                                                        (di.volume as u64)
+                                                                            .min(u32::MAX as u64),
+                                                                    )
                                                                 };
                                                                 // For asks we want ascending sort; BTreeMap is ascending by key
-                                                                ask_map.insert(px_nanos, sz);
+                                                                ask_map.insert(px_dec, sz_dec);
                                                             }
                                                             2 | 4 | 9 => {
                                                                 // Bid side
@@ -920,14 +919,22 @@ impl PxWebSocketClient {
                                                                     * 1_000_000_000.0)
                                                                     .round()
                                                                     as i64;
-                                                                let sz = if di.volume < 0 {
-                                                                    0
+                                                                let px_dec =
+                                                                    Decimal::from_i128_with_scale(
+                                                                        px_nanos as i128,
+                                                                        9,
+                                                                    );
+                                                                let sz_dec: Decimal = if di.volume
+                                                                    < 0
+                                                                {
+                                                                    Decimal::ZERO
                                                                 } else {
-                                                                    (di.volume as u64)
-                                                                        .min(u32::MAX as u64)
-                                                                        as u32
+                                                                    Decimal::from(
+                                                                        (di.volume as u64)
+                                                                            .min(u32::MAX as u64),
+                                                                    )
                                                                 };
-                                                                bid_map.insert(px_nanos, sz);
+                                                                bid_map.insert(px_dec, sz_dec);
                                                             }
                                                             _ => {}
                                                         }
@@ -942,16 +949,16 @@ impl PxWebSocketClient {
                                                         bid_px.push(*px);
                                                         bid_sz.push(*sz);
                                                     }
-                                                    let mut ask_px: Vec<i64> = Vec::new();
-                                                    let mut ask_sz: Vec<u32> = Vec::new();
+                                                    let mut ask_px: Vec<Decimal> = Vec::new();
+                                                    let mut ask_sz: Vec<Decimal> = Vec::new();
                                                     for (px, sz) in ask_map.iter().take(10) {
                                                         // lowest first
                                                         ask_px.push(*px);
                                                         ask_sz.push(*sz);
                                                     }
                                                     // Order counts not available from PX depth payload; set zeros to keep alignment
-                                                    let bid_ct = vec![0u32; bid_px.len()];
-                                                    let ask_ct = vec![0u32; ask_px.len()];
+                                                    let bid_ct = vec![dec!(0); bid_px.len()];
+                                                    let ask_ct = vec![dec!(0); ask_px.len()];
                                                     attach_snapshot_book = Some(BookLevels {
                                                         bid_px,
                                                         ask_px,
@@ -1030,6 +1037,13 @@ impl PxWebSocketClient {
                                             } else {
                                                 (raw_size as u64).min(u32::MAX as u64) as u32
                                             };
+                                            let size_dec: Decimal = if raw_size < 0 {
+                                                Decimal::ZERO
+                                            } else {
+                                                Decimal::from(
+                                                    (raw_size as u64).min(u32::MAX as u64),
+                                                )
+                                            };
                                             let mut flags = MbpFlags::from(MbpFlags::F_MBP);
                                             if matches!(it.r#type, 3 | 4 | 9 | 10) {
                                                 // best bid/ask related
@@ -1070,7 +1084,7 @@ impl PxWebSocketClient {
                                                     price_nanos as i128,
                                                     9,
                                                 ),
-                                                size: size_u32,
+                                                size: size_dec,
                                                 flags,
                                                 ts_in_delta: ts_in_delta_i32,
                                                 sequence: 0,
@@ -1163,10 +1177,8 @@ impl PxWebSocketClient {
                                     .filled_price
                                     .and_then(|p| Price::from_f64(p))
                                     .unwrap_or(dec!(0));
-                                let ts_ns = DateTime::<Utc>::from_str(&order.update_timestamp)
-                                    .unwrap_or_else(|_| Utc::now())
-                                    .timestamp_nanos_opt()
-                                    .unwrap_or(0);
+                                let ts_dt = DateTime::<Utc>::from_str(&order.update_timestamp)
+                                    .unwrap_or_else(|_| Utc::now());
                                 let ou = OrderUpdate {
                                     instrument,
                                     provider_order_id: Some(ProviderOrderId(order.id.to_string())),
@@ -1175,7 +1187,7 @@ impl PxWebSocketClient {
                                     leaves,
                                     cum_qty,
                                     avg_fill_px: avg_px,
-                                    ts_ns,
+                                    ts_ns: ts_dt,
                                 };
                                 let batch = OrdersBatch {
                                     topic: tt_types::keys::Topic::Orders,
@@ -1271,7 +1283,6 @@ impl PxWebSocketClient {
 
                                 let last_px = Price::from_f64(trade.price);
                                 let last_qty = Volume::from_f64(trade.size as f64);
-                                let commission = Decimal::from_f64(trade.fees);
                                 let time_accepted =
                                     DateTime::<Utc>::from_str(&trade.creation_timestamp)
                                         .unwrap_or_else(|_| Utc::now());

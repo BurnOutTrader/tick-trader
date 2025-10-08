@@ -158,7 +158,11 @@ fn ticks_to_tickbars_two_bars() {
             base + (i as i64) * 1_000_000,
             10000 + i as i64,
             1,
-            if i % 2 == 0 { TradeSide::Buy } else { TradeSide::Sell },
+            if i % 2 == 0 {
+                TradeSide::Buy
+            } else {
+                TradeSide::Sell
+            },
         )) {
             outs.push(tb);
         }

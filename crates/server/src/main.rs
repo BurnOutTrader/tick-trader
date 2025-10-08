@@ -5,14 +5,10 @@ use std::os::fd::FromRawFd;
 #[cfg(target_os = "linux")]
 use std::os::unix::net::UnixListener as StdUnixListener;
 use std::path::Path;
-use std::str::FromStr;
 use std::sync::Arc;
 use tokio::net::UnixListener;
 use tracing::level_filters::LevelFilter;
 use tt_bus::{Router, UpstreamManager};
-use tt_types::data::core::{Exchange, Utc};
-use tt_types::history::HistoricalRequest;
-use tt_types::keys::Topic;
 use tt_types::providers::{ProjectXTenant, ProviderKind};
 use tt_types::securities::symbols::Instrument;
 

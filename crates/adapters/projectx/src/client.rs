@@ -2,10 +2,10 @@ use crate::http::client::PxHttpClient;
 use crate::http::credentials::PxCredential;
 use crate::http::error::PxError;
 use crate::http::models::{RetrieveBarsReq, RetrieveBarsResponse};
-use crate::websocket::client::{PxWebSocketClient, parse_px_instrument, px_format_from_instrument};
+use crate::websocket::client::{px_format_from_instrument, PxWebSocketClient};
 use ahash::AHashMap;
 use async_trait::async_trait;
-use chrono::{DateTime, Duration as ChronoDuration, NaiveDate, NaiveDateTime, ParseResult, Utc};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, ParseResult, Utc};
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -35,10 +35,7 @@ pub struct PXClient {
 impl PXClient {
     pub async fn instruments_map_snapshot(
         &self,
-    ) -> AHashMap<
-        tt_types::securities::symbols::Instrument,
-        tt_types::securities::security::FuturesContract,
-    > {
+    ) -> Vec<tt_types::securities::security::FuturesContract> {
         self.http.instruments_snapshot().await
     }
     #[allow(dead_code)]
@@ -151,23 +148,27 @@ impl PXClient {
             _ => anyhow::bail!("retrieve_bars only supports candle topics (1s/1m/1h/1d)"),
         };
 
-        // Resolve contract id and exchange (as you had)
+        // Resolve contract id and exchange
         let (contract_id, exchange) = {
+            // Try the current in-memory snapshot first, then force a manual update if missing.
+            let map = self.http.instruments.read().await;
             let mut cid: Option<String> = None;
             let mut ex: Option<Exchange> = None;
-            let map = self.http.instruments_snapshot().await;
             if let Some(fc) = map.get(&req.instrument) {
                 cid = Some(fc.provider_contract_name.clone());
                 ex = Some(fc.exchange);
             }
+            drop(map);
+
             if cid.is_none() {
-                let map = self.http.manual_update_instruments(false).await?;
-                let map = map.read().await;
-                if let Some(fc) = map.get(&req.instrument) {
+                let updated = self.http.manual_update_instruments(false).await?;
+                let updated = updated.read().await;
+                if let Some(fc) = updated.get(&req.instrument) {
                     cid = Some(fc.provider_contract_name.clone());
                     ex = Some(fc.exchange);
                 }
             }
+
             (
                 cid.unwrap_or_else(|| px_format_from_instrument(&req.instrument)),
                 ex.expect("exchange must be present for known instrument"),
@@ -395,23 +396,21 @@ impl MarketDataProvider for PXClient {
         pattern: Option<String>,
     ) -> anyhow::Result<Vec<tt_types::securities::symbols::Instrument>> {
         // Use HTTP snapshot maintained by PxHttpClient; filter by optional pattern (case-insensitive contains)
-        let map = self.instruments_map_snapshot().await;
-        let mut v: Vec<_> = map.keys().cloned().collect();
+        // Snapshot returns Vec<FuturesContract>; extract their Instrument values
+        let contracts = self.instruments_map_snapshot().await;
+        // Map to Instrument and optionally filter by pattern (case-insensitive)
+        let mut instruments: Vec<tt_types::securities::symbols::Instrument> =
+            contracts.into_iter().map(|c| c.instrument).collect();
         if let Some(mut pat) = pattern {
             pat.make_ascii_uppercase();
-            v.retain(|inst| inst.to_string().to_uppercase().contains(&pat));
+            instruments.retain(|inst| inst.to_string().to_uppercase().contains(&pat));
         }
-        Ok(v)
+        Ok(instruments)
     }
 
-    async fn instruments_map(
+    async fn instruments(
         &self,
-    ) -> anyhow::Result<
-        ahash::AHashMap<
-            tt_types::securities::symbols::Instrument,
-            tt_types::securities::security::FuturesContract,
-        >,
-    > {
+    ) -> anyhow::Result<Vec<tt_types::securities::security::FuturesContract>> {
         Ok(self.instruments_map_snapshot().await)
     }
 
@@ -688,7 +687,9 @@ impl HistoricalDataProvider for PXClient {
         _topic: Topic,
     ) -> anyhow::Result<Option<DateTime<Utc>>> {
         self.http.manual_update_instruments(false).await?;
-        if let Some(contract) = self.http.instruments_snapshot().await.get(&instrument) {
+        // `instruments_snapshot` returns Vec<FuturesContract>, so search for the matching instrument.
+        let contracts = self.http.instruments_snapshot().await;
+        if let Some(contract) = contracts.iter().find(|c| c.instrument == instrument) {
             let dt = NaiveDateTime::from(contract.activation_date);
             let utc_time = DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc);
             return Ok(Some(utc_time));

@@ -1,7 +1,6 @@
 use std::cmp::{Ordering, Reverse};
 use std::collections::BinaryHeap;
 use tt_types::data::core::{Bbo, Candle, Tick};
-use tt_types::data::mbp10::Mbp10;
 
 /// Iterator wrapper around `KMerge` so you can hand it to for-loops easily.
 pub struct KMergeIter<'a, T: TimeKey> {

@@ -1,11 +1,10 @@
 use crate::data::models::{BarClose, Price, Resolution, TradeSide, Volume};
 pub use crate::securities::symbols::Exchange;
 use crate::securities::symbols::Instrument;
-use chrono::TimeZone;
+use crate::wire::Bytes;
 pub use chrono::{DateTime, Utc};
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 pub use rust_decimal::Decimal;
-use crate::wire::{Bytes, WireMessage};
 
 /// A single executed trade (tick).
 ///
@@ -19,10 +18,8 @@ pub struct Tick {
     /// Symbol identifier (e.g. `"MNQ.Z25"`).
     pub instrument: Instrument,
     /// Trade price.
-
     pub price: Price,
     /// Trade size (quantity).
-
     pub volume: Volume,
     /// UTC timestamp of the trade.
     pub time: DateTime<Utc>,
@@ -59,35 +56,26 @@ pub struct Candle {
     /// Symbol identifier (e.g. `"MNQ.Z25"`).
     pub instrument: Instrument,
     /// Start time of the candle (inclusive).
-
     pub time_start: DateTime<Utc>,
     /// End time of the candle (exclusive).
-
     pub time_end: DateTime<Utc>,
     /// Open price.
-
     pub open: Price,
     /// High price.
-
     pub high: Price,
     /// Low price.
-
     pub low: Price,
 
     pub close: Price,
     /// Total traded volume.
-
     pub volume: Volume,
     /// Volume executed at the ask.
-
     pub ask_volume: Volume,
     /// Volume executed at the bid.
-
     pub bid_volume: Volume,
     /// Resolution used to build this candle.
     pub resolution: Resolution,
 }
-
 
 impl Bytes<Self> for Candle {
     fn from_bytes(archived: &[u8]) -> anyhow::Result<Candle> {
@@ -135,30 +123,22 @@ pub struct TickBar {
     /// Symbol identifier (e.g. `"MNQ.Z25"`).
     pub instrument: Instrument,
     /// Start time of the candle (inclusive).
-
     pub time_start: DateTime<Utc>,
     /// End time of the candle (exclusive).
-
     pub time_end: DateTime<Utc>,
     /// Open price.
-
     pub open: Price,
     /// High price.
-
     pub high: Price,
     /// Low price.
-
     pub low: Price,
 
     pub close: Price,
     /// Total traded volume.
-
     pub volume: Volume,
     /// Volume executed at the ask.
-
     pub ask_volume: Volume,
     /// Volume executed at the bid.
-
     pub bid_volume: Volume,
 }
 

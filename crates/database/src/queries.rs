@@ -267,7 +267,6 @@ pub fn get_bbo_in_range(
     let mut out = Vec::new();
     while let Some(r) = rows.next()? {
         let sym: String = r.get(0)?;
-        let exch: String = r.get(1)?;
         let bid_s: String = r.get(2)?;
         let bid_sz_s: String = r.get(3)?;
         let ask_s: String = r.get(4)?;
@@ -279,8 +278,6 @@ pub fn get_bbo_in_range(
         let venue_seq: Option<i32> = r.get(10)?;
         let is_snapshot: Option<bool> = r.get(11)?;
 
-        let exchange =
-            Exchange::from_str(&exch).ok_or_else(|| anyhow!("unknown exchange '{exch}'"))?;
         out.push(Bbo {
             symbol: sym.clone(),
             instrument: Instrument::from_str(&sym)
@@ -382,8 +379,6 @@ pub fn get_ticks_in_range(
 
         let price = Decimal::from_str(&price_s)?;
         let size = Decimal::from_str(&size_s)?;
-        let exchange =
-            Exchange::from_str(&exch).ok_or_else(|| anyhow!("unknown exchange '{exch}'"))?;
         let side = match side_str.as_deref() {
             Some("Buy") | Some("B") => TradeSide::Buy,
             Some("Sell") | Some("S") => TradeSide::Sell,
@@ -585,46 +580,4 @@ pub fn latest_book_available(
         .query_row(duckdb::params![dataset_id], |r| r.get(0))
         .optional()?;
     Ok(ts_ns.map(epoch_ns_to_dt))
-}
-
-/// Parse a compact JSON [[price, size], ...] into Vec<(Decimal, Decimal)>.
-/// Accepts each cell as either a JSON string or number.
-/// Example payload: `[[ "5043.25","7"], [5043.50, 3.5], [1e-6, "2.0"]]`
-fn parse_ladder_json(txt: &str) -> anyhow::Result<Vec<(Decimal, Decimal)>> {
-    let v: JsonValue = serde_json::from_str(txt).with_context(|| "failed to parse ladder JSON")?;
-    let arr = v
-        .as_array()
-        .ok_or_else(|| anyhow!("ladder json not array"))?;
-
-    fn dec_from_json(x: &JsonValue, what: &str) -> anyhow::Result<Decimal> {
-        match x {
-            JsonValue::String(s) => {
-                // Prefer exact if you guarantee canonical strings; fall back to FromStr for flexibility.
-                Decimal::from_str_exact(s)
-                    .or_else(|_| Decimal::from_str(s))
-                    .with_context(|| format!("invalid decimal string for {what}: {s}"))
-            }
-            JsonValue::Number(n) => {
-                // Convert the original number to string (preserves exponent form) and parse Decimal.
-                let s = n.to_string();
-                Decimal::from_str(&s)
-                    .with_context(|| format!("invalid decimal number for {what}: {s}"))
-            }
-            _ => Err(anyhow!("{} must be string or number", what)),
-        }
-    }
-
-    let mut out = Vec::with_capacity(arr.len());
-    for (i, item) in arr.iter().enumerate() {
-        let pair = item
-            .as_array()
-            .ok_or_else(|| anyhow!("ladder row {i} not array"))?;
-        if pair.len() != 2 {
-            return Err(anyhow!("ladder row {i} length != 2"));
-        }
-        let px = dec_from_json(&pair[0], "price")?;
-        let sz = dec_from_json(&pair[1], "size")?;
-        out.push((px, sz));
-    }
-    Ok(out)
 }

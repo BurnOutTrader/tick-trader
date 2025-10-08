@@ -59,8 +59,6 @@ fn next_bar_start_after_prev_end(
 // ---- the test --------------------------------------------------------------------
 
 fn main() -> Result<()> {
-    use chrono::Datelike;
-
     // 1) Connect to DuckDB catalog under DB_PATH (default ./storage)
     let db_root = std::env::var("DB_PATH").unwrap_or_else(|_| "./storage".to_string());
     let db_root = Path::new(&db_root);

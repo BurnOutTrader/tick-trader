@@ -177,30 +177,30 @@ impl<P: MarketDataProvider + 'static> Engine<P> {
 
 #[async_trait]
 pub trait Strategy: Send + Sync + 'static {
-    #[inline]
+
     fn desired_topics(&mut self) -> HashSet<Topic>;
-    #[inline]
+
     async fn on_start(&mut self, _h: EngineHandle) {}
-    #[inline]
+
     async fn on_stop(&mut self) {}
-    #[inline]
+
     async fn on_tick(&mut self, _t: Tick) {}
-    #[inline]
+
     async fn on_quote(&mut self, _q: Bbo) {}
-    #[inline]
+
     async fn on_bar(&mut self, _b: Candle) {}
-    #[inline]
+
     async fn on_mbp10(&mut self, _d: Mbp10) {}
-    #[inline]
+
     async fn on_orders_batch(&mut self, _b: OrdersBatch) {}
-    #[inline]
+
     async fn on_positions_batch(&mut self, _b: PositionsBatch) {}
-    #[inline]
+
     /// Receive snapshots of account state, these are messages, not mutable objects.
     async fn on_account_delta(&mut self, _accounts: Vec<AccountDelta>) {}
-    #[inline]
+
     async fn on_subscribe(&mut self, _instrument: Instrument, _topic: Topic, _success: bool) {}
-    #[inline]
+
     async fn on_unsubscribe(&mut self, _instrument: Instrument, _topic: Topic) {}
 }
 

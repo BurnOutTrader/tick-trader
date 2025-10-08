@@ -6,7 +6,7 @@
 //! - Prune catalog rows that reference missing files and quarantine unreadable Parquet.
 //! - Resolve dataset IDs from human-friendly keys and bridge Topic -> resolution keys.
 
-use crate::models::{Provider, SeqBound};
+use crate::models::{SeqBound};
 use crate::paths::{provider_kind_to_db_string, topic_to_db_string};
 use anyhow::Result;
 use chrono::{DateTime, Utc};

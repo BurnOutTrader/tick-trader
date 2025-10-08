@@ -1,13 +1,12 @@
 //! MBP-10 record type (Databento-style aggregated book updates)
 //! "Base data type" for MDP-10/MBP-10 translated into our engine types.
 use crate::securities::symbols::Instrument;
+use crate::wire::Bytes;
 use chrono::TimeDelta;
 pub use chrono::{DateTime, Utc};
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use rust_decimal::Decimal;
 use strum_macros::Display;
-use crate::data::core::TickBar;
-use crate::wire::Bytes;
 
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, Display, Archive, RkyvDeserialize, RkyvSerialize,
@@ -187,8 +186,8 @@ pub struct Mbp10 {
     /// Order price (wire is i64 nanos). Stored as Decimal (scale 9).
     pub price: Decimal,
 
-    /// Order quantity.
-    pub size: u32,
+    /// Order quantity (Decimal, e.g., contracts or shares with fractional support).
+    pub size: Decimal,
 
     pub flags: Flags,
 
@@ -233,7 +232,7 @@ pub fn make_mbp10(
     side_b: u8,
     depth: u8,
     price_nanos: i64,
-    size: u32,
+    size: Decimal,
     flags_b: u8,
     ts_in_delta: i32,
     sequence: u32,

@@ -190,10 +190,8 @@ pub trait MarketDataProvider: Send + Sync {
         Ok(Vec::new())
     }
     /// Optional: full instruments map (Instrument -> FuturesContract). Default empty.
-    async fn instruments_map(
-        &self,
-    ) -> anyhow::Result<ahash::AHashMap<Instrument, FuturesContract>> {
-        Ok(ahash::AHashMap::new())
+    async fn instruments(&self) -> anyhow::Result<Vec<FuturesContract>> {
+        Ok(Vec::new())
     }
     async fn auto_update(&self) -> anyhow::Result<()>;
 

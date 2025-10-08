@@ -3,7 +3,19 @@ use std::fmt::Display;
 use std::hash::Hash;
 use strum_macros::Display;
 
-#[derive(Clone, Debug, PartialEq, Eq, Copy, Hash, Ord, PartialOrd, Archive, RkyvDeserialize, RkyvSerialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Copy,
+    Hash,
+    Ord,
+    PartialOrd,
+    Archive,
+    RkyvDeserialize,
+    RkyvSerialize,
+)]
 #[archive(check_bytes)]
 pub enum ProjectXTenant {
     Topstep,
@@ -205,7 +217,19 @@ pub enum RithmicServer {
     Test,
 }
 
-#[derive(Clone, Debug,  Eq, Ord, PartialOrd, PartialEq, Copy, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    Ord,
+    PartialOrd,
+    PartialEq,
+    Copy,
+    Hash,
+    Archive,
+    RkyvDeserialize,
+    RkyvSerialize,
+)]
 #[archive(check_bytes)]
 pub enum ProviderKind {
     ProjectX(ProjectXTenant),

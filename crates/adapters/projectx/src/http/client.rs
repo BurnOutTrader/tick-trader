@@ -31,7 +31,7 @@ pub struct PxHttpClient {
     pub firm: ProjectXTenant,
     pub inner: Arc<PxHttpInnerClient>,
     internal_accounts: Arc<DashMap<AccountName, AccountSnapShot>>,
-    instruments: Arc<RwLock<AHashMap<Instrument, FuturesContract>>>,
+    pub(crate) instruments: Arc<RwLock<AHashMap<Instrument, FuturesContract>>>,
 }
 
 impl PxHttpClient {
@@ -310,7 +310,8 @@ impl PxHttpClient {
     }
 
     /// Returns a clone of the current instruments map (Instrument -> FuturesContract)
-    pub async fn instruments_snapshot(&self) -> AHashMap<Instrument, FuturesContract> {
-        self.instruments.read().await.clone()
+    pub async fn instruments_snapshot(&self) -> Vec<FuturesContract> {
+        let map = self.instruments.read().await;
+        map.values().cloned().collect()
     }
 }
