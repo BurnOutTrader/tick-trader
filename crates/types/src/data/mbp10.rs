@@ -203,9 +203,7 @@ pub struct Mbp10 {
 
 impl Bytes<Self> for Mbp10 {
     fn from_bytes(archived: &[u8]) -> anyhow::Result<Mbp10> {
-        // If the archived bytes do not end with the delimiter, proceed as before
-        match rkyv::from_bytes::<Mbp10>(archived) {
-            //Ignore this warning: Trait `Deserialize<ResponseType, SharedDeserializeMap>` is not implemented for `ArchivedRequestType` [E0277]
+        match rkyv::from_bytes::<Mbp10>(&archived) {
             Ok(response) => Ok(response),
             Err(e) => Err(anyhow::Error::msg(e.to_string())),
         }

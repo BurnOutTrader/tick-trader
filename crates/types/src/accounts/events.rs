@@ -1,7 +1,7 @@
 use crate::securities::symbols::Instrument;
 use crate::wire::Bytes;
 use chrono::{DateTime, Utc};
-use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
+use rkyv::{AlignedVec, Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use rust_decimal::Decimal;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
@@ -137,6 +137,11 @@ impl Bytes<Self> for AccountEvent {
             Ok(response) => Ok(response),
             Err(e) => Err(anyhow::Error::msg(e.to_string())),
         }
+    }
+
+    fn to_aligned_bytes(&self) -> AlignedVec {
+        // Serialize directly into an AlignedVec for maximum compatibility with rkyv
+        rkyv::to_bytes::<_, 1024>(self).expect("rkyv::to_bytes failed")
     }
 
     fn to_bytes(&self) -> Vec<u8> {

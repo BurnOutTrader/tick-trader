@@ -222,6 +222,8 @@ pub struct EngineRuntime {
     // Vendor securities cache and watchers
     securities_by_provider: Arc<DashMap<ProviderKind, Vec<Instrument>>>,
     watching_providers: Arc<DashMap<ProviderKind, ()>>,
+    // Active SHM polling tasks keyed by (topic,key)
+    shm_tasks: Arc<DashMap<(Topic, SymbolKey), tokio::task::JoinHandle<()>>>,
 }
 
 // Shared view used by EngineHandle
@@ -847,6 +849,7 @@ impl EngineRuntime {
             pending: Arc::new(DashMap::new()),
             securities_by_provider: Arc::new(DashMap::new()),
             watching_providers: Arc::new(DashMap::new()),
+            shm_tasks: Arc::new(DashMap::new()),
         }
     }
 

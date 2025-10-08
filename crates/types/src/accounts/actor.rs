@@ -57,7 +57,7 @@ impl AccountActor {
 
     fn apply(&mut self, ev: AccountEvent) {
         // Append to WAL first, then apply side effects.
-        self.wal.push(ev.clone().to_bytes());
+        self.wal.push(ev.clone().to_aligned_bytes().into());
         match ev {
             AccountEvent::Order(oe) => self.apply_order_event(oe),
             AccountEvent::Exec(exe) => self.apply_exec(exe),

@@ -1,5 +1,5 @@
 use dashmap::DashMap;
-use memmap2::MmapMut;
+use memmap2::{Mmap, MmapMut};
 use std::fs::{File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
 use std::path::PathBuf;
@@ -149,6 +149,80 @@ pub fn write_snapshot(topic: Topic, key: &SymbolKey, bytes: &[u8]) {
     }
 }
 
+/// Read-only SHM reader with seqlock semantics.
+pub struct ShmReader {
+    mmap: Mmap,
+}
+
+impl ShmReader {
+    pub fn open(name: &str) -> std::io::Result<Self> {
+        let path = backing_path(name);
+        let file = OpenOptions::new().read(true).open(&path)?;
+        let mmap = unsafe { Mmap::map(&file)? };
+        Ok(Self { mmap })
+    }
+
+    /// Attempt a single seqlock read. Returns (seq, payload) on success.
+    pub fn read_with_seq(&self) -> Option<(u32, Vec<u8>)> {
+        use std::sync::atomic::{fence, Ordering};
+        if self.mmap.len() < header_len() {
+            return None;
+        }
+        // Loop a few times to avoid transient writer windows
+        for _ in 0..3 {
+            let seq1 = u32::from_le_bytes(self.mmap[12..16].try_into().ok()?);
+            if seq1 % 2 == 1 {
+                // writer active
+                continue;
+            }
+            let len = u32::from_le_bytes(self.mmap[16..20].try_into().ok()?) as usize;
+            let cap = u32::from_le_bytes(self.mmap[8..12].try_into().ok()?) as usize;
+            if len == 0 || len > cap || header_len() + len > self.mmap.len() {
+                return None;
+            }
+            let start = header_len();
+            let end = start + len;
+            let mut buf = vec![0u8; len];
+            buf.copy_from_slice(&self.mmap[start..end]);
+            fence(Ordering::Acquire);
+            let seq2 = u32::from_le_bytes(self.mmap[12..16].try_into().ok()?);
+            if seq1 == seq2 && seq2 % 2 == 0 {
+                return Some((seq2, buf));
+            }
+        }
+        None
+    }
+
+    pub fn read_bytes(&self) -> Option<Vec<u8>> {
+        self.read_with_seq().map(|(_, b)| b)
+    }
+}
+
+// Global readers registry
+static READERS: once_cell::sync::Lazy<
+    DashMap<(Topic, SymbolKey), Arc<ShmReader>>,
+> = once_cell::sync::Lazy::new(|| DashMap::new());
+
+pub fn ensure_reader(topic: Topic, key: &SymbolKey) -> Option<Arc<ShmReader>> {
+    if let Some(r) = READERS.get(&(topic, key.clone())) {
+        return Some(r.value().clone());
+    }
+    let name = suggest_name(topic, key);
+    match ShmReader::open(&name) {
+        Ok(reader) => {
+            let arc = Arc::new(reader);
+            READERS.insert((topic, key.clone()), arc.clone());
+            Some(arc)
+        }
+        Err(_) => None,
+    }
+}
+
+/// Try a one-shot read of a snapshot for (topic,key); returns payload bytes if available.
+pub fn read_snapshot(topic: Topic, key: &SymbolKey) -> Option<Vec<u8>> {
+    ensure_reader(topic, key).and_then(|r| r.read_bytes())
+}
+
 /// Remove a snapshot segment for a given (topic,key) and evict it from the registry.
 pub fn remove_snapshot(topic: Topic, key: &SymbolKey) {
     if let Some((_k, _v)) = WRITERS.remove(&(topic, key.clone())) {
@@ -157,6 +231,7 @@ pub fn remove_snapshot(topic: Topic, key: &SymbolKey) {
         let path = backing_path(&name);
         let _ = std::fs::remove_file(path);
     }
+    let _ = READERS.remove(&(topic, key.clone()));
 }
 
 #[cfg(test)]

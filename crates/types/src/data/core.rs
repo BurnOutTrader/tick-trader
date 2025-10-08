@@ -31,9 +31,10 @@ pub struct Tick {
 
 impl Bytes<Self> for Tick {
     fn from_bytes(archived: &[u8]) -> anyhow::Result<Tick> {
-        // If the archived bytes do not end with the delimiter, proceed as before
-        match rkyv::from_bytes::<Tick>(archived) {
-            //Ignore this warning: Trait `Deserialize<ResponseType, SharedDeserializeMap>` is not implemented for `ArchivedRequestType` [E0277]
+        // Ensure alignment for rkyv by copying into an AlignedVec first
+        let mut aligned = AlignedVec::new();
+        aligned.extend_from_slice(archived);
+        match rkyv::from_bytes::<Tick>(&aligned) {
             Ok(response) => Ok(response),
             Err(e) => Err(anyhow::Error::msg(e.to_string())),
         }
@@ -84,9 +85,8 @@ pub struct Candle {
 
 impl Bytes<Self> for Candle {
     fn from_bytes(archived: &[u8]) -> anyhow::Result<Candle> {
-        // If the archived bytes do not end with the delimiter, proceed as before
-        match rkyv::from_bytes::<Candle>(archived) {
-            //Ignore this warning: Trait `Deserialize<ResponseType, SharedDeserializeMap>` is not implemented for `ArchivedRequestType` [E0277]
+        // Ensure alignment for rkyv by copying into an AlignedVec first
+        match rkyv::from_bytes::<Candle>(&archived) {
             Ok(response) => Ok(response),
             Err(e) => Err(anyhow::Error::msg(e.to_string())),
         }
@@ -99,7 +99,7 @@ impl Bytes<Self> for Candle {
 
     fn to_aligned_bytes(&self) -> AlignedVec {
         // Serialize directly into an AlignedVec for maximum compatibility with rkyv
-        rkyv::to_bytes::<_, 1024>(self).expect("rkyv::to_bytes failed")
+        rkyv::to_bytes::<_, 256>(self).expect("rkyv::to_bytes failed")
     }
 }
 
@@ -169,7 +169,7 @@ impl Bytes<Self> for TickBar {
 
     fn to_aligned_bytes(&self) -> AlignedVec {
         // Serialize directly into an AlignedVec for maximum compatibility with rkyv
-        rkyv::to_bytes::<_, 1024>(self).expect("rkyv::to_bytes failed")
+        rkyv::to_bytes::<_, 256>(self).expect("rkyv::to_bytes failed")
     }
 }
 
@@ -208,12 +208,15 @@ pub struct Bbo {
 
 impl Bytes<Self> for Bbo {
     fn from_bytes(archived: &[u8]) -> anyhow::Result<Bbo> {
-        // If the archived bytes do not end with the delimiter, proceed as before
-        match rkyv::from_bytes::<Bbo>(archived) {
-            //Ignore this warning: Trait `Deserialize<ResponseType, SharedDeserializeMap>` is not implemented for `ArchivedRequestType` [E0277]
+        match rkyv::from_bytes::<Bbo>(&archived) {
             Ok(response) => Ok(response),
             Err(e) => Err(anyhow::Error::msg(e.to_string())),
         }
+    }
+
+    fn to_aligned_bytes(&self) -> AlignedVec {
+        // Serialize directly into an AlignedVec for maximum compatibility with rkyv
+        rkyv::to_bytes::<_, 256>(self).expect("rkyv::to_bytes failed")
     }
 
     fn to_bytes(&self) -> Vec<u8> {

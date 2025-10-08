@@ -16,6 +16,7 @@ bytes = { workspace = true }
 dotenvy = { workspace = true }
 tt-types = { path = "../types" }
 tt-bus = { path = "../bus" }
+tt-shm = { path = "../shm" }
 dashmap = { workspace = true }
 duckdb = {workspace = true}
 rust_decimal = {workspace = true}
