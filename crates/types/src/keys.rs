@@ -161,6 +161,15 @@ pub struct AccountKey {
     pub account_name: AccountName, // as-is
 }
 
+impl AccountKey {
+    pub fn new(provider: ProviderKind, account_name: AccountName) -> Self {
+        Self {
+            provider,
+            account_name,
+        }
+    }
+}
+
 pub fn stream_id(topic: TopicId, key: KeyId) -> u64 {
     ((topic.0 as u64) << 32) | key.0 as u64
 }

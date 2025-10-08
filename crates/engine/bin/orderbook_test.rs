@@ -8,7 +8,7 @@ use tt_bus::ClientMessageBus;
 use tt_engine::engine::{DataTopic, EngineHandle, EngineRuntime, Strategy};
 use tt_types::accounts::account::AccountName;
 use tt_types::accounts::events::{AccountDelta};
-use tt_types::keys::SymbolKey;
+use tt_types::keys::{AccountKey, SymbolKey};
 use tt_types::providers::{ProjectXTenant, ProviderKind};
 use tt_types::securities::symbols::Instrument;
 use tt_types::wire;
@@ -73,7 +73,7 @@ impl Strategy for TestLiveOrdersStrategy {
                     limit_price: None,
                     stop_price: None,
                     trail_price: None,
-                    custom_tag: Some(format!("live-test:market: {}", self.count)),
+                    custom_tag: None,
                     stop_loss: Some(BracketWire {ticks: -20, r#type: OrderTypeWire::Stop}),
                     take_profit: Some(BracketWire {ticks: 20, r#type: OrderTypeWire::Limit}),
                 })
@@ -81,6 +81,10 @@ impl Strategy for TestLiveOrdersStrategy {
 
     }
     async fn on_unsubscribe(&mut self, instrument: Instrument, data_topic: tt_engine::engine::DataTopic) { info!("Unsubscribed {} from {:?}", instrument, data_topic); }
+    fn accounts(&self) -> Vec<AccountKey> {
+        let account = AccountKey::new(ProviderKind::ProjectX(ProjectXTenant::Topstep), self.cfg.account_name.clone());
+        vec![account]
+    }
 }
 
 #[tokio::main]

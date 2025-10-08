@@ -155,6 +155,7 @@ pub fn map_status(status: i32) -> OrderState {
         4 => OrderState::Canceled, // Expired treated as Canceled in current engine model
         5 => OrderState::Rejected,
         6 => OrderState::Acknowledged, // PendingUpdate maps to acknowledged/working
+        8 => OrderState::Acknowledged, // Provider-specific: treat as working/ack
         _ => OrderState::New,
     }
 }

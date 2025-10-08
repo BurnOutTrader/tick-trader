@@ -1111,144 +1111,96 @@ impl PxWebSocketClient {
                             }
                             // User hub events
                             "GatewayUserAccount" => {
-                                let account =
-                                    match serde_json::from_value::<GatewayUserAccount>(val) {
-                                        Ok(a) => a,
-                                        Err(e) => {
-                                            error!("error parsing GatewayUserAccount: {}", e);
-                                            return;
+                                // SignalR user event payloads come in the 'arguments' array and may be wrapped as {action, data}.
+                                let args_opt = val.get("arguments").and_then(|a| a.as_array());
+                                if let Some(args) = args_opt {
+                                    let data_val = args.get(0);
+                                    let mut items: Vec<GatewayUserAccount> = Vec::new();
+                                    if let Some(dv) = data_val {
+                                        if let Some(arr) = dv.as_array() {
+                                            for item in arr {
+                                                let obj = if item.is_object() {
+                                                    if let Some(d) = item.get("data") { d.clone() } else { item.clone() }
+                                                } else { item.clone() };
+                                                if let Ok(acct) = serde_json::from_value::<GatewayUserAccount>(obj) {
+                                                    items.push(acct);
+                                                }
+                                            }
+                                        } else if dv.is_object() {
+                                            let obj = if let Some(d) = dv.get("data") { d.clone() } else { dv.clone() };
+                                            if let Ok(acct) = serde_json::from_value::<GatewayUserAccount>(obj) {
+                                                items.push(acct);
+                                            }
                                         }
-                                    };
-                                //info!(target: "projectx.ws", "GatewayUserAccount: {:?}", account);
-                                let balance = match Decimal::from_f64(account.balance) {
-                                    Some(b) => b,
-                                    None => {
-                                        error!("invalid balance for {}", account.balance);
-                                        return;
                                     }
-                                };
-                                //info!(target: "projectx.ws", "AccountSnapShot: {:?}", snap_shot);
-                                // Publish minimal AccountDelta to bus
-                                let delta = AccountDelta {
-                                    equity: balance,
-                                    day_realized_pnl: dec!(0),
-                                    open_pnl: dec!(0),
-                                    ts_ns: Utc::now(),
-                                    can_trade: account.can_trade,
-                                };
-                                let batch = AccountDeltaBatch {
-                                    topic: tt_types::keys::Topic::AccountEvt,
-                                    seq: 0,
-                                    accounts: vec![delta],
-                                };
-                                if let Err(e) = self.bus.publish_account_delta_batch(batch).await {
-                                    error!(target: "projectx.ws", "failed to publish AccountDelta: {:?}", e);
+                                    if items.is_empty() { return; }
+                                    for account in items.into_iter() {
+                                        let balance = match Decimal::from_f64(account.balance) { Some(b) => b, None => { error!("invalid balance for {}", account.balance); continue; } };
+                                        let delta = AccountDelta { equity: balance, day_realized_pnl: dec!(0), open_pnl: dec!(0), ts_ns: Utc::now(), can_trade: account.can_trade };
+                                        let batch = AccountDeltaBatch { topic: tt_types::keys::Topic::AccountEvt, seq: 0, accounts: vec![delta] };
+                                        if let Err(e) = self.bus.publish_account_delta_batch(batch).await { error!(target: "projectx.ws", "failed to publish AccountDelta: {:?}", e); }
+                                    }
                                 }
                             }
                             "GatewayUserOrder" => {
-                                let order =
-                                    match serde_json::from_value::<GatewayUserOrder>(val.clone()) {
-                                        Ok(o) => o,
-                                        Err(e) => {
-                                            error!("error parsing GatewayUserOrder: {}", e);
-                                            return;
+                                // Extract payloads from 'arguments' and unwrap wrappers: {action, data}
+                                let args_opt = val.get("arguments").and_then(|a| a.as_array());
+                                if let Some(args) = args_opt {
+                                    let maybe_data = if args.len() >= 2 { Some(&args[1]) } else { args.get(0) };
+                                    let mut orders: Vec<GatewayUserOrder> = Vec::new();
+                                    if let Some(dv) = maybe_data {
+                                        if let Some(arr) = dv.as_array() {
+                                            for item in arr {
+                                                let obj = if item.is_object() { item.get("data").cloned().unwrap_or(item.clone()) } else { item.clone() };
+                                                if let Ok(o) = serde_json::from_value::<GatewayUserOrder>(obj) { orders.push(o); }
+                                            }
+                                        } else if dv.is_object() {
+                                            let obj = dv.get("data").cloned().unwrap_or(dv.clone());
+                                            if let Ok(o) = serde_json::from_value::<GatewayUserOrder>(obj) { orders.push(o); }
                                         }
-                                    };
-                                // Build identifiers
-                                let instrument = match Instrument::try_parse_dotted(
-                                    order.contract_id.as_str(),
-                                ) {
-                                    Ok(i) => i,
-                                    Err(e) => {
-                                        error!("error parsing instrument: {:?}", e);
-                                        return;
                                     }
-                                };
-
-                                let _limit_px = order.limit_price.map(|p| Price::from_f64(p));
-                                let _stop_px = order.stop_price.map(|p| Price::from_f64(p));
-
-                                //info!(target: "projectx.ws", "GatewayUserOrder standardized: id={} status={} side={:?} type={:?}", order.id, order.status, side, order_type);
-                                // Publish minimal OrderUpdate to bus
-                                let state_code: u8 = models::map_status(order.status) as u8;
-                                let cum_qty: i64 = order.fill_volume.unwrap_or(0);
-                                let leaves: i64 = (order.size - cum_qty).max(0);
-                                let avg_px = order
-                                    .filled_price
-                                    .and_then(|p| Price::from_f64(p))
-                                    .unwrap_or(dec!(0));
-                                let ts_dt = DateTime::<Utc>::from_str(&order.update_timestamp)
-                                    .unwrap_or_else(|_| Utc::now());
-                                let ou = OrderUpdate {
-                                    instrument,
-                                    provider_order_id: Some(ProviderOrderId(order.id.to_string())),
-                                    client_order_id: None,
-                                    state_code,
-                                    leaves,
-                                    cum_qty,
-                                    avg_fill_px: avg_px,
-                                    ts_ns: ts_dt,
-                                };
-                                let batch = OrdersBatch {
-                                    topic: tt_types::keys::Topic::Orders,
-                                    seq: 0,
-                                    orders: vec![ou],
-                                };
-                                if let Err(e) = self.bus.publish_orders_batch(batch).await {
-                                    error!(target: "projectx.ws", "failed to publish OrderUpdate: {:?}", e);
+                                    if orders.is_empty() { return; }
+                                    for order in orders.into_iter() {
+                                        let instrument = match Instrument::try_parse_dotted(order.contract_id.as_str()) { Ok(i) => i, Err(e) => { error!("error parsing instrument: {:?}", e); continue; } };
+                                        let state_code: u8 = models::map_status(order.status) as u8;
+                                        let cum_qty: i64 = order.fill_volume.unwrap_or(0);
+                                        let leaves: i64 = (order.size - cum_qty).max(0);
+                                        let avg_px = order.filled_price.and_then(|p| Price::from_f64(p)).unwrap_or(dec!(0));
+                                        let ts_dt = DateTime::<Utc>::from_str(&order.update_timestamp).unwrap_or_else(|_| Utc::now());
+                                        let ou = OrderUpdate { instrument, provider_order_id: Some(ProviderOrderId(order.id.to_string())), client_order_id: None, state_code, leaves, cum_qty, avg_fill_px: avg_px, ts_ns: ts_dt };
+                                        let batch = OrdersBatch { topic: tt_types::keys::Topic::Orders, seq: 0, orders: vec![ou] };
+                                        if let Err(e) = self.bus.publish_orders_batch(batch).await { error!(target: "projectx.ws", "failed to publish OrderUpdate: {:?}", e); }
+                                    }
                                 }
                             }
                             "GatewayUserPosition" => {
-                                let position = match serde_json::from_value::<GatewayUserPosition>(
-                                    val.clone(),
-                                ) {
-                                    Ok(p) => p,
-                                    Err(e) => {
-                                        error!("error parsing GatewayUserPosition: {}", e);
-                                        return;
+                                // Extract payloads from 'arguments' and unwrap wrappers: {action, data}
+                                let args_opt = val.get("arguments").and_then(|a| a.as_array());
+                                if let Some(args) = args_opt {
+                                    let maybe_data = if args.len() >= 2 { Some(&args[1]) } else { args.get(0) };
+                                    let mut positions: Vec<GatewayUserPosition> = Vec::new();
+                                    if let Some(dv) = maybe_data {
+                                        if let Some(arr) = dv.as_array() {
+                                            for item in arr {
+                                                let obj = if item.is_object() { item.get("data").cloned().unwrap_or(item.clone()) } else { item.clone() };
+                                                if let Ok(p) = serde_json::from_value::<GatewayUserPosition>(obj) { positions.push(p); }
+                                            }
+                                        } else if dv.is_object() {
+                                            let obj = dv.get("data").cloned().unwrap_or(dv.clone());
+                                            if let Ok(p) = serde_json::from_value::<GatewayUserPosition>(obj) { positions.push(p); }
+                                        }
                                     }
-                                };
-
-                                let instrument_id = match Instrument::from_str(
-                                    &parse_px_instrument(position.contract_id.as_str()),
-                                ) {
-                                    Ok(i) => i,
-                                    Err(e) => {
-                                        error!(target: "projectx.ws", "invalid instrument for position: {} ({:?})", position.contract_id, e);
-                                        return;
+                                    if positions.is_empty() { return; }
+                                    for position in positions.into_iter() {
+                                        let instrument_id = match Instrument::from_str(&parse_px_instrument(position.contract_id.as_str())) { Ok(i) => i, Err(e) => { error!(target: "projectx.ws", "invalid instrument for position: {} ({:?})", position.contract_id, e); continue; } };
+                                        self.positions.insert(instrument_id.clone(), position.clone());
+                                        let after = if position.r#type == models::PositionType::Short as i32 { -position.size } else { position.size };
+                                        let ts_ns = DateTime::<Utc>::from_str(&position.creation_timestamp).unwrap_or_else(|_| Utc::now());
+                                        let pd = PositionDelta { instrument: instrument_id, net_qty_before: 0, net_qty_after: after, realized_delta: dec!(0), open_pnl: dec!(0), ts_ns };
+                                        let batch = PositionsBatch { topic: tt_types::keys::Topic::Positions, seq: 0, positions: vec![pd] };
+                                        if let Err(e) = self.bus.publish_positions_batch(batch).await { error!(target: "projectx.ws", "failed to publish PositionDelta: {:?}", e); }
                                     }
-                                };
-
-                                self.positions
-                                    .insert(instrument_id.clone(), position.clone());
-
-                                // Publish minimal PositionDelta to bus (snapshot semantics)
-                                let after = if position.r#type == models::PositionType::Short as i32
-                                {
-                                    -position.size
-                                } else {
-                                    position.size
-                                };
-                                let ts_ns = DateTime::<Utc>::from_str(&position.creation_timestamp)
-                                    .unwrap_or_else(|_| Utc::now());
-                                let pd = PositionDelta {
-                                    instrument: instrument_id,
-                                    net_qty_before: 0,
-                                    net_qty_after: after,
-                                    realized_delta: dec!(0),
-                                    open_pnl: dec!(0),
-                                    ts_ns,
-                                };
-                                let batch = PositionsBatch {
-                                    topic: tt_types::keys::Topic::Positions,
-                                    seq: 0,
-                                    positions: vec![pd],
-                                };
-                                if let Err(e) = self.bus.publish_positions_batch(batch).await {
-                                    error!(target: "projectx.ws", "failed to publish PositionDelta: {:?}", e);
                                 }
-
-                                //info!(target: "projectx.ws", "GatewayUserPosition cached: id={} account_id={} contract={}", position.id, position.account_id, position.contract_id);
                             }
                             "GatewayUserTrade" => {
                                 /* let seq = match Utc::now().timestamp_nanos_opt() {
@@ -1481,11 +1433,7 @@ impl PxWebSocketClient {
                 return Ok(());
             }
         }
-        self.invoke_market(
-            "SubscribePositions",
-            vec![Value::String(account_id.to_string())],
-        )
-        .await
+        self.invoke_user("SubscribePositions", vec![Value::from(account_id)]).await
     }
 
     pub async fn unsubscribe_account_positions(&self, account_id: i64) -> anyhow::Result<()> {
@@ -1493,14 +1441,10 @@ impl PxWebSocketClient {
             let mut w = self.user_positions_subs.write().await;
             w.retain(|x| *x != account_id);
         }
-        self.invoke_market(
-            "UnsubscribePositions",
-            vec![Value::String(account_id.to_string())],
-        )
-        .await
+        self.invoke_user("UnsubscribePositions", vec![Value::from(account_id)]).await
     }
 
-    /// Subscribe to market data by account ID (trades)
+    /// Subscribe to user orders by account ID
     pub async fn subscribe_account_orders(&self, account_id: i64) -> anyhow::Result<()> {
         {
             let mut w = self.user_orders_subs.write().await;
@@ -1510,24 +1454,16 @@ impl PxWebSocketClient {
                 return Ok(());
             }
         }
-        self.invoke_market(
-            "SubscribeOrders",
-            vec![Value::String(account_id.to_string())],
-        )
-        .await
+        self.invoke_user("SubscribeOrders", vec![Value::from(account_id)]).await
     }
 
-    /// Unsubscribe from market data by account ID (trades)
+    /// Unsubscribe from user orders by account ID
     pub async fn unsubscribe_account_orders(&self, account_id: i64) -> anyhow::Result<()> {
         {
             let mut w = self.user_orders_subs.write().await;
             w.retain(|x| *x != account_id);
         }
-        self.invoke_market(
-            "UnsubscribeOrders",
-            vec![Value::String(account_id.to_string())],
-        )
-        .await
+        self.invoke_user("UnsubscribeOrders", vec![Value::from(account_id)]).await
     }
 
     /// Subscribe to market data by contract ID (market depth)

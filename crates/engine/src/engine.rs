@@ -199,6 +199,10 @@ pub trait Strategy: Send + Sync + 'static {
     async fn on_subscribe(&mut self, _instrument: Instrument, _data_topic: DataTopic, _success: bool) {}
 
     async fn on_unsubscribe(&mut self, _instrument: Instrument, _data_topic: DataTopic) {}
+
+    /// Optional: declare which accounts this strategy wants the engine to subscribe to
+    /// (orders, positions, and account events) at engine start. Default: none.
+    fn accounts(&self) -> Vec<AccountKey> { vec![] }
 }
 
 #[derive(Clone, Debug, Copy)]
@@ -1045,6 +1049,16 @@ impl EngineRuntime {
             let mut strat = strategy.lock().await;
             strat.on_start(handle.clone()).await;
             info!("engine: strategy.on_start returned");
+        }
+        // Auto-subscribe to account streams declared by the strategy, if any.
+        // We lock briefly to fetch the list, then drop before awaiting network calls.
+        let accounts_to_init: Vec<AccountKey> = {
+            let strat = strategy.lock().await;
+            strat.accounts()
+        };
+        if !accounts_to_init.is_empty() {
+            info!("engine: initializing {} account(s) for strategy", accounts_to_init.len());
+            self.initialize_accounts(accounts_to_init).await?;
         }
         Ok(handle)
     }

@@ -10,7 +10,7 @@ use tt_bus::ClientMessageBus;
 use tt_engine::engine::{DataTopic, EngineHandle, EngineRuntime, Strategy};
 use tt_types::accounts::events::AccountDelta;
 use tt_types::data::mbp10::Mbp10;
-use tt_types::keys::SymbolKey;
+use tt_types::keys::{AccountKey, SymbolKey};
 use tt_types::providers::{ProjectXTenant, ProviderKind};
 use tt_types::securities::symbols::Instrument;
 use tt_types::wire;
@@ -72,6 +72,11 @@ impl Strategy for DataTestStrategy {
     }
     async fn on_unsubscribe(&mut self, _instrument: Instrument, data_topic: DataTopic) {
         println!("{:?}", data_topic);
+    }
+
+    fn accounts(&self) -> Vec<AccountKey> {
+        let account = AccountKey::new(ProviderKind::ProjectX(ProjectXTenant::Topstep), self.cfg.account_name.clone());
+        vec![account]
     }
 }
 
