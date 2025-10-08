@@ -1,0 +1,23 @@
+[package]
+name = "orderbook_scalper"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+tt-database = {path = "../../../database", features = ["queries"]}
+tt-engine = {path = "../../../engine"}
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+futures-util = { workspace = true }
+bytes = { workspace = true }
+dotenvy = { workspace = true }
+tt-types = { path = "../../../types" }
+tt-bus = { path = "../../../bus" }
+tt-shm = { path = "../../../shm" }
+dashmap = { workspace = true }
+duckdb = {workspace = true}
+rust_decimal = {workspace = true}

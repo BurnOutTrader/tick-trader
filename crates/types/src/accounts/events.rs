@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use rkyv::{AlignedVec, Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use rust_decimal::Decimal;
 use crate::accounts::account::AccountName;
+use crate::accounts::order::OrderState;
 use crate::providers::ProviderKind;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
@@ -155,7 +156,7 @@ pub struct OrderUpdate {
     pub provider_kind: ProviderKind,
     pub provider_order_id: Option<ProviderOrderId>,
     pub client_order_id: Option<ClientOrderId>,
-    pub state_code: u8,
+    pub state: OrderState,
     pub leaves: i64,
     pub cum_qty: i64,
 
