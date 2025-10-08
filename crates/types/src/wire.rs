@@ -7,6 +7,7 @@ use ahash::HashMap;
 use chrono::{DateTime, Utc};
 use rkyv::AlignedVec;
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
+use crate::accounts::account::AccountName;
 
 /// Request to subscribe to a topic (coarse, topic-level interest)
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, PartialEq, Clone, Debug)]
@@ -297,8 +298,8 @@ pub struct BracketWire {
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, PartialEq, Clone, Debug)]
 #[archive(check_bytes)]
 pub struct PlaceOrder {
-    /// Account ID
-    pub account_id: i64,
+    /// Account name
+    pub account_name: crate::accounts::account::AccountName,
     /// Symbol key
     pub key: SymbolKey,
     /// Side (buy/sell)
@@ -326,7 +327,7 @@ pub struct PlaceOrder {
 #[archive(check_bytes)]
 pub struct CancelOrder {
     /// Account ID
-    pub account_id: i64,
+    pub account_name: AccountName,
     /// Provider order ID (if known)
     pub provider_order_id: Option<String>,
     /// Client order ID (if known)
@@ -338,7 +339,7 @@ pub struct CancelOrder {
 #[archive(check_bytes)]
 pub struct ReplaceOrder {
     /// Account ID
-    pub account_id: i64,
+    pub account_name: AccountName,
     /// Provider order ID (if known)
     pub provider_order_id: Option<String>,
     /// Client order ID (if known)
@@ -386,7 +387,7 @@ pub struct AccountSummaryWire {
     /// Account ID
     pub account_id: i64,
     /// Account name
-    pub account_name: String,
+    pub account_name: AccountName,
     /// Provider
     pub provider: ProviderKind,
 }

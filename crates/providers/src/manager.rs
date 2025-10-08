@@ -143,7 +143,7 @@ impl UpstreamManager for ProviderManager {
         for s in snaps {
             accounts.push(tt_types::wire::AccountSummaryWire {
                 account_id: s.id,
-                account_name: s.name.to_string(),
+                account_name: s.name.clone(),
                 provider,
             });
         }
