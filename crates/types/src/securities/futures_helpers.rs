@@ -156,33 +156,32 @@ pub fn parse_expiry_from_instrument(instrument: &Instrument) -> Option<NaiveDate
 /// - Accept 1–2 trailing digits for the year
 /// - Case-insensitive; preserves the original casing of the root
 pub fn extract_root(instrument: &Instrument) -> String {
-    // If instrument is in dot format (e.g., "MNQ.Z25"), return the part before the dot
     let code = instrument.to_string();
-    if let Some(dot) = code.find('.') {
-        return code[..dot].to_string();
+
+    // Fast path: dot format (e.g. "MNQ.Z25")
+    if let Some((root, _)) = code.split_once('.') {
+        return root.to_string();
     }
 
-    // Legacy format without dot: strip trailing <Mon><YY>
-    const MONTHS: &[u8] = b"FGHJKMNQUVXZ";
-    let up = code.to_ascii_uppercase();
-    let b = up.as_bytes();
+    // Fallback: compact format (e.g. "MNQZ25")
+    const MONTHS: &[u8] = b"FGHJKMNQUVXZ"; // standard CME month codes
+    let upper = code.to_ascii_uppercase();
+    let bytes = upper.as_bytes();
 
-    // find trailing 1–2 digits
-    let mut i = b.len();
-    let mut digits = 0usize;
-    while i > 0 && b[i - 1].is_ascii_digit() && digits < 2 {
+    // Scan backwards for 1–2 trailing digits
+    let mut i = bytes.len();
+    let mut digits = 0;
+    while i > 0 && bytes[i - 1].is_ascii_digit() && digits < 2 {
         i -= 1;
         digits += 1;
     }
 
-    // require at least 1 digit and a valid month letter before it
-    if digits >= 1 && i > 0 && MONTHS.contains(&b[i - 1]) {
-        // cut the letter too
-        let cut = i - 1;
-        return code[..cut].to_string();
+    // If a valid month code precedes those digits, strip it too
+    if digits > 0 && i > 0 && MONTHS.contains(&bytes[i - 1]) {
+        return code[..i - 1].to_string();
     }
 
-    // no valid month+year suffix -> return as-is
+    // Unknown or malformed — return as-is
     code
 }
 

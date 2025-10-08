@@ -33,15 +33,6 @@ impl Strategy for DataTestStrategy {
         )
         .await
         .unwrap();
-        h.subscribe_key(
-            DataTopic::Ticks,
-            SymbolKey::new(
-                Instrument::from_str("MNQ.Z25").unwrap(),
-                ProviderKind::ProjectX(ProjectXTenant::Topstep),
-            ),
-        )
-        .await
-        .unwrap();
         self.engine = Some(h);
     }
     async fn on_stop(&mut self) {

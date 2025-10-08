@@ -2,7 +2,6 @@ use crate::providers::ProviderKind;
 use crate::securities::futures_helpers::{
     activation_ns_default, extract_root, parse_expiry_from_instrument,
 };
-use crate::securities::hours::market_hours::hours_for_exchange;
 use crate::securities::symbols::{Currency, Exchange, Instrument, SecurityType, get_symbol_info};
 use chrono::{DateTime, NaiveDate, Utc};
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
@@ -23,7 +22,6 @@ pub struct FuturesContract {
     pub tick_size: Decimal,
 
     pub value_per_tick: Decimal,
-    pub decimal_accuracy: u32,
     pub quote_ccy: Currency,
 
     pub activation_date: NaiveDate,
@@ -33,7 +31,48 @@ pub struct FuturesContract {
 }
 
 impl FuturesContract {
-    pub fn from_root_with_default_models(
+    pub fn from_root_with(
+        instrument: &Instrument,
+        exchange: Exchange,
+        security_type: SecurityType,
+        provider_contract_name: String,
+        provider_id: ProviderKind,
+        value_per_tick: Decimal,
+        quote_ccy: Option<Currency>,
+        tick_size: Decimal,
+    ) -> Option<Self> {
+        let root = extract_root(instrument);
+        let is_continuous = root == instrument.to_string();
+        let (expiry, activation) = match is_continuous {
+            true => (NaiveDate::MAX, NaiveDate::MIN),
+            false => {
+                let expiry = parse_expiry_from_instrument(&instrument)?;
+                let activation_ns = activation_ns_default(&root, instrument)?;
+                let activation =
+                    DateTime::<Utc>::from_timestamp_nanos(activation_ns as i64).date_naive();
+                (expiry, activation)
+            }
+        };
+        let quote_ccy = match quote_ccy {
+            None => Currency::USD,
+            Some(c) => c
+        };
+        Some(Self {
+            root,
+            provider_contract_name,
+            provider_id,
+            instrument: instrument.clone(),
+            security_type,
+            exchange,
+            tick_size,
+            value_per_tick,
+            quote_ccy,
+            activation_date: activation,
+            expiration_date: expiry,
+            is_continuous,
+        })
+    }
+    pub fn from_root_with_serialized(
         instrument: &Instrument,
         exchange: Exchange,
         security_type: SecurityType,
@@ -41,7 +80,6 @@ impl FuturesContract {
         provider_id: ProviderKind,
     ) -> Option<Self> {
         let root = extract_root(instrument);
-        let _market_hours = hours_for_exchange(exchange);
         let is_continuous = root == instrument.to_string();
         let binding = root.clone();
         let symbol_info = get_symbol_info(binding.as_str())?;
@@ -65,7 +103,6 @@ impl FuturesContract {
             exchange,
             tick_size: symbol_info.tick_size,
             value_per_tick: symbol_info.value_per_tick,
-            decimal_accuracy: symbol_info.decimal_accuracy,
             quote_ccy: Currency::USD,
             activation_date: activation,
             expiration_date: expiry,

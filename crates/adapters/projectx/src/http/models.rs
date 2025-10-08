@@ -315,7 +315,8 @@ pub struct PlaceOrderReq {
 #[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct PlaceOrderResponse {
-    pub order_id: i64,
+    #[serde(default)]
+    pub order_id: Option<i64>,
     pub success: bool,
     #[serde(default)]
     pub error_code: Option<i32>,

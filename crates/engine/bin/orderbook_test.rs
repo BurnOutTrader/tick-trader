@@ -12,6 +12,7 @@ use tt_types::keys::SymbolKey;
 use tt_types::providers::{ProjectXTenant, ProviderKind};
 use tt_types::securities::symbols::Instrument;
 use tt_types::wire;
+use tt_types::wire::{BracketWire, OrderTypeWire};
 
 #[derive(Clone)]
 struct StrategyConfig {
@@ -23,10 +24,11 @@ struct StrategyConfig {
 struct TestLiveOrdersStrategy {
     engine: Option<EngineHandle>,
     cfg: StrategyConfig,
+    count: i32
 }
 
 impl TestLiveOrdersStrategy {
-    fn new(cfg: StrategyConfig) -> Self { Self { engine: None, cfg } }
+    fn new(cfg: StrategyConfig) -> Self { Self { engine: None, cfg, count: 105 } }
 
     // Fixed defaults: BUY 1 to avoid env dependencies
     fn side_default() -> tt_types::accounts::events::Side { tt_types::accounts::events::Side::Buy }
@@ -59,6 +61,7 @@ impl Strategy for TestLiveOrdersStrategy {
             sleep(Duration::from_millis(500)).await;
             let side = TestLiveOrdersStrategy::side_default();
             let qty = TestLiveOrdersStrategy::qty_default();
+            self.count += 1;
             info!("placing Market order: side={:?} qty={} symbol={}", side, qty, cfg2.instrument.0);
             let _ = &<Option<EngineHandle> as Clone>::clone(&self.engine).unwrap()
                 .place_order(wire::PlaceOrder {
@@ -70,11 +73,12 @@ impl Strategy for TestLiveOrdersStrategy {
                     limit_price: None,
                     stop_price: None,
                     trail_price: None,
-                    custom_tag: Some("live-test:market".to_string()),
-                    stop_loss: None,
-                    take_profit: None,
+                    custom_tag: Some(format!("live-test:market: {}", self.count)),
+                    stop_loss: Some(BracketWire {ticks: -20, r#type: OrderTypeWire::Stop}),
+                    take_profit: Some(BracketWire {ticks: 20, r#type: OrderTypeWire::Limit}),
                 })
                 .await;
+
     }
     async fn on_unsubscribe(&mut self, instrument: Instrument, data_topic: tt_engine::engine::DataTopic) { info!("Unsubscribed {} from {:?}", instrument, data_topic); }
 }

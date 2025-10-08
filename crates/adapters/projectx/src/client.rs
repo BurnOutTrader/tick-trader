@@ -1,42 +1,168 @@
 use crate::http::client::PxHttpClient;
 use crate::http::credentials::PxCredential;
 use crate::http::error::PxError;
-use crate::http::models::{RetrieveBarsReq, RetrieveBarsResponse};
+use crate::http::models::{ContractSearchResponse, RetrieveBarsReq, RetrieveBarsResponse};
 use crate::websocket::client::{PxWebSocketClient, px_format_from_instrument};
 use ahash::AHashMap;
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use std::str::FromStr;
 use std::sync::Arc;
+use dashmap::DashMap;
+use log::info;
+use rust_decimal::Decimal;
+use rust_decimal::prelude::FromPrimitive;
 use tokio::sync::RwLock;
+use tracing::error;
 use tt_bus::Router;
+use tt_types::accounts::account::{AccountName, AccountSnapShot};
 use tt_types::data::core::Candle;
 use tt_types::data::models::Resolution;
 use tt_types::history::{HistoricalRequest, HistoryEvent};
 use tt_types::keys::{AccountKey, SymbolKey, Topic};
 use tt_types::providers::{ProjectXTenant, ProviderKind};
 use tt_types::securities::futures_helpers::{extract_month_year, extract_root};
-use tt_types::securities::symbols::Exchange;
+use tt_types::securities::security::FuturesContract;
+use tt_types::securities::symbols::{get_symbol_info, Currency, Exchange, SecurityType};
 use tt_types::securities::symbols::Instrument;
 use tt_types::server_side::traits::{
     CommandAck, ConnectionState, DisconnectReason, ExecutionProvider, HistoricalDataProvider,
     MarketDataProvider, ProviderSessionSpec,
 };
-
 pub struct PXClient {
     pub provider_kind: ProviderKind,
     http: Arc<PxHttpClient>,
     websocket: Arc<PxWebSocketClient>,
     http_connection_state: Arc<RwLock<ConnectionState>>,
     account_subscriptions: Arc<RwLock<Vec<AccountKey>>>,
+    internal_accounts: Arc<DashMap<AccountName, AccountSnapShot>>,
+    pub(crate) instruments: Arc<DashMap<Instrument, FuturesContract>>,
 }
 
 impl PXClient {
     pub async fn instruments_map_snapshot(
         &self,
-    ) -> Vec<tt_types::securities::security::FuturesContract> {
-        self.http.instruments_snapshot().await
+    ) -> anyhow::Result<Vec<tt_types::securities::security::FuturesContract>> {
+        self.manual_update_instruments(false).await?;
+        let v: Vec<tt_types::securities::security::FuturesContract> =
+            self.instruments.iter().map(|r| r.value().clone()).collect();
+        Ok(v)
     }
+    pub async fn auto_update_client(&self) -> anyhow::Result<()> {
+        self.account_snapshots().await?;
+        self.manual_update_instruments(false).await?;
+        Ok(())
+    }
+
+    pub async fn manual_update_instruments(
+        &self,
+        live_only: bool,
+    ) -> anyhow::Result<()> {
+        let resp: ContractSearchResponse = self
+            .http
+            .inner
+            .list_all_contracts(live_only)
+            .await
+            .map_err(|e| anyhow::anyhow!(e))?;
+
+        let mut new = 0;
+        for inst in &resp.contracts {
+            let instrument = match Instrument::try_parse_dotted(&inst.id) {
+                Ok(instrument) => instrument,
+                Err(e) => {
+                    log::error!("Failed to parse instrument from id {}: {:?}", inst.id, e);
+                    continue;
+                }
+            };
+            if self.instruments.contains_key(&instrument) {
+                continue;
+            }
+            new += 1;
+            let symbol = extract_root(&instrument);
+            let symbol_info = match get_symbol_info(&symbol) {
+                Some(info) => info,
+                None => {
+                    log::error!("Failed to get symbol info for: {}", symbol);
+                    continue;
+                }
+            };
+            let tick_value =  match Decimal::from_f64(inst.tick_value) {
+                Some(tick) => tick,
+                None => return Err(anyhow::anyhow!("Failed to convert tick value to decimal")),
+            };
+            let tick_size = match Decimal::from_f64(inst.tick_size) {
+                Some(tick) => tick,
+                None => return Err(anyhow::anyhow!("Failed to convert tick size to decimal")),
+            };
+            let mut s = match FuturesContract::from_root_with(
+                &instrument,
+                symbol_info.exchange,
+                SecurityType::Future,
+                inst.id.clone(),
+                self.provider_kind.clone(),
+                tick_value,
+                Some(Currency::USD),
+                tick_size
+            ) {
+                None => continue,
+                Some(s) => s,
+            };
+            s.value_per_tick =
+                Decimal::from_f64(inst.tick_value).unwrap_or_else(|| symbol_info.value_per_tick);
+            s.tick_size =
+                Decimal::from_f64(inst.tick_size).unwrap_or_else(|| symbol_info.tick_size);
+            self.instruments.insert(instrument, s);
+        }
+        info!(
+            "ProjectX Manual Updated instruments Successfully, {} new instruments",
+            new
+        );
+        Ok(())
+    }
+
+    /// Initialise or refresh the account id using the api
+    pub async fn account_snapshots(
+        &self,
+    ) -> anyhow::Result<Arc<DashMap<AccountName, AccountSnapShot>>> {
+        let resp = self.http.inner.search_accounts(true).await?;
+
+        for acc in &resp.accounts {
+            let name = match AccountName::from_str(&acc.name) {
+                Ok(name) => name,
+                Err(e) => {
+                    log::error!("Failed to parse account id: {}", e);
+                    continue;
+                }
+            };
+            let snap_shot = AccountSnapShot {
+                name: name.clone(),
+                id: acc.id,
+                balance: Decimal::from_f64(acc.balance).unwrap_or_default(),
+                can_trade: acc.can_trade,
+            };
+            self.internal_accounts.insert(name, snap_shot);
+        }
+        Ok(self.internal_accounts.clone())
+    }
+
+    /// Find a correlated nautilus account id from an account name
+    pub async fn account_id(&self, account_name: AccountName) -> anyhow::Result<i64> {
+        match self.internal_accounts.get(&account_name) {
+            None => {
+                // if we don't have the account id cached, we need to refresh the list
+                let map = self.account_snapshots().await?;
+                match map.get(&account_name) {
+                    None => Err(anyhow::anyhow!(
+                        "Failed to find account id for {}, please check the account name and try again",
+                        account_name
+                    )),
+                    Some(acc) => Ok(acc.id.clone()),
+                }
+            }
+            Some(acc) => Ok(acc.id.clone()),
+        }
+    }
+
     #[allow(dead_code)]
     pub async fn new_from_session(
         kind: ProviderKind,
@@ -76,6 +202,8 @@ impl PXClient {
             websocket: Arc::new(websocket),
             http_connection_state: Arc::new(RwLock::new(ConnectionState::Disconnected)),
             account_subscriptions: Arc::new(RwLock::new(vec![])),
+            internal_accounts: Arc::new(Default::default()),
+            instruments: Arc::new(Default::default()),
         })
     }
 
@@ -127,8 +255,7 @@ impl PXClient {
                 }
             }
         }
-        self.http.manual_update_instruments(false).await?;
-        self.http.account_snapshots().await?;
+        self.auto_update_client().await?;
         Ok(())
     }
 
@@ -150,19 +277,18 @@ impl PXClient {
         // Resolve contract id and exchange
         let (contract_id, exchange) = {
             // Try the current in-memory snapshot first, then force a manual update if missing.
-            let map = self.http.instruments.read().await;
             let mut cid: Option<String> = None;
             let mut ex: Option<Exchange> = None;
-            if let Some(fc) = map.get(&req.instrument) {
+            if let Some(fc) = self.instruments.get(&req.instrument) {
+                let fc = fc.value();
                 cid = Some(fc.provider_contract_name.clone());
                 ex = Some(fc.exchange);
             }
-            drop(map);
 
             if cid.is_none() {
-                let updated = self.http.manual_update_instruments(false).await?;
-                let updated = updated.read().await;
-                if let Some(fc) = updated.get(&req.instrument) {
+                self.manual_update_instruments(false).await?;
+                if let Some(fc) = self.instruments.get(&req.instrument) {
+                    let fc = fc.value();
                     cid = Some(fc.provider_contract_name.clone());
                     ex = Some(fc.exchange);
                 }
@@ -306,6 +432,7 @@ impl MarketDataProvider for PXClient {
 
     async fn subscribe_md(&self, topic: Topic, key: &SymbolKey) -> anyhow::Result<()> {
         let instrument = parse_symbol_key(key.clone())?;
+        info!("Subscribing to: {}", instrument);
         match topic {
             Topic::Ticks => {
                 self.websocket
@@ -352,12 +479,11 @@ impl MarketDataProvider for PXClient {
         // Collect current active subscriptions from the websocket client which tracks
         // contract ids per topic internally.
         fn symbol_from_contract_id(firm: ProjectXTenant, instrument: &str) -> Option<SymbolKey> {
+            // Convert PX contract id (e.g., "CON.F.US.MNQ.Z25") to our Instrument format
             let provider = ProviderKind::ProjectX(firm);
-            let instrument = Instrument::from_str(instrument).ok()?;
-            Some(SymbolKey {
-                instrument,
-                provider,
-            })
+            let dotted = crate::websocket::client::parse_px_instrument(instrument);
+            let instrument = Instrument::try_parse_dotted(&dotted).ok()?;
+            Some(SymbolKey { instrument, provider })
         }
         let firm = match self.provider_kind {
             ProviderKind::ProjectX(firm) => firm,
@@ -396,7 +522,7 @@ impl MarketDataProvider for PXClient {
     ) -> anyhow::Result<Vec<tt_types::securities::symbols::Instrument>> {
         // Use HTTP snapshot maintained by PxHttpClient; filter by optional pattern (case-insensitive contains)
         // Snapshot returns Vec<FuturesContract>; extract their Instrument values
-        let contracts = self.instruments_map_snapshot().await;
+        let contracts = self.instruments_map_snapshot().await?;
         // Map to Instrument and optionally filter by pattern (case-insensitive)
         let mut instruments: Vec<tt_types::securities::symbols::Instrument> =
             contracts.into_iter().map(|c| c.instrument).collect();
@@ -410,11 +536,11 @@ impl MarketDataProvider for PXClient {
     async fn instruments(
         &self,
     ) -> anyhow::Result<Vec<tt_types::securities::security::FuturesContract>> {
-        Ok(self.instruments_map_snapshot().await)
+        self.instruments_map_snapshot().await
     }
 
     async fn auto_update(&self) -> anyhow::Result<()> {
-        self.http.auto_update().await
+        self.auto_update_client().await
     }
 }
 
@@ -444,7 +570,6 @@ impl ExecutionProvider for PXClient {
 
     async fn subscribe_account_events(&self, account_key: &AccountKey) -> anyhow::Result<()> {
         let id = self
-            .http
             .account_id(account_key.account_name.clone())
             .await?;
         match self.websocket.subscribe_user_account(id).await {
@@ -462,7 +587,6 @@ impl ExecutionProvider for PXClient {
 
     async fn unsubscribe_account_events(&self, account_key: &AccountKey) -> anyhow::Result<()> {
         let id = self
-            .http
             .account_id(account_key.account_name.clone())
             .await?;
         let lock = self.account_subscriptions.write().await;
@@ -472,7 +596,6 @@ impl ExecutionProvider for PXClient {
 
     async fn subscribe_positions(&self, account_key: &AccountKey) -> anyhow::Result<()> {
         let id = self
-            .http
             .account_id(account_key.account_name.clone())
             .await?;
         self.websocket.subscribe_account_positions(id).await
@@ -480,7 +603,6 @@ impl ExecutionProvider for PXClient {
 
     async fn unsubscribe_positions(&self, account_key: &AccountKey) -> anyhow::Result<()> {
         let id = self
-            .http
             .account_id(account_key.account_name.clone())
             .await?;
         self.websocket.unsubscribe_account_positions(id).await
@@ -493,7 +615,6 @@ impl ExecutionProvider for PXClient {
 
     async fn subscribe_order_updates(&self, account_key: &AccountKey) -> anyhow::Result<()> {
         let id = self
-            .http
             .account_id(account_key.account_name.clone())
             .await?;
         self.websocket.subscribe_account_orders(id).await
@@ -501,13 +622,14 @@ impl ExecutionProvider for PXClient {
 
     async fn unsubscribe_order_updates(&self, account_key: &AccountKey) -> anyhow::Result<()> {
         let id = self
-            .http
             .account_id(account_key.account_name.clone())
             .await?;
         self.websocket.unsubscribe_account_orders(id).await
     }
 
     async fn place_order(&self, spec: tt_types::wire::PlaceOrder) -> CommandAck {
+        info!("Order Received in ProjectX: {:?}", spec);
+        let s = spec.clone();
         use crate::http::models::{BracketCfg, PlaceOrderReq};
         // Map typed spec to ProjectX PlaceOrderReq
         let type_i = match spec.r#type {
@@ -542,29 +664,52 @@ impl ExecutionProvider for PXClient {
             ticks: b.ticks,
             type_: map_type(b.r#type),
         });
-        let req = PlaceOrderReq {
-            account_id: spec.account_id,
-            contract_id: spec.key.instrument.to_string(),
-            type_: type_i,
-            side: side_i,
-            size: spec.qty,
-            limit_price: spec.limit_price,
-            stop_price: spec.stop_price,
-            trail_price: spec.trail_price,
-            custom_tag: spec.custom_tag,
-            stop_loss_bracket,
-            take_profit_bracket,
-        };
-        let res = self.http.inner.place_order(&req).await;
-        match res {
-            Ok(r) => CommandAck {
-                ok: r.success,
-                message: r.error_message,
-            },
-            Err(e) => CommandAck {
+
+        if let Some(contract) = self.instruments.get(&spec.key.instrument) {
+            let contract = contract.value();
+            if let Some(account) = self.internal_accounts.get(&spec.account_name) {
+                let req = PlaceOrderReq {
+                    account_id: account.id.clone(),
+                    contract_id: contract.provider_contract_name.clone(),
+                    type_: type_i,
+                    side: side_i,
+                    size: spec.qty,
+                    limit_price: spec.limit_price,
+                    stop_price: spec.stop_price,
+                    trail_price: spec.trail_price,
+                    custom_tag: spec.custom_tag,
+                    stop_loss_bracket,
+                    take_profit_bracket,
+                };
+                info!("place order request: {:?}", req);
+                let res = self.http.inner.place_order(&req).await;
+                return match res {
+                    Ok(r) => {
+                        info!("PlaceOrder Success: {:?}", r);
+                        CommandAck {
+                            ok: r.success,
+                            message: r.error_message,
+                        }
+                    },
+                    Err(e) => {
+                        info!("PlaceOrder Error: {:?}", e);
+                        CommandAck {
+                            ok: false,
+                            message: Some(format!("place_order error: {}", e)),
+                        }
+                    },
+                }
+            }
+            error!("PlaceOrder Error No Instrument: {:?}", s);
+            return CommandAck {
                 ok: false,
-                message: Some(format!("place_order error: {}", e)),
-            },
+                message: Some(format!("cancel_order error: No instrument found on {:?} for : {:?}", self.provider_kind, spec.key.instrument)),
+            }
+        }
+        error!("PlaceOrder Error No account: {:?}", s);
+        CommandAck {
+            ok: false,
+            message: Some(format!("cancel_order error: No account found on {:?} client for : {}", self.provider_kind, spec.account_name)),
         }
     }
 
@@ -582,20 +727,26 @@ impl ExecutionProvider for PXClient {
                 message: Some("invalid provider_order_id; expected numeric string".to_string()),
             };
         };
-        let res = self
-            .http
-            .inner
-            .cancel_order(spec.account_id, order_id)
-            .await;
-        match res {
-            Ok(r) => CommandAck {
-                ok: r.success,
-                message: r.error_message,
-            },
-            Err(e) => CommandAck {
-                ok: false,
-                message: Some(format!("cancel_order error: {}", e)),
-            },
+        if let Some(account) = self.internal_accounts.get(&spec.account_name) {
+            let res = self
+                .http
+                .inner
+                .cancel_order(account.id, order_id)
+                .await;
+            return match res {
+                Ok(r) => CommandAck {
+                    ok: r.success,
+                    message: r.error_message,
+                },
+                Err(e) => CommandAck {
+                    ok: false,
+                    message: Some(format!("cancel_order error: {}", e)),
+                },
+            }
+        }
+        CommandAck {
+            ok: false,
+            message: Some(format!("cancel_order error: No account found on {:?} client for : {}", self.provider_kind, spec.account_name)),
         }
     }
 
@@ -613,29 +764,35 @@ impl ExecutionProvider for PXClient {
                 message: Some("invalid provider_order_id; expected numeric string".to_string()),
             };
         };
-        let req = ModifyOrderReq {
-            account_id: spec.account_id,
-            order_id,
-            size: spec.new_qty,
-            limit_price: spec.new_limit_price,
-            stop_price: spec.new_stop_price,
-            trail_price: spec.new_trail_price,
-        };
-        let res = self.http.inner.modify_order(&req).await;
-        match res {
-            Ok(r) => CommandAck {
-                ok: r.success,
-                message: r.error_message,
-            },
-            Err(e) => CommandAck {
-                ok: false,
-                message: Some(format!("modify_order error: {}", e)),
-            },
+        if let Some(account) = self.internal_accounts.get(&spec.account_name) {
+            let req = ModifyOrderReq {
+                account_id: account.id.clone(),
+                order_id,
+                size: spec.new_qty,
+                limit_price: spec.new_limit_price,
+                stop_price: spec.new_stop_price,
+                trail_price: spec.new_trail_price,
+            };
+            let res = self.http.inner.modify_order(&req).await;
+            return match res {
+                Ok(r) => CommandAck {
+                    ok: r.success,
+                    message: r.error_message,
+                },
+                Err(e) => CommandAck {
+                    ok: false,
+                    message: Some(format!("modify_order error: {}", e)),
+                },
+            }
+        }
+        CommandAck {
+            ok: false,
+            message: Some(format!("cancel_order error: No account found on {:?} client for : {}", self.provider_kind, spec.account_name)),
         }
     }
 
     async fn auto_update(&self) -> anyhow::Result<()> {
-        self.http.auto_update().await
+        self.auto_update_client().await
     }
 }
 #[async_trait::async_trait]
@@ -685,11 +842,15 @@ impl HistoricalDataProvider for PXClient {
         instrument: Instrument,
         _topic: Topic,
     ) -> anyhow::Result<Option<DateTime<Utc>>> {
-        self.http.manual_update_instruments(false).await?;
-        // `instruments_snapshot` returns Vec<FuturesContract>, so search for the matching instrument.
-        let contracts = self.http.instruments_snapshot().await;
-        if let Some(contract) = contracts.iter().find(|c| c.instrument == instrument) {
-            let dt = NaiveDateTime::from(contract.activation_date);
+        self.manual_update_instruments(false).await?;
+        // Look for the matching instrument in the DashMap without taking async locks.
+        if let Some(c) = self
+            .instruments
+            .iter()
+            .find(|r| r.value().instrument == instrument)
+            .map(|r| r.value().activation_date)
+        {
+            let dt = NaiveDateTime::from(c);
             let utc_time = DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc);
             return Ok(Some(utc_time));
         }
