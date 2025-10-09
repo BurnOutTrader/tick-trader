@@ -180,34 +180,34 @@ impl<P: MarketDataProvider + 'static> Engine<P> {
 #[async_trait]
 pub trait Strategy: Send + Sync + 'static {
 
-    async fn on_start(&mut self, _h: EngineHandle) {}
+    async fn on_start(&mut self, _h: EngineHandle);
 
-    async fn on_stop(&mut self) {}
+    async fn on_stop(&mut self);
 
-    async fn on_tick(&mut self, _t: Tick, provider_kind: ProviderKind) {}
+    async fn on_tick(&mut self, _t: Tick, provider_kind: ProviderKind);
 
-    async fn on_quote(&mut self, _q: Bbo, provider_kind: ProviderKind) {}
+    async fn on_quote(&mut self, _q: Bbo, provider_kind: ProviderKind);
 
-    async fn on_bar(&mut self, _b: Candle, provider_kind: ProviderKind) {}
+    async fn on_bar(&mut self, _b: Candle, provider_kind: ProviderKind);
 
-    async fn on_mbp10(&mut self, _d: Mbp10, provider_kind: ProviderKind) {}
+    async fn on_mbp10(&mut self, _d: Mbp10, provider_kind: ProviderKind);
 
-    async fn on_orders_batch(&mut self, _b: OrdersBatch) {}
+    async fn on_orders_batch(&mut self, _b: OrdersBatch);
 
-    async fn on_positions_batch(&mut self, _b: PositionsBatch) {}
+    async fn on_positions_batch(&mut self, _b: PositionsBatch);
 
     /// Receive snapshots of account state, these are messages, not mutable objects.
-    async fn on_account_delta(&mut self, _accounts: Vec<AccountDelta>) {}
+    async fn on_account_delta(&mut self, _accounts: Vec<AccountDelta>);
 
-    async fn on_trades_closed(&mut self, _trades: Vec<Trade>) {}
+    async fn on_trades_closed(&mut self, _trades: Vec<Trade>);
 
-    async fn on_subscribe(&mut self, _instrument: Instrument, _data_topic: DataTopic, _success: bool) {}
+    async fn on_subscribe(&mut self, _instrument: Instrument, _data_topic: DataTopic, _success: bool);
 
-    async fn on_unsubscribe(&mut self, _instrument: Instrument, _data_topic: DataTopic) {}
+    async fn on_unsubscribe(&mut self, _instrument: Instrument, _data_topic: DataTopic);
 
     /// Optional: declare which accounts this strategy wants the engine to subscribe to
     /// (orders, positions, and account events) at engine start. Default: none.
-    fn accounts(&self) -> Vec<AccountKey> { vec![] }
+    fn accounts(&self) -> Vec<AccountKey>;
 }
 
 #[derive(Clone, Debug, Copy)]

@@ -12,7 +12,7 @@ use tt_types::keys::{AccountKey, SymbolKey};
 use tt_types::providers::{ProjectXTenant, ProviderKind};
 use tt_types::securities::symbols::Instrument;
 use tt_types::wire;
-use tt_types::wire::{BracketWire, OrderTypeWire};
+use tt_types::wire::{BracketWire, OrderTypeWire, Trade};
 
 #[derive(Clone)]
 struct StrategyConfig {
@@ -83,6 +83,11 @@ impl Strategy for TestLiveOrdersStrategy {
             );
         }
     }
+
+    async fn on_trades_closed(&mut self, _trades: Vec<Trade>) {
+        todo!()
+    }
+
     async fn on_subscribe(
         &mut self,
         instrument: Instrument,
