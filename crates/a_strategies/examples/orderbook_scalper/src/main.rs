@@ -130,7 +130,7 @@ struct StrategyConfig {
     instrument: Instrument,
     provider: ProviderKind,
     account_name: AccountName,
-    max_pos_abs: i64,
+    max_pos_abs: Decimal,
 }
 
 // Dev plan
@@ -143,7 +143,7 @@ struct OrderBookStrategy {
     engine: Option<EngineHandle>,
     book: OrderBook,
     cfg: Option<StrategyConfig>,
-    net_pos: i64,
+    net_pos: Decimal,
     last_manage: Option<Instant>,
     manage_interval: Duration,
     // New: adaptive management state
@@ -179,7 +179,7 @@ impl OrderBookStrategy {
             engine: None,
             book: OrderBook::default(),
             cfg: Some(cfg),
-            net_pos: 0,
+            net_pos: Decimal::ZERO,
             last_manage: None,
             manage_interval: Duration::from_millis(100),
             last_desired: None,
@@ -357,10 +357,10 @@ impl OrderBookStrategy {
         if self.net_pos <= -max_pos_abs {
             want_ask = false;
         }
-        if self.net_pos > 0 {
+        if self.net_pos > Decimal::ZERO {
             want_bid = false;
         }
-        if self.net_pos < 0 {
+        if self.net_pos < Decimal::ZERO {
             want_ask = false;
         }
 
@@ -384,7 +384,7 @@ impl OrderBookStrategy {
         // - Otherwise, let winners run by not placing exit orders with the prevailing trend.
         let mom_up = self.trend_mom > Decimal::ZERO;
         let mom_down = self.trend_mom < Decimal::ZERO;
-        let offer_threshold: i64 = 100;
+        let offer_threshold: Decimal = Decimal::from(100);
         if self.net_pos > offer_threshold && mom_up {
             // Long and momentum up: place offers to reduce risk into strength
             want_ask = true;
@@ -393,9 +393,9 @@ impl OrderBookStrategy {
             want_bid = true;
         } else {
             // Default behavior: let winners run (avoid placing exits with the trend)
-            if mom_up && self.net_pos > 0 {
+            if mom_up && self.net_pos > Decimal::ZERO {
                 want_ask = false;
-            } else if mom_down && self.net_pos < 0 {
+            } else if mom_down && self.net_pos < Decimal::ZERO {
                 want_bid = false;
             }
         }
@@ -421,7 +421,7 @@ impl OrderBookStrategy {
 
         // If both sides were disabled by filters, fall back to the side of least inventory exposure
         if !want_bid && !want_ask {
-            if self.net_pos >= 0 {
+            if self.net_pos >= Decimal::ZERO {
                 want_bid = true;
             } else {
                 want_ask = true;
@@ -536,7 +536,7 @@ impl Strategy for OrderBookStrategy {
                 instrument,
                 provider,
                 account_name: AccountName::from_str("UNKNOWN").unwrap(),
-                max_pos_abs: 150,
+                max_pos_abs: Decimal::from(150),
             });
         }
 
@@ -551,15 +551,15 @@ impl Strategy for OrderBookStrategy {
     async fn on_stop(&mut self) {
         info!("strategy stop");
     }
-    async fn on_tick(&mut self, t: tt_types::data::core::Tick) {
+    async fn on_tick(&mut self, t: tt_types::data::core::Tick, provider_kind: ProviderKind) {
         println!("{:?}", t)
     }
-    async fn on_quote(&mut self, q: tt_types::data::core::Bbo) {
+    async fn on_quote(&mut self, q: tt_types::data::core::Bbo, provider_kind: ProviderKind) {
         println!("{:?}", q);
     }
-    async fn on_bar(&mut self, _b: tt_types::data::core::Candle) {}
+    async fn on_bar(&mut self, _b: tt_types::data::core::Candle,provider_kind: ProviderKind) {}
 
-    async fn on_mbp10(&mut self, d: Mbp10) {
+    async fn on_mbp10(&mut self, d: Mbp10, provider_kind: ProviderKind) {
         let ob = &mut self.book;
         if let Some(ref book) = d.book {
             ob.seed_from_snapshot(book);
@@ -606,7 +606,7 @@ impl Strategy for OrderBookStrategy {
     async fn on_positions_batch(&mut self, b: wire::PositionsBatch) {
         if let Some(cfg) = &self.cfg {
             if let Some(p) = b.positions.iter().find(|p| p.instrument == cfg.instrument) {
-                self.net_pos = p.net_qty_after;
+                self.net_pos = p.net_qty;
             }
         }
         for pos in b.positions {
@@ -684,7 +684,7 @@ async fn main() -> anyhow::Result<()> {
         instrument: instrument.clone(),
         provider,
         account_name: account_name.clone(),
-        max_pos_abs: 150,
+        max_pos_abs: Decimal::from(150),
     }, account_name.clone())));
 
     // Start engine to obtain a sub_id and begin processing responses

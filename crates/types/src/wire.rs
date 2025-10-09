@@ -1,4 +1,3 @@
-use std::fmt::Display;
 use crate::accounts::account::AccountName;
 use crate::data::core::{Bbo, Candle, Tick};
 use crate::keys::{SymbolKey, Topic};
@@ -94,6 +93,8 @@ pub struct TickBatch {
     pub seq: u64,
     /// Ticks in this batch
     pub ticks: Vec<Tick>,
+    ///The provider of the data
+    pub provider_kind: ProviderKind,
 }
 
 /// Batch of quotes (BBOs) for a topic/sequence
@@ -106,6 +107,8 @@ pub struct QuoteBatch {
     pub seq: u64,
     /// Quotes in this batch
     pub quotes: Vec<Bbo>,
+    ///The provider of the data
+    pub provider_kind: ProviderKind,
 }
 
 /// Batch of OHLC bars for a topic/sequence
@@ -118,6 +121,8 @@ pub struct BarBatch {
     pub seq: u64,
     /// Bars in this batch
     pub bars: Vec<Candle>,
+    ///The provider of the data
+    pub provider_kind: ProviderKind,
 }
 
 /// Batch of order book snapshots/updates
@@ -129,6 +134,8 @@ pub struct MBP10Batch {
     /// Sequence number (monotonic per topic)
     pub seq: u64,
     pub event: crate::data::mbp10::Mbp10,
+    ///The provider of the data
+    pub provider_kind: ProviderKind,
 }
 
 /// Vendor-specific binary data batch
@@ -490,9 +497,9 @@ pub enum Response {
         instrument: Instrument,
     },
     // Single items (for completeness; bus generally batches)
-    Tick(Tick),
-    Quote(Bbo),
-    Bar(Candle),
+    Tick{ tick: Tick, provider_kind: ProviderKind },
+    Quote { bbo: Bbo, provider_kind: ProviderKind },
+    Bar{ candle: Candle, provider_kind: ProviderKind },
 }
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, PartialEq, Clone, Debug)]
