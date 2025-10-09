@@ -24,6 +24,7 @@ use tt_types::accounts::account::AccountName;
 use tt_types::accounts::events::{
     AccountDelta, ClientOrderId, OrderUpdate, PositionDelta, ProviderOrderId, Side,
 };
+use tt_types::accounts::events::PositionSide;
 use tt_types::Guid;
 use tt_types::accounts::order::OrderState;
 use tt_types::data::core::Tick;
@@ -1120,7 +1121,7 @@ impl PxWebSocketClient {
                                 }
                             }
                             // User hub events
-                            "GatewayUserAccount" => {
+                            "Gate" => {
                                 // SignalR user event payloads come in the 'arguments' array and may be wrapped as {action, data}.
                                 let args_opt = val.get("arguments").and_then(|a| a.as_array());
                                 if let Some(args) = args_opt {
@@ -1179,7 +1180,7 @@ impl PxWebSocketClient {
                                             equity: balance,
                                             day_realized_pnl: dec!(0),
                                             open_pnl: dec!(0),
-                                            ts_ns: Utc::now(),
+                                            time: Utc::now(),
                                             can_trade: account.can_trade,
                                         };
                                         let batch = AccountDeltaBatch {
@@ -1264,7 +1265,7 @@ impl PxWebSocketClient {
                                             leaves,
                                             cum_qty,
                                             avg_fill_px: avg_px,
-                                            ts_ns: ts_dt,
+                                            time: ts_dt,
                                         };
                                         let batch = OrdersBatch {
                                             topic: tt_types::keys::Topic::Orders,
@@ -1329,24 +1330,29 @@ impl PxWebSocketClient {
                                         };
                                         self.positions
                                             .insert(instrument_id.clone(), position.clone());
-                                        let after = if position.r#type
+                                        let (net, side) = if position.r#type
                                             == models::PositionType::Short as i32
                                         {
-                                            -position.size
+                                            (-Decimal::from(position.size), PositionSide::Short)
                                         } else {
-                                            position.size
+                                            (Decimal::from(position.size), PositionSide::Long)
                                         };
                                         let ts_ns =
                                             DateTime::<Utc>::from_str(&position.creation_timestamp)
                                                 .unwrap_or_else(|_| Utc::now());
+
+                                        let average_price = match Decimal::from_f64(position.average_price) {
+                                            None => return,
+                                            Some(p) => p
+                                        };
                                         let pd = PositionDelta {
                                             provider_kind: self.provider_kind,
                                             instrument: instrument_id,
-                                            net_qty_before: 0,
-                                            net_qty_after: after,
-                                            realized_delta: dec!(0),
+                                            net_qty: net,
+                                            average_price,
                                             open_pnl: dec!(0),
-                                            ts_ns,
+                                            time: ts_ns,
+                                            side,
                                         };
                                         let batch = PositionsBatch {
                                             topic: tt_types::keys::Topic::Positions,

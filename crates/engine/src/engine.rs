@@ -9,11 +9,14 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
+use rust_decimal::Decimal;
+use rust_decimal::prelude::Zero;
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tracing::info;
 use tt_bus::{ClientMessageBus, ClientSubId};
 use tt_database::init::init_db;
-use tt_types::accounts::events::AccountDelta;
+use tt_types::accounts::account::AccountName;
+use tt_types::accounts::events::{AccountDelta, PositionSide};
 use tt_types::data::core::{Bbo, Candle, Tick};
 use tt_types::data::mbp10::Mbp10;
 use tt_types::keys::{AccountKey, SymbolKey, Topic};
@@ -447,22 +450,29 @@ impl EngineHandle {
                 .cloned()
         })
     }
-    pub async fn is_long(&self, instr: &Instrument) -> bool {
+    pub async fn position_state(&self, account_name: &AccountName, instr: &Instrument) -> PositionSide {
+        todo!()
+    }
+    pub async fn position_state_delta(&self, instr: &Instrument) -> PositionSide {
+        todo!()
+    }
+
+    pub async fn is_long_delta(&self, instr: &Instrument) -> bool {
         self.find_position_delta(instr)
             .await
-            .map(|p| p.net_qty_after > 0)
+            .map(|p| p.net_qty > Decimal::ZERO)
             .unwrap_or(false)
     }
-    pub async fn is_short(&self, instr: &Instrument) -> bool {
+    pub async fn is_short_delta(&self, instr: &Instrument) -> bool {
         self.find_position_delta(instr)
             .await
-            .map(|p| p.net_qty_after < 0)
+            .map(|p| p.net_qty < Decimal::ZERO)
             .unwrap_or(false)
     }
-    pub async fn is_flat(&self, instr: &Instrument) -> bool {
+    pub async fn is_flat_delta(&self, instr: &Instrument) -> bool {
         self.find_position_delta(instr)
             .await
-            .map(|p| p.net_qty_after == 0)
+            .map(|p| p.net_qty == Decimal::ZERO)
             .unwrap_or(true)
     }
 
@@ -849,7 +859,7 @@ impl EngineRuntime {
         let st = self.state.lock().await;
         if let Some(pb) = &st.last_positions {
             if let Some(p) = pb.positions.iter().find(|p| &p.instrument == instrument) {
-                return p.net_qty_after > 0;
+                return p.net_qty > Decimal::zero();
             }
         }
         false
@@ -862,7 +872,7 @@ impl EngineRuntime {
         let st = self.state.lock().await;
         if let Some(pb) = &st.last_positions {
             if let Some(p) = pb.positions.iter().find(|p| &p.instrument == instrument) {
-                return p.net_qty_after < 0;
+                return p.net_qty > Decimal::zero();
             }
         }
         false
@@ -875,7 +885,7 @@ impl EngineRuntime {
         let st = self.state.lock().await;
         if let Some(pb) = &st.last_positions {
             if let Some(p) = pb.positions.iter().find(|p| &p.instrument == instrument) {
-                return p.net_qty_after == 0;
+                return p.net_qty > Decimal::zero();
             }
         }
         true

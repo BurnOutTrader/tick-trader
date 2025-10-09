@@ -162,22 +162,24 @@ pub struct OrderUpdate {
 
     pub avg_fill_px: Decimal,
 
-    pub ts_ns: DateTime<Utc>,
+    pub time: DateTime<Utc>,
 }
-
+#[derive(Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize)]
+#[archive(check_bytes)]
+pub enum PositionSide {
+    Long,
+    Short
+}
 #[derive(Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize)]
 #[archive(check_bytes)]
 pub struct PositionDelta {
     pub instrument: Instrument,
     pub provider_kind: ProviderKind,
-    pub net_qty_before: i64,
-    pub net_qty_after: i64,
-
-    pub realized_delta: Decimal,
-
+    pub net_qty: Decimal,
+    pub average_price: Decimal,
     pub open_pnl: Decimal,
-
-    pub ts_ns: DateTime<Utc>,
+    pub time: DateTime<Utc>,
+    pub side: PositionSide
 }
 
 #[derive(Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize)]
@@ -192,7 +194,7 @@ pub struct AccountDelta {
 
     pub open_pnl: Decimal,
 
-    pub ts_ns: DateTime<Utc>,
+    pub time: DateTime<Utc>,
 
     pub can_trade: bool,
 }
