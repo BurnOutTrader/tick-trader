@@ -12,7 +12,7 @@ use tt_types::keys::{AccountKey, SymbolKey};
 use tt_types::providers::{ProjectXTenant, ProviderKind};
 use tt_types::securities::symbols::Instrument;
 use tt_types::wire;
-use tt_types::wire::{BracketWire, OrderTypeWire, Trade};
+use tt_types::wire::{BracketWire, OrderType, Trade};
 
 #[derive(Clone)]
 struct StrategyConfig {
@@ -60,10 +60,10 @@ impl Strategy for TestLiveOrdersStrategy {
         info!("test strategy stop");
     }
 
-    async fn on_tick(&mut self, _t: tt_types::data::core::Tick, provider_kind: ProviderKind) {}
-    async fn on_quote(&mut self, _q: tt_types::data::core::Bbo, provider_kind: ProviderKind) {}
-    async fn on_bar(&mut self, _b: tt_types::data::core::Candle, provider_kind: ProviderKind) {}
-    async fn on_mbp10(&mut self, _d: tt_types::data::mbp10::Mbp10, provider_kind: ProviderKind) {}
+    async fn on_tick(&mut self, _t: tt_types::data::core::Tick, _provider_kind: ProviderKind) {}
+    async fn on_quote(&mut self, _q: tt_types::data::core::Bbo, _provider_kind: ProviderKind) {}
+    async fn on_bar(&mut self, _b: tt_types::data::core::Candle, _provider_kind: ProviderKind) {}
+    async fn on_mbp10(&mut self, _d: tt_types::data::mbp10::Mbp10, _provider_kind: ProviderKind) {}
 
     async fn on_orders_batch(&mut self, b: wire::OrdersBatch) {
         for order in b.orders {
@@ -108,28 +108,27 @@ impl Strategy for TestLiveOrdersStrategy {
             "placing Market order: side={:?} qty={} symbol={}",
             side, qty, cfg2.instrument.0
         );
-        let _ = &<Option<EngineHandle> as Clone>::clone(&self.engine)
-            .unwrap()
-            .place_order(wire::PlaceOrder {
-                account_name: cfg2.account_name.clone(),
-                key: cfg2.key.clone(),
-                side,
-                qty,
-                r#type: wire::OrderTypeWire::Market,
-                limit_price: None,
-                stop_price: None,
-                trail_price: None,
-                custom_tag: None,
-                stop_loss: Some(BracketWire {
-                    ticks: -20,
-                    r#type: OrderTypeWire::Stop,
-                }),
-                take_profit: Some(BracketWire {
-                    ticks: 20,
-                    r#type: OrderTypeWire::Limit,
-                }),
-            })
-            .await;
+        let _ = &<Option<EngineHandle> as Clone>::clone(&self.engine).unwrap();
+        /*.place_order(wire::PlaceOrder {
+            account_name: cfg2.account_name.clone(),
+            key: cfg2.key.clone(),
+            side,
+            qty,
+            r#type: wire::OrderType::Market,
+            limit_price: None,
+            stop_price: None,
+            trail_price: None,
+            custom_tag: None,
+            stop_loss: Some(BracketWire {
+                ticks: -20,
+                r#type: OrderType::Stop,
+            }),
+            take_profit: Some(BracketWire {
+                ticks: 20,
+                r#type: OrderType::Limit,
+            }),
+        })
+        .await;*/
     }
     async fn on_unsubscribe(
         &mut self,

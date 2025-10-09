@@ -1,11 +1,12 @@
+use crate::accounts::account::AccountName;
+use crate::accounts::order::OrderState;
+use crate::engine_tag::EngineUuid;
+use crate::providers::ProviderKind;
 use crate::securities::symbols::Instrument;
 use crate::wire::Bytes;
 use chrono::{DateTime, Utc};
 use rkyv::{AlignedVec, Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use rust_decimal::Decimal;
-use crate::accounts::account::AccountName;
-use crate::accounts::order::OrderState;
-use crate::providers::ProviderKind;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
 #[archive(check_bytes)]
@@ -13,23 +14,23 @@ pub struct ProviderOrderId(pub String);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
 #[archive(check_bytes)]
-pub struct ClientOrderId(pub crate::Guid);
+pub struct ClientOrderId(EngineUuid);
 
 impl ClientOrderId {
     #[inline]
     pub fn new() -> Self {
-        Self(crate::Guid::new_v4())
+        Self(EngineUuid::new())
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
 #[archive(check_bytes)]
-pub struct ExecId(pub crate::Guid);
+pub struct ExecId(EngineUuid);
 
 impl ExecId {
     #[inline]
     pub fn new() -> Self {
-        Self(crate::Guid::new_v4())
+        Self(EngineUuid::new())
     }
 }
 
@@ -55,7 +56,7 @@ impl Side {
 pub struct OrderEvent {
     pub kind: OrderEventKind,
     pub provider_order_id: Option<ProviderOrderId>,
-    pub client_order_id: Option<ClientOrderId>,
+    pub client_order_id: ClientOrderId,
     pub provider_seq: Option<u64>,
     pub leaves_qty: Option<i64>,
     pub ts_ns: DateTime<Utc>,
@@ -84,7 +85,7 @@ pub enum OrderEventKind {
 pub struct ExecutionEvent {
     pub exec_id: ExecId,
     pub provider_order_id: Option<ProviderOrderId>,
-    pub client_order_id: Option<ClientOrderId>,
+    pub client_order_id: ClientOrderId,
     pub side: Side,
     pub qty: i64,
     pub price: Decimal,
@@ -168,7 +169,7 @@ pub struct OrderUpdate {
 #[archive(check_bytes)]
 pub enum PositionSide {
     Long,
-    Short
+    Short,
 }
 #[derive(Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize)]
 #[archive(check_bytes)]
@@ -179,7 +180,7 @@ pub struct PositionDelta {
     pub average_price: Decimal,
     pub open_pnl: Decimal,
     pub time: DateTime<Utc>,
-    pub side: PositionSide
+    pub side: PositionSide,
 }
 
 #[derive(Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize)]

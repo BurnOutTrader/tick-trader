@@ -1,16 +1,16 @@
 use crate::models::{
     BarRec, DepthDeltaRec, EngineConfig, InterestEntry, StreamKey, StreamMetrics, SubState, TickRec,
 };
+use crate::portfolio::PortfolioManager;
 use async_trait::async_trait;
 use dashmap::DashMap;
 use duckdb::Connection;
+use rust_decimal::prelude::ToPrimitive;
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
-use rust_decimal::Decimal;
-use rust_decimal::prelude::Zero;
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tracing::info;
 use tt_bus::{ClientMessageBus, ClientSubId};
@@ -19,13 +19,16 @@ use tt_types::accounts::account::AccountName;
 use tt_types::accounts::events::{AccountDelta, PositionSide};
 use tt_types::data::core::{Bbo, Candle, Tick};
 use tt_types::data::mbp10::Mbp10;
+use tt_types::engine_tag::EngineUuid;
 use tt_types::keys::{AccountKey, SymbolKey, Topic};
 use tt_types::providers::ProviderKind;
 use tt_types::securities::security::FuturesContract;
 use tt_types::securities::symbols::Instrument;
 use tt_types::server_side::traits::{MarketDataProvider, ProbeStatus, ProviderParams};
-use tt_types::wire::{AccountDeltaBatch, BarBatch, Kick, OrdersBatch, PositionsBatch, QuoteBatch, Request, Response, TickBatch, Trade};
-use crate::portfolio::PortfolioManager;
+use tt_types::wire::{
+    AccountDeltaBatch, BarBatch, ENGINE_TAG_PREFIX, Kick, OrdersBatch, PositionsBatch, QuoteBatch,
+    Request, Response, TickBatch, Trade,
+};
 
 #[derive(Default)]
 pub struct Caches {
@@ -179,7 +182,6 @@ impl<P: MarketDataProvider + 'static> Engine<P> {
 
 #[async_trait]
 pub trait Strategy: Send + Sync + 'static {
-
     async fn on_start(&mut self, _h: EngineHandle);
 
     async fn on_stop(&mut self);
@@ -201,7 +203,12 @@ pub trait Strategy: Send + Sync + 'static {
 
     async fn on_trades_closed(&mut self, _trades: Vec<Trade>);
 
-    async fn on_subscribe(&mut self, _instrument: Instrument, _data_topic: DataTopic, _success: bool);
+    async fn on_subscribe(
+        &mut self,
+        _instrument: Instrument,
+        _data_topic: DataTopic,
+        _success: bool,
+    );
 
     async fn on_unsubscribe(&mut self, _instrument: Instrument, _data_topic: DataTopic);
 
@@ -268,7 +275,7 @@ pub struct EngineRuntime {
     watching_providers: Arc<DashMap<ProviderKind, ()>>,
     // Active SHM polling tasks keyed by (topic,key)
     shm_tasks: Arc<DashMap<(Topic, SymbolKey), tokio::task::JoinHandle<()>>>,
-    portfolio_manager: Arc<PortfolioManager>
+    portfolio_manager: Arc<PortfolioManager>,
 }
 
 // Shared view used by EngineHandle
@@ -280,7 +287,7 @@ pub(crate) struct EngineRuntimeShared {
     securities_by_provider: Arc<DashMap<ProviderKind, Vec<Instrument>>>,
     watching_providers: Arc<DashMap<ProviderKind, ()>>,
     state: Arc<Mutex<EngineAccountsState>>,
-    portfolio_manager: Arc<PortfolioManager>
+    portfolio_manager: Arc<PortfolioManager>,
 }
 
 #[derive(Clone)]
@@ -322,7 +329,11 @@ impl EngineHandle {
         Ok(())
     }
 
-    pub async fn unsubscribe_key(&self, data_topic: DataTopic, key: SymbolKey) -> anyhow::Result<()> {
+    pub async fn unsubscribe_key(
+        &self,
+        data_topic: DataTopic,
+        key: SymbolKey,
+    ) -> anyhow::Result<()> {
         let topic = data_topic.to_topic_or_err()?;
         let _ = self
             .inner
@@ -374,18 +385,6 @@ impl EngineHandle {
         }
     }
 
-    // Orders
-    pub async fn place_order(&self, spec: tt_types::wire::PlaceOrder) -> anyhow::Result<()> {
-        let _ = self
-            .inner
-            .bus
-            .handle_request(
-                &self.inner.sub_id,
-                tt_types::wire::Request::PlaceOrder(spec),
-            )
-            .await?;
-        Ok(())
-    }
     pub async fn cancel_order(&self, spec: tt_types::wire::CancelOrder) -> anyhow::Result<()> {
         let _ = self
             .inner
@@ -407,6 +406,81 @@ impl EngineHandle {
             )
             .await?;
         Ok(())
+    }
+
+    async fn place_order(&self, spec: tt_types::wire::PlaceOrder) -> anyhow::Result<()> {
+        let _ = self
+            .inner
+            .bus
+            .handle_request(
+                &self.inner.sub_id,
+                tt_types::wire::Request::PlaceOrder(spec),
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Append an engine tag (e.g., to broker text or client_order_id)
+    pub fn append_engine_tag(existing: Option<String>, tag: EngineUuid) -> String {
+        let id_str = tag.to_hex32();
+        match existing {
+            Some(mut t) => {
+                t.push_str(ENGINE_TAG_PREFIX);
+                t.push_str(&id_str);
+                t
+            }
+            None => format!("{}{}", ENGINE_TAG_PREFIX, id_str),
+        }
+    }
+
+    /// Extract the engine tag and any trailing text.
+    /// Returns `(EngineTag, rest_after_id)`
+    pub fn extract_engine_tag(s: &str) -> Option<(EngineUuid, Option<String>)> {
+        let pos = s.find(ENGINE_TAG_PREFIX)?;
+        let start = pos + ENGINE_TAG_PREFIX.len();
+        let after = &s[start..];
+
+        // Split at first delimiter
+        let mut it = after.splitn(2, &[' ', ';', '+'][..]);
+        let id_str = it.next().unwrap();
+        let rest = it.next().map(|t| t.to_string());
+
+        let tag = EngineUuid::from_hex32(id_str)?;
+        Some((tag, rest))
+    }
+
+    /// Convenience: construct a `PlaceOrder` from parameters and send it.
+    /// This keeps strategies from having to allocate and own a full `PlaceOrder` struct.
+    /// Do not use +oId: as part of your order's custom tag, it is reserved for internal order management
+    pub async fn place_order_with(
+        &self,
+        account_name: tt_types::accounts::account::AccountName,
+        key: tt_types::keys::SymbolKey,
+        side: tt_types::accounts::events::Side,
+        qty: i64,
+        r#type: tt_types::wire::OrderType,
+        limit_price: Option<rust_decimal::Decimal>,
+        stop_price: Option<rust_decimal::Decimal>,
+        trail_price: Option<rust_decimal::Decimal>,
+        custom_tag: Option<String>,
+        stop_loss: Option<tt_types::wire::BracketWire>,
+        take_profit: Option<tt_types::wire::BracketWire>,
+    ) -> anyhow::Result<()> {
+        // Convert Decimal prices to f64 for the wire type (use ToPrimitive::to_f64)
+        let spec = tt_types::wire::PlaceOrder {
+            account_name,
+            key,
+            side,
+            qty,
+            r#type,
+            limit_price: limit_price.and_then(|d| d.to_f64()),
+            stop_price: stop_price.and_then(|d| d.to_f64()),
+            trail_price: trail_price.and_then(|d| d.to_f64()),
+            custom_tag,
+            stop_loss,
+            take_profit,
+        };
+        self.place_order(spec).await
     }
 
     // Accounts/positions (cached snapshots)
@@ -450,7 +524,11 @@ impl EngineHandle {
                 .cloned()
         })
     }
-    pub async fn position_state(&self, account_name: &AccountName, instr: &Instrument) -> PositionSide {
+    pub async fn position_state(
+        &self,
+        _account_name: &AccountName,
+        _instr: &Instrument,
+    ) -> PositionSide {
         todo!()
     }
     pub async fn position_state_delta(&self, instr: &Instrument) -> PositionSide {
@@ -460,19 +538,19 @@ impl EngineHandle {
     pub async fn is_long_delta(&self, instr: &Instrument) -> bool {
         self.find_position_delta(instr)
             .await
-            .map(|p| p.net_qty > Decimal::ZERO)
+            .map(|p| p.net_qty > rust_decimal::Decimal::ZERO)
             .unwrap_or(false)
     }
     pub async fn is_short_delta(&self, instr: &Instrument) -> bool {
         self.find_position_delta(instr)
             .await
-            .map(|p| p.net_qty < Decimal::ZERO)
+            .map(|p| p.net_qty < rust_decimal::Decimal::ZERO)
             .unwrap_or(false)
     }
     pub async fn is_flat_delta(&self, instr: &Instrument) -> bool {
         self.find_position_delta(instr)
             .await
-            .map(|p| p.net_qty == Decimal::ZERO)
+            .map(|p| p.net_qty == rust_decimal::Decimal::ZERO)
             .unwrap_or(true)
     }
 
@@ -657,7 +735,11 @@ impl EngineRuntime {
         Ok(())
     }
 
-    pub async fn unsubscribe_key(&self, data_topic: DataTopic, key: SymbolKey) -> anyhow::Result<()> {
+    pub async fn unsubscribe_key(
+        &self,
+        data_topic: DataTopic,
+        key: SymbolKey,
+    ) -> anyhow::Result<()> {
         let topic = data_topic.to_topic_or_err()?;
         self.unsubscribe_symbol(topic, key).await
     }
@@ -694,6 +776,37 @@ impl EngineRuntime {
             )
             .await?;
         Ok(())
+    }
+
+    /// Convenience: construct and send a `PlaceOrder` from individual parameters.
+    pub async fn place_order_with(
+        &self,
+        account_name: tt_types::accounts::account::AccountName,
+        key: tt_types::keys::SymbolKey,
+        side: tt_types::accounts::events::Side,
+        qty: i64,
+        r#type: tt_types::wire::OrderType,
+        limit_price: Option<rust_decimal::Decimal>,
+        stop_price: Option<rust_decimal::Decimal>,
+        trail_price: Option<rust_decimal::Decimal>,
+        custom_tag: Option<String>,
+        stop_loss: Option<tt_types::wire::BracketWire>,
+        take_profit: Option<tt_types::wire::BracketWire>,
+    ) -> anyhow::Result<()> {
+        let spec = tt_types::wire::PlaceOrder {
+            account_name,
+            key,
+            side,
+            qty,
+            r#type,
+            limit_price: limit_price.and_then(|d| d.to_f64()),
+            stop_price: stop_price.and_then(|d| d.to_f64()),
+            trail_price: trail_price.and_then(|d| d.to_f64()),
+            custom_tag,
+            stop_loss,
+            take_profit,
+        };
+        self.place_order(spec).await
     }
 
     // Account interest: auto-subscribe all execution streams for an account
@@ -885,7 +998,7 @@ impl EngineRuntime {
         let st = self.state.lock().await;
         if let Some(pb) = &st.last_positions {
             if let Some(p) = pb.positions.iter().find(|p| &p.instrument == instrument) {
-                return false ;
+                return false;
             }
         }
         true
@@ -966,7 +1079,11 @@ impl EngineRuntime {
                     _ => {}
                 }
                 match resp {
-                    Response::TickBatch(TickBatch { ticks, provider_kind,.. }) => {
+                    Response::TickBatch(TickBatch {
+                        ticks,
+                        provider_kind,
+                        ..
+                    }) => {
                         let pk = provider_kind.clone();
                         for t in ticks {
                             // Update portfolio marks then deliver to strategy
@@ -975,17 +1092,25 @@ impl EngineRuntime {
                             strat.on_tick(t, provider_kind.clone()).await;
                         }
                     }
-                    Response::QuoteBatch(QuoteBatch { quotes, provider_kind,.. }) => {
+                    Response::QuoteBatch(QuoteBatch {
+                        quotes,
+                        provider_kind,
+                        ..
+                    }) => {
                         let pk = provider_kind.clone();
                         for q in quotes {
                             // Use mid-price as mark
-                            let mid = (q.bid + q.ask) / Decimal::from(2);
+                            let mid = (q.bid + q.ask) / rust_decimal::Decimal::from(2);
                             pm.update_apply_last_price(pk.clone(), &q.instrument, mid);
                             let mut strat = strategy_for_task.lock().await;
                             strat.on_quote(q, provider_kind.clone()).await;
                         }
                     }
-                    Response::BarBatch(BarBatch { bars, provider_kind,.. }) => {
+                    Response::BarBatch(BarBatch {
+                        bars,
+                        provider_kind,
+                        ..
+                    }) => {
                         let pk = provider_kind.clone();
                         for b in bars {
                             // Use close as mark
@@ -999,7 +1124,7 @@ impl EngineRuntime {
                         let ev = &ob.event;
                         let mark = if let Some(book) = &ev.book {
                             if let (Some(b0), Some(a0)) = (book.bid_px.get(0), book.ask_px.get(0)) {
-                                (*b0 + *a0) / Decimal::from(2)
+                                (*b0 + *a0) / rust_decimal::Decimal::from(2)
                             } else {
                                 ev.price
                             }
@@ -1028,21 +1153,22 @@ impl EngineRuntime {
                             st.last_positions = Some(adj.clone());
                         }
                         {
-
                             // Deliver adjusted positions batch to strategy
                             // Note: if no last price is known, open_pnl remains as provided
                             let st = state.lock().await; // we could pass adj directly; acquiring to be consistent
                             for mut p in pb.positions.iter_mut() {
-                                if p.open_pnl == Decimal::ZERO {
+                                if p.open_pnl == rust_decimal::Decimal::ZERO {
                                     if let Some(ep) = st.last_positions.as_ref() {
                                         for ep in ep.positions.iter() {
-                                            if p.provider_kind == ep.provider_kind && p.instrument == ep.instrument && p.side == ep.side {
+                                            if p.provider_kind == ep.provider_kind
+                                                && p.instrument == ep.instrument
+                                                && p.side == ep.side
+                                            {
                                                 p.open_pnl = ep.open_pnl;
                                             }
                                         }
                                     }
                                 }
-
                             }
                             let mut strat = strategy_for_task.lock().await;
                             strat.on_positions_batch(pb.clone()).await;
@@ -1058,20 +1184,34 @@ impl EngineRuntime {
                             strat.on_account_delta(ab.accounts).await;
                         }
                     }
-                    Response::Tick{tick, provider_kind} => {
+                    Response::Tick {
+                        tick,
+                        provider_kind,
+                    } => {
                         // Update portfolio mark before strategy
-                        pm.update_apply_last_price(provider_kind.clone(), &tick.instrument, tick.price);
+                        pm.update_apply_last_price(
+                            provider_kind.clone(),
+                            &tick.instrument,
+                            tick.price,
+                        );
                         let mut strat = strategy_for_task.lock().await;
                         strat.on_tick(tick, provider_kind).await;
                     }
-                    Response::Quote{bbo, provider_kind} => {
-                        let mid = (bbo.bid + bbo.ask) / Decimal::from(2);
+                    Response::Quote { bbo, provider_kind } => {
+                        let mid = (bbo.bid + bbo.ask) / rust_decimal::Decimal::from(2);
                         pm.update_apply_last_price(provider_kind.clone(), &bbo.instrument, mid);
                         let mut strat = strategy_for_task.lock().await;
                         strat.on_quote(bbo, provider_kind).await;
                     }
-                    Response::Bar{candle, provider_kind}=> {
-                        pm.update_apply_last_price(provider_kind.clone(), &candle.instrument, candle.close);
+                    Response::Bar {
+                        candle,
+                        provider_kind,
+                    } => {
+                        pm.update_apply_last_price(
+                            provider_kind.clone(),
+                            &candle.instrument,
+                            candle.close,
+                        );
                         let mut strat = strategy_for_task.lock().await;
                         strat.on_bar(candle, provider_kind).await;
                     }
@@ -1120,7 +1260,10 @@ impl EngineRuntime {
             strat.accounts()
         };
         if !accounts_to_init.is_empty() {
-            info!("engine: initializing {} account(s) for strategy", accounts_to_init.len());
+            info!(
+                "engine: initializing {} account(s) for strategy",
+                accounts_to_init.len()
+            );
             self.initialize_accounts(accounts_to_init).await?;
         }
         Ok(handle)
@@ -1128,12 +1271,12 @@ impl EngineRuntime {
 
     pub async fn stop(&mut self) -> anyhow::Result<()> {
         info!("engine: stopping");
-        let _ = self
-            .bus
-            .handle_request(
-                &self.sub_id.as_ref().expect("engine started"),
-                tt_types::wire::Request::Kick(Kick{reason: Some("Shutting Down".to_string())})
-            );
+        let _ = self.bus.handle_request(
+            &self.sub_id.as_ref().expect("engine started"),
+            tt_types::wire::Request::Kick(Kick {
+                reason: Some("Shutting Down".to_string()),
+            }),
+        );
         if let Some(handle) = self.task.take() {
             handle.abort();
         }

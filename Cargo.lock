@@ -2991,7 +2991,6 @@ dependencies = [
  "tt-projectx",
  "tt-shm",
  "tt-types",
- "uuid",
 ]
 
 [[package]]

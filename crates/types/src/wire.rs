@@ -1,4 +1,5 @@
 use crate::accounts::account::AccountName;
+use crate::accounts::events::{ClientOrderId, Side};
 use crate::data::core::{Bbo, Candle, Tick};
 use crate::keys::{SymbolKey, Topic};
 use crate::providers::ProviderKind;
@@ -9,8 +10,7 @@ use chrono::{DateTime, Utc};
 use rkyv::AlignedVec;
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use rust_decimal::Decimal;
-use crate::accounts::events::{ClientOrderId, Side};
-use crate::Guid;
+pub const ENGINE_TAG_PREFIX: &str = "+eId:";
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
 #[archive(check_bytes)]
@@ -26,7 +26,7 @@ pub struct Trade {
     pub side: Side,
     pub size: Decimal,
     pub voided: bool,
-    pub order_id: Guid,
+    pub order_id: String,
 }
 
 /// Request to subscribe to a topic (coarse, topic-level interest)
@@ -165,7 +165,10 @@ pub struct OrdersBatch {
 impl OrdersBatch {
     pub fn print(&self) {
         for order in self.orders.iter() {
-            println!("OrderUpdate: {:?}, Provider: {:?}, Price: {}, Qty: {} ", order.instrument, order.state, order.avg_fill_px ,order.cum_qty);
+            println!(
+                "OrderUpdate: {:?}, Provider: {:?}, Price: {}, Qty: {} ",
+                order.instrument, order.state, order.avg_fill_px, order.cum_qty
+            );
         }
     }
 }
@@ -303,7 +306,7 @@ pub struct AnnounceShm {
 /// Order type for wire protocol
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, PartialEq, Clone, Debug)]
 #[archive(check_bytes)]
-pub enum OrderTypeWire {
+pub enum OrderType {
     /// Market order
     Market,
     /// Limit order
@@ -327,7 +330,7 @@ pub struct BracketWire {
     /// Number of ticks for bracket
     pub ticks: i32,
     /// Order type
-    pub r#type: OrderTypeWire,
+    pub r#type: OrderType,
 }
 
 /// Place a new order
@@ -343,7 +346,7 @@ pub struct PlaceOrder {
     /// Quantity
     pub qty: i64,
     /// Order type
-    pub r#type: OrderTypeWire,
+    pub r#type: OrderType,
     /// Limit price (if applicable)
     pub limit_price: Option<f64>,
     /// Stop price (if applicable)
@@ -497,9 +500,18 @@ pub enum Response {
         instrument: Instrument,
     },
     // Single items (for completeness; bus generally batches)
-    Tick{ tick: Tick, provider_kind: ProviderKind },
-    Quote { bbo: Bbo, provider_kind: ProviderKind },
-    Bar{ candle: Candle, provider_kind: ProviderKind },
+    Tick {
+        tick: Tick,
+        provider_kind: ProviderKind,
+    },
+    Quote {
+        bbo: Bbo,
+        provider_kind: ProviderKind,
+    },
+    Bar {
+        candle: Candle,
+        provider_kind: ProviderKind,
+    },
 }
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, PartialEq, Clone, Debug)]

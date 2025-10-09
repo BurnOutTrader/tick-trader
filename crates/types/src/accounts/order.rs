@@ -1,9 +1,9 @@
 use super::events::{ClientOrderId, ProviderOrderId, Side};
 use crate::securities::symbols::Instrument;
-use rust_decimal::Decimal;
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
+use rust_decimal::Decimal;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Archive, RkyvDeserialize, RkyvSerialize, )]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Archive, RkyvDeserialize, RkyvSerialize)]
 #[archive(check_bytes)]
 pub enum OrderState {
     New,
@@ -31,7 +31,7 @@ impl OrderState {
 #[derive(Debug, Clone)]
 pub struct Order {
     pub provider_order_id: Option<ProviderOrderId>,
-    pub client_order_id: Option<ClientOrderId>,
+    pub client_order_id: ClientOrderId,
     pub instrument: Instrument,
     pub side: Side,
     pub version: u64,
@@ -47,7 +47,7 @@ impl Order {
     pub fn new(instrument: Instrument, side: Side, qty: i64) -> Self {
         Self {
             provider_order_id: None,
-            client_order_id: None,
+            client_order_id: ClientOrderId::new(),
             instrument,
             side,
             version: 0,

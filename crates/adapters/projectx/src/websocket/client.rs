@@ -20,12 +20,11 @@ use tokio_tungstenite::tungstenite::Message;
 use tracing::{error, info};
 use tt_bus::Router;
 use tt_types::accounts::account::AccountName;
+use tt_types::accounts::events::PositionSide;
 #[allow(unused)]
 use tt_types::accounts::events::{
     AccountDelta, ClientOrderId, OrderUpdate, PositionDelta, ProviderOrderId, Side,
 };
-use tt_types::accounts::events::PositionSide;
-use tt_types::Guid;
 use tt_types::accounts::order::OrderState;
 use tt_types::data::core::Tick;
 use tt_types::data::models::{Price, TradeSide, Volume};
@@ -696,7 +695,11 @@ impl PxWebSocketClient {
                                             };
                                             let buf = bbo.to_aligned_bytes();
                                             tt_shm::write_snapshot(Topic::Quotes, &key, &buf);
-                                            if let Err(e) = self.bus.publish_quote(bbo, self.provider_kind).await {
+                                            if let Err(e) = self
+                                                .bus
+                                                .publish_quote(bbo, self.provider_kind)
+                                                .await
+                                            {
                                                 log::warn!("failed to publish quote: {}", e);
                                             } else {
                                                 published += 1;
@@ -812,7 +815,11 @@ impl PxWebSocketClient {
                                             // Write Tick snapshot to SHM
                                             let buf = tick.to_aligned_bytes();
                                             tt_shm::write_snapshot(Topic::Ticks, &key, &buf);
-                                            if let Err(e) = self.bus.publish_tick(tick, self.provider_kind).await {
+                                            if let Err(e) = self
+                                                .bus
+                                                .publish_tick(tick, self.provider_kind)
+                                                .await
+                                            {
                                                 log::warn!("failed to publish tick: {}", e);
                                             } else {
                                                 published += 1;
@@ -1104,8 +1111,14 @@ impl PxWebSocketClient {
                                                 tt_shm::write_snapshot(Topic::MBP10, &key, &buf);
                                             }
 
-                                            if let Err(e) =
-                                                self.bus.publish_mbp10_for_key(&key, self.provider_kind, event).await
+                                            if let Err(e) = self
+                                                .bus
+                                                .publish_mbp10_for_key(
+                                                    &key,
+                                                    self.provider_kind,
+                                                    event,
+                                                )
+                                                .await
                                             {
                                                 log::warn!(target: "projectx.ws", "failed to publish MBP10: {}", e);
                                             } else {
@@ -1166,7 +1179,8 @@ impl PxWebSocketClient {
 
                                     for account in items.into_iter() {
                                         // Store account id -> name for later trade mapping
-                                        self.accounts_by_id.insert(account.id, account.name.clone());
+                                        self.accounts_by_id
+                                            .insert(account.id, account.name.clone());
                                         let balance = match Decimal::from_f64(account.balance) {
                                             Some(b) => b,
                                             None => {
@@ -1244,7 +1258,8 @@ impl PxWebSocketClient {
                                                 continue;
                                             }
                                         };
-                                        let state_code: OrderState= models::map_status(order.status);
+                                        let state_code: OrderState =
+                                            models::map_status(order.status);
                                         let cum_qty: i64 = order.fill_volume.unwrap_or(0);
                                         let leaves: i64 = (order.size - cum_qty).max(0);
                                         let avg_px = order
@@ -1341,10 +1356,11 @@ impl PxWebSocketClient {
                                             DateTime::<Utc>::from_str(&position.creation_timestamp)
                                                 .unwrap_or_else(|_| Utc::now());
 
-                                        let average_price = match Decimal::from_f64(position.average_price) {
-                                            None => return,
-                                            Some(p) => p
-                                        };
+                                        let average_price =
+                                            match Decimal::from_f64(position.average_price) {
+                                                None => return,
+                                                Some(p) => p,
+                                            };
                                         let pd = PositionDelta {
                                             provider_kind: self.provider_kind,
                                             instrument: instrument_id,
@@ -1371,44 +1387,71 @@ impl PxWebSocketClient {
                                 // Extract payloads from 'arguments' and unwrap wrappers: {action, data}
                                 let args_opt = val.get("arguments").and_then(|a| a.as_array());
                                 if let Some(args) = args_opt {
-                                    let maybe_data = if args.len() >= 2 { Some(&args[1]) } else { args.get(0) };
+                                    let maybe_data = if args.len() >= 2 {
+                                        Some(&args[1])
+                                    } else {
+                                        args.get(0)
+                                    };
                                     let mut items: Vec<GatewayUserTrade> = Vec::new();
                                     if let Some(dv) = maybe_data {
                                         if let Some(arr) = dv.as_array() {
                                             for item in arr {
                                                 let obj = if item.is_object() {
-                                                    item.get("data").cloned().unwrap_or(item.clone())
-                                                } else { item.clone() };
-                                                if let Ok(t) = serde_json::from_value::<GatewayUserTrade>(obj) {
+                                                    item.get("data")
+                                                        .cloned()
+                                                        .unwrap_or(item.clone())
+                                                } else {
+                                                    item.clone()
+                                                };
+                                                if let Ok(t) =
+                                                    serde_json::from_value::<GatewayUserTrade>(obj)
+                                                {
                                                     items.push(t);
                                                 }
                                             }
                                         } else if dv.is_object() {
                                             let obj = dv.get("data").cloned().unwrap_or(dv.clone());
-                                            if let Ok(t) = serde_json::from_value::<GatewayUserTrade>(obj) {
+                                            if let Ok(t) =
+                                                serde_json::from_value::<GatewayUserTrade>(obj)
+                                            {
                                                 items.push(t);
                                             }
                                         }
                                     }
-                                    if items.is_empty() { return; }
+                                    if items.is_empty() {
+                                        return;
+                                    }
 
                                     // Map ProjectX trades to wire::Trade
                                     let mut out: Vec<Trade> = Vec::with_capacity(items.len());
                                     for t in items.into_iter() {
-                                        let instrument = match Instrument::try_parse_dotted(t.contract_id.as_str()) {
+                                        let instrument = match Instrument::try_parse_dotted(
+                                            t.contract_id.as_str(),
+                                        ) {
                                             Ok(i) => i,
                                             Err(e) => {
                                                 error!(target: "projectx.ws", "invalid instrument for trade: {} ({:?})", t.contract_id, e);
                                                 continue;
                                             }
                                         };
-                                        let creation_time = DateTime::<Utc>::from_str(&t.creation_timestamp).unwrap_or_else(|_| Utc::now());
+                                        let creation_time =
+                                            DateTime::<Utc>::from_str(&t.creation_timestamp)
+                                                .unwrap_or_else(|_| Utc::now());
                                         let price = Decimal::from_f64(t.price).unwrap_or(dec!(0));
-                                        let pnl = Decimal::from_f64(t.profit_and_loss).unwrap_or(dec!(0));
+                                        let pnl =
+                                            Decimal::from_f64(t.profit_and_loss).unwrap_or(dec!(0));
                                         let fees = Decimal::from_f64(t.fees).unwrap_or(dec!(0));
                                         let size = Decimal::from_i64(t.size).unwrap_or(dec!(0));
-                                        let side = match t.side { 0 => Side::Buy, 1 => Side::Sell, _ => Side::Buy };
-                                        let account_name = if let Some(name) = self.accounts_by_id.get(&t.account_id).map(|e| e.value().clone()) {
+                                        let side = match t.side {
+                                            0 => Side::Buy,
+                                            1 => Side::Sell,
+                                            _ => Side::Buy,
+                                        };
+                                        let account_name = if let Some(name) = self
+                                            .accounts_by_id
+                                            .get(&t.account_id)
+                                            .map(|e| e.value().clone())
+                                        {
                                             AccountName::new(name)
                                         } else {
                                             AccountName::new(t.account_id.to_string())
@@ -1425,7 +1468,7 @@ impl PxWebSocketClient {
                                             side,
                                             size,
                                             voided: t.voided,
-                                            order_id: Guid::new_v4(),
+                                            order_id: t.order_id.to_string(),
                                         };
                                         out.push(trade);
                                     }
@@ -1502,7 +1545,6 @@ impl PxWebSocketClient {
         }
         {
             let mut w = self.user_trades_subs.write().await;
-            let s = account_id.to_string();
             if !w.contains(&account_id) {
                 w.push(account_id);
             }

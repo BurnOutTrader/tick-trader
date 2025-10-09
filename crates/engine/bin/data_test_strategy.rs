@@ -40,17 +40,17 @@ impl Strategy for DataTestStrategy {
     async fn on_stop(&mut self) {
         info!("strategy stop");
     }
-    async fn on_tick(&mut self, t: tt_types::data::core::Tick, provider_kind: ProviderKind) {
+    async fn on_tick(&mut self, t: tt_types::data::core::Tick, _provider_kind: ProviderKind) {
         println!("{:?}", t)
     }
-    async fn on_quote(&mut self, q: tt_types::data::core::Bbo, provider_kind: ProviderKind) {
+    async fn on_quote(&mut self, q: tt_types::data::core::Bbo, _provider_kind: ProviderKind) {
         println!("{:?}", q);
     }
-    async fn on_bar(&mut self, b: tt_types::data::core::Candle, provider_kind: ProviderKind) {
+    async fn on_bar(&mut self, b: tt_types::data::core::Candle, _provider_kind: ProviderKind) {
         println!("{:?}", b)
     }
 
-    async fn on_mbp10(&mut self, d: Mbp10, provider_kind: ProviderKind) {
+    async fn on_mbp10(&mut self, d: Mbp10, _provider_kind: ProviderKind) {
         println!(
             "MBP10 evt: action={:?} side={:?} px={} sz={} flags={:?} ts_event={} ts_recv={}",
             d.action, d.side, d.price, d.size, d.flags, d.ts_event, d.ts_recv

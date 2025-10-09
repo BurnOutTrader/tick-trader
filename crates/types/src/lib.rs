@@ -1,7 +1,7 @@
 pub mod accounts;
 pub mod consolidators;
 pub mod data;
-pub mod guid;
+pub mod engine_tag;
 pub mod history;
 pub mod keys;
 pub mod providers;
@@ -10,4 +10,3 @@ pub mod rkyv_types;
 pub mod securities;
 pub mod server_side;
 pub mod wire;
-pub use guid::Guid;

@@ -19,4 +19,3 @@ chrono-tz = { workspace = true }
 rust_decimal = { workspace = true }
 duckdb = {workspace = true}
 dotenv =  {workspace = true}
-uuid = {workspace = true}

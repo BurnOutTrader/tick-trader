@@ -169,7 +169,7 @@ struct OrderBookStrategy {
     last_place_bid_at: Option<Instant>,
     last_place_ask_at: Option<Instant>,
     place_cooldown: Duration,
-    can_trade: bool
+    can_trade: bool,
 }
 #[allow(dead_code)]
 impl OrderBookStrategy {
@@ -330,7 +330,7 @@ impl OrderBookStrategy {
             return;
         }
         let h = self.engine.as_ref().unwrap().clone();
-        let (key_clone, account_name_clone, max_pos_abs, instrument_clone) = {
+        let (_, account_name_clone, max_pos_abs, instrument_clone) = {
             let cfg = self.cfg.as_ref().unwrap();
             (
                 cfg.key.clone(),
@@ -483,12 +483,12 @@ impl OrderBookStrategy {
             if want_bid {
                 self.buy_count += 1;
                 self.last_place_bid_at = Some(now);
-                let order = wire::PlaceOrder {
+                /*let order = wire::PlaceOrder {
                     account_name: account_name_clone.clone(),
                     key: key_clone.clone(),
                     side: tt_types::accounts::events::Side::Buy,
                     qty: 1,
-                    r#type: wire::OrderTypeWire::JoinBid,
+                    r#type: wire::OrderType::JoinBid,
                     limit_price: None,
                     stop_price: None,
                     trail_price: None,
@@ -496,17 +496,17 @@ impl OrderBookStrategy {
                     stop_loss: None,
                     take_profit: None,
                 };
-                let _ = h.place_order(order).await;
+                let _ = h.place_order(order).await;*/
             }
             if want_ask {
-                self.sell_count += 1;
+                /*self.sell_count += 1;
                 self.last_place_ask_at = Some(now);
                 let order = wire::PlaceOrder {
                     account_name: account_name_clone.clone(),
                     key: key_clone.clone(),
                     side: tt_types::accounts::events::Side::Sell,
                     qty: 1,
-                    r#type: wire::OrderTypeWire::JoinAsk,
+                    r#type: wire::OrderType::JoinAsk,
                     limit_price: None,
                     stop_price: None,
                     trail_price: None,
@@ -514,7 +514,7 @@ impl OrderBookStrategy {
                     stop_loss: None,
                     take_profit: None,
                 };
-                let _ = h.place_order(order).await;
+                let _ = h.place_order(order).await;*/
             }
         }
     }
@@ -551,15 +551,15 @@ impl Strategy for OrderBookStrategy {
     async fn on_stop(&mut self) {
         info!("strategy stop");
     }
-    async fn on_tick(&mut self, t: tt_types::data::core::Tick, provider_kind: ProviderKind) {
+    async fn on_tick(&mut self, t: tt_types::data::core::Tick, _provider_kind: ProviderKind) {
         println!("{:?}", t)
     }
-    async fn on_quote(&mut self, q: tt_types::data::core::Bbo, provider_kind: ProviderKind) {
+    async fn on_quote(&mut self, q: tt_types::data::core::Bbo, _provider_kind: ProviderKind) {
         println!("{:?}", q);
     }
-    async fn on_bar(&mut self, _b: tt_types::data::core::Candle,provider_kind: ProviderKind) {}
+    async fn on_bar(&mut self, _b: tt_types::data::core::Candle, provider_kind: ProviderKind) {}
 
-    async fn on_mbp10(&mut self, d: Mbp10, provider_kind: ProviderKind) {
+    async fn on_mbp10(&mut self, d: Mbp10, _provider_kind: ProviderKind) {
         let ob = &mut self.book;
         if let Some(ref book) = d.book {
             ob.seed_from_snapshot(book);
@@ -600,7 +600,7 @@ impl Strategy for OrderBookStrategy {
     async fn on_orders_batch(&mut self, b: wire::OrdersBatch) {
         // For visibility; could also reconcile here if desired
         for order in b.orders {
-           //println!("{:?}", order);
+            //println!("{:?}", order);
         }
     }
     async fn on_positions_batch(&mut self, b: wire::PositionsBatch) {
@@ -612,7 +612,6 @@ impl Strategy for OrderBookStrategy {
         for pos in b.positions {
             println!("{:?}", pos)
         }
-
     }
     async fn on_account_delta(&mut self, accounts: Vec<AccountDelta>) {
         for account_delta in accounts {
@@ -679,23 +678,23 @@ async fn main() -> anyhow::Result<()> {
         tt_types::accounts::account::AccountName::from_str("PRAC-V2-64413-98419885").unwrap();
     engine.initialize_account_names(provider, vec![]).await?;
     // Create strategy with placeholder account_id and known account_name; we'll set id after engine start
-    let strategy = Arc::new(Mutex::new(OrderBookStrategy::new(StrategyConfig {
-        key: key.clone(),
-        instrument: instrument.clone(),
-        provider,
-        account_name: account_name.clone(),
-        max_pos_abs: Decimal::from(150),
-    }, account_name.clone())));
+    let strategy = Arc::new(Mutex::new(OrderBookStrategy::new(
+        StrategyConfig {
+            key: key.clone(),
+            instrument: instrument.clone(),
+            provider,
+            account_name: account_name.clone(),
+            max_pos_abs: Decimal::from(150),
+        },
+        account_name.clone(),
+    )));
 
     // Start engine to obtain a sub_id and begin processing responses
     let _handle = engine.start(strategy.clone()).await?;
 
     // Initialize account interest so we receive orders/positions/account deltas
     engine
-        .initialize_account_names(
-            provider,
-            vec![account_name],
-        )
+        .initialize_account_names(provider, vec![account_name])
         .await?;
 
     // Run for a while; adjust as needed
