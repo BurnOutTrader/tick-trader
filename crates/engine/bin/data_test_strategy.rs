@@ -15,6 +15,7 @@ use tt_types::keys::{AccountKey, SymbolKey};
 use tt_types::providers::{ProjectXTenant, ProviderKind};
 use tt_types::securities::symbols::Instrument;
 use tt_types::wire;
+use tt_types::wire::Trade;
 
 #[derive(Default)]
 struct DataTestStrategy {
@@ -67,6 +68,11 @@ impl Strategy for DataTestStrategy {
             println!("{:?}", account_delta);
         }
     }
+
+    async fn on_trades_closed(&mut self, _trades: Vec<Trade>) {
+        todo!()
+    }
+
     async fn on_subscribe(&mut self, instrument: Instrument, data_topic: DataTopic, success: bool) {
         println!(
             "Subscribed to {} on topic {:?}: Success: {}",
