@@ -5,8 +5,9 @@ use rust_decimal::Decimal;
 use std::sync::{Arc, Mutex, RwLock};
 use tt_types::accounts::account::AccountName;
 use tt_types::accounts::events::{
-    AccountDelta, ClientOrderId, OrderUpdate, PositionDelta, PositionSide, ProviderOrderId,
+    AccountDelta, OrderUpdate, PositionDelta, PositionSide, ProviderOrderId,
 };
+use tt_types::engine_id::EngineUuid;
 use tt_types::providers::ProviderKind;
 use tt_types::securities::symbols::Instrument;
 use tt_types::wire::{AccountDeltaBatch, OrdersBatch, PositionsBatch, Trade};
@@ -14,7 +15,7 @@ use tt_types::wire::{AccountDeltaBatch, OrdersBatch, PositionsBatch, Trade};
 /// Key for tracking an order in the open orders map
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum OrderKeyId {
-    Client(ClientOrderId),
+    Client(EngineUuid),
     Provider(ProviderOrderId),
 }
 
@@ -26,19 +27,10 @@ pub struct OrderKey {
 
 impl OrderKey {
     fn from_update(o: &OrderUpdate) -> Option<Self> {
-        if let Some(coid) = &o.client_order_id {
-            return Some(OrderKey {
-                instrument: o.instrument.clone(),
-                id: OrderKeyId::Client(coid.clone()),
-            });
-        }
-        if let Some(poid) = &o.provider_order_id {
-            return Some(OrderKey {
-                instrument: o.instrument.clone(),
-                id: OrderKeyId::Provider(poid.clone()),
-            });
-        }
-        None
+        return Some(OrderKey {
+            instrument: o.instrument.clone(),
+            id: OrderKeyId::Client(o.order_id.clone()),
+        });
     }
 }
 

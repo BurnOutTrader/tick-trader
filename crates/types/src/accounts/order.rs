@@ -1,4 +1,5 @@
-use super::events::{ClientOrderId, ProviderOrderId, Side};
+use super::events::{ProviderOrderId, Side};
+use crate::engine_id::EngineUuid;
 use crate::securities::symbols::Instrument;
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use rust_decimal::Decimal;
@@ -31,7 +32,7 @@ impl OrderState {
 #[derive(Debug, Clone)]
 pub struct Order {
     pub provider_order_id: Option<ProviderOrderId>,
-    pub client_order_id: ClientOrderId,
+    pub client_order_id: EngineUuid,
     pub instrument: Instrument,
     pub side: Side,
     pub version: u64,
@@ -44,10 +45,10 @@ pub struct Order {
 }
 
 impl Order {
-    pub fn new(instrument: Instrument, side: Side, qty: i64) -> Self {
+    pub(crate) fn new(instrument: Instrument, side: Side, qty: i64) -> Self {
         Self {
             provider_order_id: None,
-            client_order_id: ClientOrderId::new(),
+            client_order_id: EngineUuid::new(),
             instrument,
             side,
             version: 0,

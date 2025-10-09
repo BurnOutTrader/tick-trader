@@ -1,6 +1,7 @@
 use crate::accounts::account::AccountName;
-use crate::accounts::events::{ClientOrderId, Side};
+use crate::accounts::events::Side;
 use crate::data::core::{Bbo, Candle, Tick};
+use crate::engine_id::EngineUuid;
 use crate::keys::{SymbolKey, Topic};
 use crate::providers::ProviderKind;
 use crate::securities::security::FuturesContract;
@@ -10,12 +11,13 @@ use chrono::{DateTime, Utc};
 use rkyv::AlignedVec;
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use rust_decimal::Decimal;
+
 pub const ENGINE_TAG_PREFIX: &str = "+eId:";
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
 #[archive(check_bytes)]
 pub struct Trade {
-    pub id: ClientOrderId,
+    pub id: EngineUuid,
     pub provider: ProviderKind,
     pub account_name: AccountName,
     pub instrument: Instrument,
@@ -368,9 +370,7 @@ pub struct CancelOrder {
     /// Account ID
     pub account_name: AccountName,
     /// Provider order ID (if known)
-    pub provider_order_id: Option<String>,
-    /// Client order ID (if known)
-    pub client_order_id: Option<crate::accounts::events::ClientOrderId>,
+    pub provider_order_id: String,
 }
 
 /// Replace (modify) an existing order
@@ -380,9 +380,7 @@ pub struct ReplaceOrder {
     /// Account ID
     pub account_name: AccountName,
     /// Provider order ID (if known)
-    pub provider_order_id: Option<String>,
-    /// Client order ID (if known)
-    pub client_order_id: Option<crate::accounts::events::ClientOrderId>,
+    pub provider_order_id: String,
     /// New quantity (if modifying)
     pub new_qty: Option<i64>,
     /// New limit price (if modifying)

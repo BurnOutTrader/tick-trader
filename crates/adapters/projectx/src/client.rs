@@ -708,14 +708,7 @@ impl ExecutionProvider for PXClient {
     }
 
     async fn cancel_order(&self, spec: tt_types::wire::CancelOrder) -> CommandAck {
-        // Requires provider_order_id to be present for PX
-        let Some(poid) = spec.provider_order_id else {
-            return CommandAck {
-                ok: false,
-                message: Some("provider_order_id required for cancel on ProjectX".to_string()),
-            };
-        };
-        let Ok(order_id) = poid.parse::<i64>() else {
+        let Ok(order_id) = spec.provider_order_id.parse::<i64>() else {
             return CommandAck {
                 ok: false,
                 message: Some("invalid provider_order_id; expected numeric string".to_string()),
@@ -745,13 +738,7 @@ impl ExecutionProvider for PXClient {
 
     async fn replace_order(&self, spec: tt_types::wire::ReplaceOrder) -> CommandAck {
         use crate::http::models::ModifyOrderReq;
-        let Some(poid) = spec.provider_order_id else {
-            return CommandAck {
-                ok: false,
-                message: Some("provider_order_id required for replace on ProjectX".to_string()),
-            };
-        };
-        let Ok(order_id) = poid.parse::<i64>() else {
+        let Ok(order_id) = spec.provider_order_id.parse::<i64>() else {
             return CommandAck {
                 ok: false,
                 message: Some("invalid provider_order_id; expected numeric string".to_string()),

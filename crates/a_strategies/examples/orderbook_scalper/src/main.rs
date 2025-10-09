@@ -230,8 +230,7 @@ impl OrderBookStrategy {
                     let _ = h
                         .cancel_order(wire::CancelOrder {
                             account_name: cfg.account_name.clone(),
-                            provider_order_id: Some(poid.0),
-                            client_order_id: None,
+                            provider_order_id: poid.0,
                         })
                         .await;
                     did_cancel = true;
@@ -254,8 +253,7 @@ impl OrderBookStrategy {
                     let _ = h
                         .cancel_order(wire::CancelOrder {
                             account_name: cfg.account_name.clone(),
-                            provider_order_id: Some(poid.0),
-                            client_order_id: None,
+                            provider_order_id: poid.0,
                         })
                         .await;
                 }
@@ -330,7 +328,7 @@ impl OrderBookStrategy {
             return;
         }
         let h = self.engine.as_ref().unwrap().clone();
-        let (_, account_name_clone, max_pos_abs, instrument_clone) = {
+        let (_, _account_name_clone, max_pos_abs, instrument_clone) = {
             let cfg = self.cfg.as_ref().unwrap();
             (
                 cfg.key.clone(),
@@ -557,7 +555,7 @@ impl Strategy for OrderBookStrategy {
     async fn on_quote(&mut self, q: tt_types::data::core::Bbo, _provider_kind: ProviderKind) {
         println!("{:?}", q);
     }
-    async fn on_bar(&mut self, _b: tt_types::data::core::Candle, provider_kind: ProviderKind) {}
+    async fn on_bar(&mut self, _b: tt_types::data::core::Candle, _provider_kind: ProviderKind) {}
 
     async fn on_mbp10(&mut self, d: Mbp10, _provider_kind: ProviderKind) {
         let ob = &mut self.book;
@@ -599,7 +597,7 @@ impl Strategy for OrderBookStrategy {
 
     async fn on_orders_batch(&mut self, b: wire::OrdersBatch) {
         // For visibility; could also reconcile here if desired
-        for order in b.orders {
+        for _order in b.orders {
             //println!("{:?}", order);
         }
     }
