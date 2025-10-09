@@ -16,6 +16,7 @@ use tt_database::models::{BboRow, CandleRow, TickRow};
 use tt_database::paths::provider_kind_to_db_string;
 use tt_database::queries::latest_data_time;
 use tt_types::data::models::{Resolution, TradeSide};
+use tt_types::engine_tag::EngineUuid;
 use tt_types::history::{HistoricalRequest, HistoryEvent};
 use tt_types::keys::Topic;
 use tt_types::providers::ProviderKind;
@@ -24,12 +25,11 @@ use tt_types::securities::hours::market_hours::{
 };
 use tt_types::securities::symbols::{Instrument, exchange_market_type};
 use tt_types::server_side::traits::HistoricalDataProvider;
-use uuid::Uuid;
 
 pub struct Entry {
     result: Mutex<Option<anyhow::Result<()>>>,
     pub notify: Notify,
-    id: Uuid,
+    id: EngineUuid,
     join: Mutex<Option<JoinHandle<()>>>,
 }
 
@@ -49,7 +49,7 @@ pub struct DownloadTaskHandle {
 }
 
 impl DownloadTaskHandle {
-    pub fn id(&self) -> Uuid {
+    pub fn id(&self) -> EngineUuid {
         self.entry.id
     }
     pub fn key(&self) -> &(ProviderKind, Instrument, Topic) {
@@ -145,7 +145,7 @@ impl DownloadManager {
                 let e = Arc::new(Entry {
                     result: Mutex::new(None),
                     notify: Notify::new(),
-                    id: Uuid::new_v4(),
+                    id: EngineUuid::new(),
                     join: Mutex::new(None),
                 });
                 guard.insert(key.clone(), e.clone());

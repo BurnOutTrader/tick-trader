@@ -171,9 +171,9 @@ struct OrderBookStrategy {
     // New: skip quoting when spread tighter than N points
     min_spread_points: Decimal,
     // Edge gating: require strong signal and persistence
-    min_tilt_ratio: Decimal,   // e.g., 0.35 of spread
-    min_mom_points: Decimal,   // e.g., 1.0 points EMA delta magnitude
-    edge_dwell: Duration,      // require edge to persist before acting
+    min_tilt_ratio: Decimal,         // e.g., 0.35 of spread
+    min_mom_points: Decimal,         // e.g., 1.0 points EMA delta magnitude
+    edge_dwell: Duration,            // require edge to persist before acting
     edge_dir: Option<(i8, Instant)>, // 1=up, -1=down, time started
     // Avoid buying and selling at the exact same price within a window
     avoid_same_price_window: Duration,
@@ -210,9 +210,9 @@ impl OrderBookStrategy {
             last_place_ask_px: None,
             place_cooldown: Duration::from_millis(2000),
             min_spread_points: Decimal::from(3),
-            min_tilt_ratio: Decimal::new(35, 2),     // 0.35
-            min_mom_points: Decimal::from(1),        // 1.0 point
-            edge_dwell: Duration::from_millis(500),  // 500ms persistence
+            min_tilt_ratio: Decimal::new(35, 2),    // 0.35
+            min_mom_points: Decimal::from(1),       // 1.0 point
+            edge_dwell: Duration::from_millis(500), // 500ms persistence
             edge_dir: None,
             avoid_same_price_window: Duration::from_secs(60),
         }
@@ -422,9 +422,15 @@ impl OrderBookStrategy {
             let micro = (ba_px * bb_sz + bb_px * ba_sz) / total_sz;
             let tilt = micro - mid;
             // Require stronger tilt (as ratio of spread) and minimum momentum magnitude
-            let tilt_ratio = if spread > Decimal::ZERO { tilt / spread } else { Decimal::ZERO };
-            let edge_up = tilt_ratio >= self.min_tilt_ratio && mom_up && mom_abs >= self.min_mom_points;
-            let edge_down = tilt_ratio <= -self.min_tilt_ratio && mom_down && mom_abs >= self.min_mom_points;
+            let tilt_ratio = if spread > Decimal::ZERO {
+                tilt / spread
+            } else {
+                Decimal::ZERO
+            };
+            let edge_up =
+                tilt_ratio >= self.min_tilt_ratio && mom_up && mom_abs >= self.min_mom_points;
+            let edge_down =
+                tilt_ratio <= -self.min_tilt_ratio && mom_down && mom_abs >= self.min_mom_points;
             let exit_override = (self.net_pos > offer_threshold && mom_up)
                 || (self.net_pos < -offer_threshold && mom_down);
             // If no strong edge present and no exit override, do not quote
@@ -434,7 +440,13 @@ impl OrderBookStrategy {
 
             // Enforce dwell: edge direction must persist for edge_dwell before acting
             let now = Instant::now();
-            let dir = if edge_up { 1 } else if edge_down { -1 } else { 0 };
+            let dir = if edge_up {
+                1
+            } else if edge_down {
+                -1
+            } else {
+                0
+            };
             if dir != 0 {
                 match self.edge_dir {
                     Some((d, started)) if d == dir => {
@@ -468,13 +480,19 @@ impl OrderBookStrategy {
 
         // Avoid placing opposite side at the exact same price as our last placement within a window
         if let Some((last_apx, when)) = self.last_place_ask_px {
-            if want_bid && want_bid_px == Some(last_apx) && when.elapsed() < self.avoid_same_price_window {
+            if want_bid
+                && want_bid_px == Some(last_apx)
+                && when.elapsed() < self.avoid_same_price_window
+            {
                 want_bid = false;
                 want_bid_px = None;
             }
         }
         if let Some((last_bpx, when)) = self.last_place_bid_px {
-            if want_ask && want_ask_px == Some(last_bpx) && when.elapsed() < self.avoid_same_price_window {
+            if want_ask
+                && want_ask_px == Some(last_bpx)
+                && when.elapsed() < self.avoid_same_price_window
+            {
                 want_ask = false;
                 want_ask_px = None;
             }
@@ -599,7 +617,7 @@ impl OrderBookStrategy {
                 key: key_clone.clone(),
                 side: tt_types::accounts::events::Side::Buy,
                 qty: 1,
-                r#type: wire::OrderTypeWire::JoinBid,
+                r#type: wire::OrderType::JoinBid,
                 limit_price: None,
                 stop_price: None,
                 trail_price: None,
@@ -608,7 +626,7 @@ impl OrderBookStrategy {
                 take_profit: None,
             };
             info!("Placing Order: {:?}", order);
-            let _ = h.place_order(order).await;
+            //let _ = h.place_order(order).await;
         }
         if want_ask {
             self.sell_count += 1;
@@ -619,7 +637,7 @@ impl OrderBookStrategy {
                 key: key_clone.clone(),
                 side: tt_types::accounts::events::Side::Sell,
                 qty: 1,
-                r#type: wire::OrderTypeWire::JoinAsk,
+                r#type: wire::OrderType::JoinAsk,
                 limit_price: None,
                 stop_price: None,
                 trail_price: None,
@@ -628,7 +646,7 @@ impl OrderBookStrategy {
                 take_profit: None,
             };
             info!("Placing Order: {:?}", order);
-            let _ = h.place_order(order).await;
+            //let _ = h.place_order(order).await;
         }
     }
 }

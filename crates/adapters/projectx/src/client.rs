@@ -621,27 +621,27 @@ impl ExecutionProvider for PXClient {
         use crate::http::models::{BracketCfg, PlaceOrderReq};
         // Map typed spec to ProjectX PlaceOrderReq
         let type_i = match spec.r#type {
-            tt_types::wire::OrderTypeWire::Limit => 1,
-            tt_types::wire::OrderTypeWire::Market => 2,
-            tt_types::wire::OrderTypeWire::Stop => 4,
-            tt_types::wire::OrderTypeWire::TrailingStop => 5,
-            tt_types::wire::OrderTypeWire::JoinBid => 6,
-            tt_types::wire::OrderTypeWire::JoinAsk => 7,
-            tt_types::wire::OrderTypeWire::StopLimit => 4, // PX uses Stop with limit/stop provided
+            tt_types::wire::OrderType::Limit => 1,
+            tt_types::wire::OrderType::Market => 2,
+            tt_types::wire::OrderType::Stop => 4,
+            tt_types::wire::OrderType::TrailingStop => 5,
+            tt_types::wire::OrderType::JoinBid => 6,
+            tt_types::wire::OrderType::JoinAsk => 7,
+            tt_types::wire::OrderType::StopLimit => 4, // PX uses Stop with limit/stop provided
         };
         let side_i = match spec.side {
             tt_types::accounts::events::Side::Buy => 0,
             tt_types::accounts::events::Side::Sell => 1,
         };
-        fn map_type(t: tt_types::wire::OrderTypeWire) -> i32 {
+        fn map_type(t: tt_types::wire::OrderType) -> i32 {
             match t {
-                tt_types::wire::OrderTypeWire::Limit => 1,
-                tt_types::wire::OrderTypeWire::Market => 2,
-                tt_types::wire::OrderTypeWire::Stop => 4,
-                tt_types::wire::OrderTypeWire::TrailingStop => 5,
-                tt_types::wire::OrderTypeWire::JoinBid => 6,
-                tt_types::wire::OrderTypeWire::JoinAsk => 7,
-                tt_types::wire::OrderTypeWire::StopLimit => 4,
+                tt_types::wire::OrderType::Limit => 1,
+                tt_types::wire::OrderType::Market => 2,
+                tt_types::wire::OrderType::Stop => 4,
+                tt_types::wire::OrderType::TrailingStop => 5,
+                tt_types::wire::OrderType::JoinBid => 6,
+                tt_types::wire::OrderType::JoinAsk => 7,
+                tt_types::wire::OrderType::StopLimit => 4,
             }
         }
         let stop_loss_bracket = spec.stop_loss.map(|b| BracketCfg {
