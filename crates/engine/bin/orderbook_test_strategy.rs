@@ -244,8 +244,7 @@ impl OrderBookStrategy {
                     let _ = h
                         .cancel_order(wire::CancelOrder {
                             account_name: cfg.account_name.clone(),
-                            provider_order_id: Some(poid.0),
-                            client_order_id: None,
+                            provider_order_id: poid.0,
                         })
                         .await;
                     did_cancel = true;
@@ -268,8 +267,7 @@ impl OrderBookStrategy {
                     let _ = h
                         .cancel_order(wire::CancelOrder {
                             account_name: cfg.account_name.clone(),
-                            provider_order_id: Some(poid.0),
-                            client_order_id: None,
+                            provider_order_id: poid.0,
                         })
                         .await;
                 }

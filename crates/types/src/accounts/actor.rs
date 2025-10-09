@@ -1,6 +1,10 @@
-use super::events::*;
 use super::order::{Order, OrderState};
 use super::position::PositionLedger;
+use crate::accounts::events::{
+    AccountEvent, CorrectionEvent, ExecutionEvent, OrderEvent, OrderEventKind, ProviderOrderId,
+    Side,
+};
+use crate::engine_id::EngineUuid;
 use crate::securities::symbols::Instrument;
 use crate::wire::Bytes;
 use ahash::{AHashMap, AHashSet};
@@ -26,8 +30,8 @@ impl AccountActorHandle {
 
 pub struct AccountActor {
     pub orders_by_provider: AHashMap<ProviderOrderId, Order>,
-    pub orders_by_client: AHashMap<ClientOrderId, Order>,
-    pub exec_by_id: AHashSet<ExecId>,
+    pub orders_by_client: AHashMap<EngineUuid, Order>,
+    pub exec_by_id: AHashSet<EngineUuid>,
     pub positions: PositionLedger,
     pub marks: AHashMap<Instrument, Decimal>,
     pub state: AccountState,
@@ -73,7 +77,7 @@ impl AccountActor {
     fn resolve_order_mut(
         &mut self,
         provider: &Option<ProviderOrderId>,
-        client: &ClientOrderId,
+        client: &EngineUuid,
     ) -> Option<&mut Order> {
         if let Some(p) = provider {
             if let Some(o) = self.orders_by_provider.get_mut(p) {
@@ -94,11 +98,11 @@ impl AccountActor {
                 qty,
             } => {
                 // create or update
-                let mut ord = self.resolve_order_mut(&oe.provider_order_id, &oe.client_order_id);
+                let mut ord = self.resolve_order_mut(&oe.provider_order_id, &oe.order_id);
                 if ord.is_none() {
                     let mut o = Order::new(instrument.clone(), side, qty);
                     o.provider_order_id = oe.provider_order_id.clone();
-                    o.client_order_id = oe.client_order_id.clone();
+                    o.client_order_id = oe.order_id.clone();
                     o.last_provider_seq = oe.provider_seq;
                     o.state = OrderState::Acknowledged;
                     self.insert_order(o);
@@ -113,8 +117,7 @@ impl AccountActor {
                 }
             }
             OrderEventKind::Replaced { new_qty } => {
-                if let Some(o) = self.resolve_order_mut(&oe.provider_order_id, &oe.client_order_id)
-                {
+                if let Some(o) = self.resolve_order_mut(&oe.provider_order_id, &oe.order_id) {
                     if o.can_apply(oe.provider_seq, o.state) {
                         o.version += 1;
                         if let Some(q) = new_qty {
@@ -125,8 +128,7 @@ impl AccountActor {
                 }
             }
             OrderEventKind::Canceled => {
-                if let Some(o) = self.resolve_order_mut(&oe.provider_order_id, &oe.client_order_id)
-                {
+                if let Some(o) = self.resolve_order_mut(&oe.provider_order_id, &oe.order_id) {
                     if o.can_apply(oe.provider_seq, OrderState::Canceled) {
                         o.last_provider_seq = oe.provider_seq;
                         o.state = OrderState::Canceled;
@@ -135,8 +137,7 @@ impl AccountActor {
                 }
             }
             OrderEventKind::Rejected { .. } => {
-                if let Some(o) = self.resolve_order_mut(&oe.provider_order_id, &oe.client_order_id)
-                {
+                if let Some(o) = self.resolve_order_mut(&oe.provider_order_id, &oe.order_id) {
                     if o.can_apply(oe.provider_seq, OrderState::Rejected) {
                         o.last_provider_seq = oe.provider_seq;
                         o.state = OrderState::Rejected;
@@ -144,8 +145,7 @@ impl AccountActor {
                 }
             }
             OrderEventKind::Expired => {
-                if let Some(o) = self.resolve_order_mut(&oe.provider_order_id, &oe.client_order_id)
-                {
+                if let Some(o) = self.resolve_order_mut(&oe.provider_order_id, &oe.order_id) {
                     // treat as cancel terminal
                     if o.can_apply(oe.provider_seq, OrderState::Canceled) {
                         o.last_provider_seq = oe.provider_seq;
@@ -171,7 +171,7 @@ impl AccountActor {
         }
         self.exec_by_id.insert(exe.exec_id.clone());
         // Update order
-        if let Some(o) = self.resolve_order_mut(&exe.provider_order_id, &exe.client_order_id) {
+        if let Some(o) = self.resolve_order_mut(&exe.provider_order_id, &exe.order_id) {
             let new_cum = o.cum_qty + exe.qty.abs();
             let total_px = o.avg_fill_px
                 * Decimal::from_i64(o.cum_qty.abs()).unwrap_or(Decimal::ZERO)
@@ -227,6 +227,7 @@ impl AccountActor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::accounts::events::{AdminEvent, MarkEvent};
     use crate::securities::symbols::Instrument;
     use chrono::Utc;
     use std::str::FromStr;
@@ -247,7 +248,7 @@ mod tests {
             wal: Vec::new(),
         };
         let prov = ProviderOrderId("P1".to_string());
-        let cli = ClientOrderId::new();
+        let cli = EngineUuid::new();
         // Ack new order
         actor.apply(AccountEvent::Order(OrderEvent {
             kind: OrderEventKind::NewAck {
@@ -256,7 +257,7 @@ mod tests {
                 qty: 10,
             },
             provider_order_id: Some(prov.clone()),
-            client_order_id: ClientOrderId::new(),
+            order_id: EngineUuid::new(),
             provider_seq: Some(1),
             leaves_qty: Some(10),
             ts_ns: Utc::now(),
@@ -268,7 +269,7 @@ mod tests {
         actor.apply(AccountEvent::Order(OrderEvent {
             kind: OrderEventKind::Replaced { new_qty: Some(6) },
             provider_order_id: Some(prov.clone()),
-            client_order_id: cli.clone(),
+            order_id: cli.clone(),
             provider_seq: Some(2),
             leaves_qty: None,
             ts_ns: Utc::now(),
@@ -280,7 +281,7 @@ mod tests {
         actor.apply(AccountEvent::Order(OrderEvent {
             kind: OrderEventKind::Canceled,
             provider_order_id: Some(prov.clone()),
-            client_order_id: cli.clone(),
+            order_id: cli.clone(),
             provider_seq: Some(3),
             leaves_qty: None,
             ts_ns: Utc::now(),
@@ -310,17 +311,17 @@ mod tests {
                 qty: 3,
             },
             provider_order_id: Some(prov.clone()),
-            client_order_id: ClientOrderId::new(),
+            order_id: EngineUuid::new(),
             provider_seq: Some(10),
             leaves_qty: Some(3),
             ts_ns: Utc::now(),
         }));
         // Exec 1 @ 100
-        let ex1 = ExecId::new();
+        let ex1 = EngineUuid::new();
         actor.apply(AccountEvent::Exec(ExecutionEvent {
             exec_id: ex1.clone(),
             provider_order_id: Some(prov.clone()),
-            client_order_id: ClientOrderId::new(),
+            order_id: EngineUuid::new(),
             side: Side::Buy,
             qty: 1,
             price: Decimal::from_i32(100).unwrap(),
@@ -333,7 +334,7 @@ mod tests {
         actor.apply(AccountEvent::Exec(ExecutionEvent {
             exec_id: ex1.clone(),
             provider_order_id: Some(prov.clone()),
-            client_order_id: ClientOrderId::new(),
+            order_id: EngineUuid::new(),
             side: Side::Buy,
             qty: 1,
             price: Decimal::from_i32(100).unwrap(),
@@ -354,11 +355,11 @@ mod tests {
         }));
         assert_eq!(actor.state.open_pnl, Decimal::from_i32(5).unwrap());
         // Fill the remaining 2 @ 110; realized pnl accumulates when crossing the opposite side later
-        let ex2 = ExecId::new();
+        let ex2 = EngineUuid::new();
         actor.apply(AccountEvent::Exec(ExecutionEvent {
             exec_id: ex2.clone(),
             provider_order_id: Some(prov.clone()),
-            client_order_id: ClientOrderId::new(),
+            order_id: EngineUuid::new(),
             side: Side::Buy,
             qty: 2,
             price: Decimal::from_i32(110).unwrap(),
@@ -371,11 +372,11 @@ mod tests {
         assert_eq!(o.leaves, 0);
         assert_eq!(o.state, OrderState::Filled);
         // Now sell 3 @ 120 to close and realize PnL: avg cost = (100*1 + 110*2)/3 = 106.666.. -> realized = (120-106.666..)*3 ~= 40
-        let ex3 = ExecId::new();
+        let ex3 = EngineUuid::new();
         actor.apply(AccountEvent::Exec(ExecutionEvent {
             exec_id: ex3.clone(),
             provider_order_id: None,
-            client_order_id: ClientOrderId::new(),
+            order_id: EngineUuid::new(),
             side: Side::Sell,
             qty: 3,
             price: Decimal::from_i32(120).unwrap(),
@@ -409,15 +410,15 @@ mod tests {
                 qty: 1,
             },
             provider_order_id: Some(prov.clone()),
-            client_order_id: ClientOrderId::new(),
+            order_id: EngineUuid::new(),
             provider_seq: Some(1),
             leaves_qty: Some(1),
             ts_ns: Utc::now(),
         }));
         actor.apply(AccountEvent::Exec(ExecutionEvent {
-            exec_id: ExecId::new(),
+            exec_id: EngineUuid::new(),
             provider_order_id: Some(prov.clone()),
-            client_order_id: ClientOrderId::new(),
+            order_id: EngineUuid::new(),
             side: Side::Buy,
             qty: 1,
             price: Decimal::from_i32(100).unwrap(),
@@ -430,7 +431,7 @@ mod tests {
         actor.apply(AccountEvent::Order(OrderEvent {
             kind: OrderEventKind::Canceled,
             provider_order_id: Some(prov.clone()),
-            client_order_id: ClientOrderId::new(),
+            order_id: EngineUuid::new(),
             provider_seq: None,
             leaves_qty: None,
             ts_ns: Utc::now(),
@@ -459,7 +460,7 @@ mod tests {
                 qty: 2,
             },
             provider_order_id: Some(prov.clone()),
-            client_order_id: ClientOrderId::new(),
+            order_id: EngineUuid::new(),
             provider_seq: Some(5),
             leaves_qty: Some(2),
             ts_ns: Utc::now(),
@@ -468,7 +469,7 @@ mod tests {
         actor.apply(AccountEvent::Order(OrderEvent {
             kind: OrderEventKind::Canceled,
             provider_order_id: Some(prov.clone()),
-            client_order_id: ClientOrderId::new(),
+            order_id: EngineUuid::new(),
             provider_seq: Some(4),
             leaves_qty: None,
             ts_ns: Utc::now(),
@@ -499,16 +500,16 @@ mod tests {
                 qty: 1,
             },
             provider_order_id: Some(prov.clone()),
-            client_order_id: ClientOrderId::new(),
+            order_id: EngineUuid::new(),
             provider_seq: Some(2),
             leaves_qty: Some(1),
             ts_ns: Utc::now(),
         }));
         // Fill via exec (order last seq stays at 2)
         actor.apply(AccountEvent::Exec(ExecutionEvent {
-            exec_id: ExecId::new(),
+            exec_id: EngineUuid::new(),
             provider_order_id: Some(prov.clone()),
-            client_order_id: ClientOrderId::new(),
+            order_id: EngineUuid::new(),
             side: Side::Buy,
             qty: 1,
             price: Decimal::from_i32(100).unwrap(),
@@ -521,7 +522,7 @@ mod tests {
         actor.apply(AccountEvent::Order(OrderEvent {
             kind: OrderEventKind::Canceled,
             provider_order_id: Some(prov.clone()),
-            client_order_id: ClientOrderId::new(),
+            order_id: EngineUuid::new(),
             provider_seq: Some(2),
             leaves_qty: None,
             ts_ns: Utc::now(),
@@ -552,7 +553,7 @@ mod tests {
                 qty: 2,
             },
             provider_order_id: Some(prov.clone()),
-            client_order_id: ClientOrderId::new(),
+            order_id: EngineUuid::new(),
             provider_seq: Some(10),
             leaves_qty: Some(2),
             ts_ns: Utc::now(),
@@ -560,16 +561,16 @@ mod tests {
         actor.apply(AccountEvent::Order(OrderEvent {
             kind: OrderEventKind::Canceled,
             provider_order_id: Some(prov.clone()),
-            client_order_id: ClientOrderId::new(),
+            order_id: EngineUuid::new(),
             provider_seq: Some(11),
             leaves_qty: None,
             ts_ns: Utc::now(),
         }));
         // Late fill shows up (older seq) -> position updates to short 1
         actor.apply(AccountEvent::Exec(ExecutionEvent {
-            exec_id: ExecId::new(),
+            exec_id: EngineUuid::new(),
             provider_order_id: Some(prov.clone()),
-            client_order_id: ClientOrderId::new(),
+            order_id: EngineUuid::new(),
             side: Side::Sell,
             qty: 1,
             price: Decimal::from_i32(200).unwrap(),
@@ -608,7 +609,7 @@ mod tests {
                 qty: 1,
             },
             provider_order_id: Some(prov.clone()),
-            client_order_id: ClientOrderId::new(),
+            order_id: EngineUuid::new(),
             provider_seq: Some(7),
             leaves_qty: Some(1),
             ts_ns: Utc::now(),
@@ -616,7 +617,7 @@ mod tests {
         actor.apply(AccountEvent::Order(OrderEvent {
             kind: OrderEventKind::Canceled,
             provider_order_id: Some(prov.clone()),
-            client_order_id: ClientOrderId::new(),
+            order_id: EngineUuid::new(),
             provider_seq: Some(8),
             leaves_qty: None,
             ts_ns: Utc::now(),
@@ -629,7 +630,7 @@ mod tests {
                 qty: 1,
             },
             provider_order_id: Some(prov.clone()),
-            client_order_id: ClientOrderId::new(),
+            order_id: EngineUuid::new(),
             provider_seq: Some(7),
             leaves_qty: Some(1),
             ts_ns: Utc::now(),
@@ -651,7 +652,7 @@ mod tests {
         };
         let before = actor.state.clone();
         actor.apply(AccountEvent::Correction(CorrectionEvent {
-            exec_id_ref: ExecId::new(),
+            exec_id_ref: EngineUuid::new(),
             delta_qty: -1,
             ts_ns: Utc::now(),
         }));
@@ -674,9 +675,9 @@ mod tests {
         };
         // Long 2 ES @ 100, Short 1 NQ @ 200
         actor.apply(AccountEvent::Exec(ExecutionEvent {
-            exec_id: ExecId::new(),
+            exec_id: EngineUuid::new(),
             provider_order_id: None,
-            client_order_id: ClientOrderId::new(),
+            order_id: EngineUuid::new(),
             side: Side::Buy,
             qty: 2,
             price: Decimal::from_i32(100).unwrap(),
@@ -686,9 +687,9 @@ mod tests {
             instrument: inst("ES.Z25"),
         }));
         actor.apply(AccountEvent::Exec(ExecutionEvent {
-            exec_id: ExecId::new(),
+            exec_id: EngineUuid::new(),
             provider_order_id: None,
-            client_order_id: ClientOrderId::new(),
+            order_id: EngineUuid::new(),
             side: Side::Sell,
             qty: 1,
             price: Decimal::from_i32(200).unwrap(),
@@ -731,16 +732,16 @@ mod tests {
                 qty: 1,
             },
             provider_order_id: Some(ProviderOrderId("PX1".into())),
-            client_order_id: ClientOrderId::new(),
+            order_id: EngineUuid::new(),
             provider_seq: Some(1),
             leaves_qty: Some(1),
             ts_ns: Utc::now(),
         }));
         // Exec
         actor.apply(AccountEvent::Exec(ExecutionEvent {
-            exec_id: ExecId::new(),
+            exec_id: EngineUuid::new(),
             provider_order_id: Some(ProviderOrderId("PX1".into())),
-            client_order_id: ClientOrderId::new(),
+            order_id: EngineUuid::new(),
             side: Side::Buy,
             qty: 1,
             price: Decimal::from_i32(100).unwrap(),

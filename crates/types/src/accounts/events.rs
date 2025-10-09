@@ -1,6 +1,6 @@
 use crate::accounts::account::AccountName;
 use crate::accounts::order::OrderState;
-use crate::engine_tag::EngineUuid;
+use crate::engine_id::EngineUuid;
 use crate::providers::ProviderKind;
 use crate::securities::symbols::Instrument;
 use crate::wire::Bytes;
@@ -11,28 +11,6 @@ use rust_decimal::Decimal;
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
 #[archive(check_bytes)]
 pub struct ProviderOrderId(pub String);
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
-#[archive(check_bytes)]
-pub struct ClientOrderId(EngineUuid);
-
-impl ClientOrderId {
-    #[inline]
-    pub fn new() -> Self {
-        Self(EngineUuid::new())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
-#[archive(check_bytes)]
-pub struct ExecId(EngineUuid);
-
-impl ExecId {
-    #[inline]
-    pub fn new() -> Self {
-        Self(EngineUuid::new())
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
 #[archive(check_bytes)]
@@ -56,7 +34,7 @@ impl Side {
 pub struct OrderEvent {
     pub kind: OrderEventKind,
     pub provider_order_id: Option<ProviderOrderId>,
-    pub client_order_id: ClientOrderId,
+    pub order_id: EngineUuid,
     pub provider_seq: Option<u64>,
     pub leaves_qty: Option<i64>,
     pub ts_ns: DateTime<Utc>,
@@ -83,9 +61,9 @@ pub enum OrderEventKind {
 #[derive(Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize)]
 #[archive(check_bytes)]
 pub struct ExecutionEvent {
-    pub exec_id: ExecId,
+    pub exec_id: EngineUuid,
     pub provider_order_id: Option<ProviderOrderId>,
-    pub client_order_id: ClientOrderId,
+    pub order_id: EngineUuid,
     pub side: Side,
     pub qty: i64,
     pub price: Decimal,
@@ -100,7 +78,7 @@ pub struct ExecutionEvent {
 #[derive(Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize)]
 #[archive(check_bytes)]
 pub struct CorrectionEvent {
-    pub exec_id_ref: ExecId,
+    pub exec_id_ref: EngineUuid,
     pub delta_qty: i64,
 
     pub ts_ns: DateTime<Utc>,
@@ -156,12 +134,13 @@ pub struct OrderUpdate {
     pub instrument: Instrument,
     pub provider_kind: ProviderKind,
     pub provider_order_id: Option<ProviderOrderId>,
-    pub client_order_id: Option<ClientOrderId>,
+    pub order_id: EngineUuid,
     pub state: OrderState,
     pub leaves: i64,
     pub cum_qty: i64,
 
     pub avg_fill_px: Decimal,
+    pub tag: Option<String>,
 
     pub time: DateTime<Utc>,
 }

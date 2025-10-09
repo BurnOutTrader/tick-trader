@@ -22,9 +22,7 @@ use tt_bus::Router;
 use tt_types::accounts::account::AccountName;
 use tt_types::accounts::events::PositionSide;
 #[allow(unused)]
-use tt_types::accounts::events::{
-    AccountDelta, ClientOrderId, OrderUpdate, PositionDelta, ProviderOrderId, Side,
-};
+use tt_types::accounts::events::{AccountDelta, OrderUpdate, PositionDelta, ProviderOrderId, Side};
 use tt_types::accounts::order::OrderState;
 use tt_types::data::core::Tick;
 use tt_types::data::models::{Price, TradeSide, Volume};
@@ -32,11 +30,14 @@ use tt_types::keys::Topic;
 use tt_types::providers::{ProjectXTenant, ProviderKind};
 use tt_types::securities::futures_helpers::{extract_month_year, extract_root, sanitize_code};
 use tt_types::securities::symbols::Instrument;
-use tt_types::wire::{AccountDeltaBatch, Bytes, OrdersBatch, PositionsBatch, Trade};
+use tt_types::wire::{
+    AccountDeltaBatch, Bytes, ENGINE_TAG_PREFIX, OrdersBatch, PositionsBatch, Trade,
+};
 // Map ProjectX depth items to MBP10 incremental updates and publish individually
 use tt_types::data::mbp10::{
     Action as MbpAction, BookLevels, BookSide as MbpSide, Flags as MbpFlags, Mbp10,
 };
+use tt_types::engine_id::EngineUuid;
 
 #[allow(unused)]
 /// Realtime client scaffold for ProjectX hubs
@@ -1269,17 +1270,27 @@ impl PxWebSocketClient {
                                         let ts_dt =
                                             DateTime::<Utc>::from_str(&order.update_timestamp)
                                                 .unwrap_or_else(|_| Utc::now());
+
+                                        // We append our custom engine Uuid to the user message,
+                                        // then on updates we remove the engine tag part and return the original tag to the user
+                                        // Id no tag is found, ie an external order, we create a new tag.
+                                        let (engine_uuid, sanitized_user_tag, _tag_source) =
+                                            EngineUuid::derive_engine_tag(
+                                                order.custom_tag.as_deref(),
+                                            );
+
                                         let ou = OrderUpdate {
                                             provider_kind: self.provider_kind,
                                             instrument,
                                             provider_order_id: Some(ProviderOrderId(
                                                 order.id.to_string(),
                                             )),
-                                            client_order_id: None,
+                                            order_id: engine_uuid,
                                             state: state_code,
                                             leaves,
                                             cum_qty,
                                             avg_fill_px: avg_px,
+                                            tag: sanitized_user_tag,
                                             time: ts_dt,
                                         };
                                         let batch = OrdersBatch {
@@ -1457,7 +1468,7 @@ impl PxWebSocketClient {
                                             AccountName::new(t.account_id.to_string())
                                         };
                                         let trade = Trade {
-                                            id: ClientOrderId::new(),
+                                            id: EngineUuid::new(),
                                             provider: self.provider_kind,
                                             account_name,
                                             instrument,

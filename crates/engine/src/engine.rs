@@ -2,6 +2,7 @@ use crate::models::{
     BarRec, DepthDeltaRec, EngineConfig, InterestEntry, StreamKey, StreamMetrics, SubState, TickRec,
 };
 use crate::portfolio::PortfolioManager;
+use anyhow::anyhow;
 use async_trait::async_trait;
 use dashmap::DashMap;
 use duckdb::Connection;
@@ -19,15 +20,15 @@ use tt_types::accounts::account::AccountName;
 use tt_types::accounts::events::{AccountDelta, PositionSide};
 use tt_types::data::core::{Bbo, Candle, Tick};
 use tt_types::data::mbp10::Mbp10;
-use tt_types::engine_tag::EngineUuid;
+use tt_types::engine_id::EngineUuid;
 use tt_types::keys::{AccountKey, SymbolKey, Topic};
 use tt_types::providers::ProviderKind;
 use tt_types::securities::security::FuturesContract;
 use tt_types::securities::symbols::Instrument;
 use tt_types::server_side::traits::{MarketDataProvider, ProbeStatus, ProviderParams};
 use tt_types::wire::{
-    AccountDeltaBatch, BarBatch, ENGINE_TAG_PREFIX, Kick, OrdersBatch, PositionsBatch, QuoteBatch,
-    Request, Response, TickBatch, Trade,
+    AccountDeltaBatch, BarBatch, Kick, OrdersBatch, PositionsBatch, QuoteBatch, Request, Response,
+    TickBatch, Trade,
 };
 
 #[derive(Default)]
@@ -408,7 +409,10 @@ impl EngineHandle {
         Ok(())
     }
 
-    async fn place_order(&self, spec: tt_types::wire::PlaceOrder) -> anyhow::Result<()> {
+    async fn send_order_to_execution_provider(
+        &self,
+        spec: tt_types::wire::PlaceOrder,
+    ) -> anyhow::Result<()> {
         let _ = self
             .inner
             .bus
@@ -420,39 +424,10 @@ impl EngineHandle {
         Ok(())
     }
 
-    /// Append an engine tag (e.g., to broker text or client_order_id)
-    pub fn append_engine_tag(existing: Option<String>, tag: EngineUuid) -> String {
-        let id_str = tag.to_hex32();
-        match existing {
-            Some(mut t) => {
-                t.push_str(ENGINE_TAG_PREFIX);
-                t.push_str(&id_str);
-                t
-            }
-            None => format!("{}{}", ENGINE_TAG_PREFIX, id_str),
-        }
-    }
-
-    /// Extract the engine tag and any trailing text.
-    /// Returns `(EngineTag, rest_after_id)`
-    pub fn extract_engine_tag(s: &str) -> Option<(EngineUuid, Option<String>)> {
-        let pos = s.find(ENGINE_TAG_PREFIX)?;
-        let start = pos + ENGINE_TAG_PREFIX.len();
-        let after = &s[start..];
-
-        // Split at first delimiter
-        let mut it = after.splitn(2, &[' ', ';', '+'][..]);
-        let id_str = it.next().unwrap();
-        let rest = it.next().map(|t| t.to_string());
-
-        let tag = EngineUuid::from_hex32(id_str)?;
-        Some((tag, rest))
-    }
-
     /// Convenience: construct a `PlaceOrder` from parameters and send it.
     /// This keeps strategies from having to allocate and own a full `PlaceOrder` struct.
     /// Do not use +oId: as part of your order's custom tag, it is reserved for internal order management
-    pub async fn place_order_with(
+    pub async fn place_order(
         &self,
         account_name: tt_types::accounts::account::AccountName,
         key: tt_types::keys::SymbolKey,
@@ -465,8 +440,9 @@ impl EngineHandle {
         custom_tag: Option<String>,
         stop_loss: Option<tt_types::wire::BracketWire>,
         take_profit: Option<tt_types::wire::BracketWire>,
-    ) -> anyhow::Result<()> {
-        // Convert Decimal prices to f64 for the wire type (use ToPrimitive::to_f64)
+    ) -> anyhow::Result<EngineUuid> {
+        let engine_uuid = EngineUuid::new();
+        let tag = EngineUuid::append_engine_tag(custom_tag, engine_uuid);
         let spec = tt_types::wire::PlaceOrder {
             account_name,
             key,
@@ -476,11 +452,15 @@ impl EngineHandle {
             limit_price: limit_price.and_then(|d| d.to_f64()),
             stop_price: stop_price.and_then(|d| d.to_f64()),
             trail_price: trail_price.and_then(|d| d.to_f64()),
-            custom_tag,
+            custom_tag: Some(tag),
             stop_loss,
             take_profit,
         };
-        self.place_order(spec).await
+
+        match self.send_order_to_execution_provider(spec).await {
+            Ok(_) => Ok(engine_uuid),
+            Err(e) => Err(anyhow!("Failed to send order to execution provider: {}", e)),
+        }
     }
 
     // Accounts/positions (cached snapshots)
@@ -531,7 +511,7 @@ impl EngineHandle {
     ) -> PositionSide {
         todo!()
     }
-    pub async fn position_state_delta(&self, instr: &Instrument) -> PositionSide {
+    pub async fn position_state_delta(&self, _instr: &Instrument) -> PositionSide {
         todo!()
     }
 
@@ -997,7 +977,7 @@ impl EngineRuntime {
     ) -> bool {
         let st = self.state.lock().await;
         if let Some(pb) = &st.last_positions {
-            if let Some(p) = pb.positions.iter().find(|p| &p.instrument == instrument) {
+            if let Some(_) = pb.positions.iter().find(|p| &p.instrument == instrument) {
                 return false;
             }
         }
@@ -1156,7 +1136,7 @@ impl EngineRuntime {
                             // Deliver adjusted positions batch to strategy
                             // Note: if no last price is known, open_pnl remains as provided
                             let st = state.lock().await; // we could pass adj directly; acquiring to be consistent
-                            for mut p in pb.positions.iter_mut() {
+                            for p in pb.positions.iter_mut() {
                                 if p.open_pnl == rust_decimal::Decimal::ZERO {
                                     if let Some(ep) = st.last_positions.as_ref() {
                                         for ep in ep.positions.iter() {

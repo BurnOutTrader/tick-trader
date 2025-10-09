@@ -16,7 +16,7 @@ use tt_database::models::{BboRow, CandleRow, TickRow};
 use tt_database::paths::provider_kind_to_db_string;
 use tt_database::queries::latest_data_time;
 use tt_types::data::models::{Resolution, TradeSide};
-use tt_types::engine_tag::EngineUuid;
+use tt_types::engine_id::EngineUuid;
 use tt_types::history::{HistoricalRequest, HistoryEvent};
 use tt_types::keys::Topic;
 use tt_types::providers::ProviderKind;

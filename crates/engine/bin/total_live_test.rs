@@ -46,7 +46,7 @@ impl Strategy for TotalLiveTestStrategy {
     }
 
     async fn on_tick(&mut self, t: Tick, provider_kind: ProviderKind) {
-        if provider_kind != self.execution_provider {
+        if provider_kind != self.data_provider {
             panic!("Incorrect provider kind {:?}", provider_kind)
         }
         assert!(t.price != Decimal::ZERO);
@@ -54,19 +54,19 @@ impl Strategy for TotalLiveTestStrategy {
     }
 
     async fn on_quote(&mut self, _q: Bbo, provider_kind: ProviderKind) {
-        if provider_kind != self.execution_provider {
+        if provider_kind != self.data_provider {
             panic!("Incorrect provider kind {:?}", provider_kind)
         }
     }
 
     async fn on_bar(&mut self, _b: Candle, provider_kind: ProviderKind) {
-        if provider_kind != self.execution_provider {
+        if provider_kind != self.data_provider {
             panic!("Incorrect provider kind {:?}", provider_kind)
         }
     }
 
     async fn on_mbp10(&mut self, _d: Mbp10, provider_kind: ProviderKind) {
-        if provider_kind != self.execution_provider {
+        if provider_kind != self.data_provider {
             panic!("Incorrect provider kind {:?}", provider_kind)
         }
     }
