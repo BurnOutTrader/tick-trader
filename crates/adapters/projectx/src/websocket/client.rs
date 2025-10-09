@@ -30,9 +30,7 @@ use tt_types::keys::Topic;
 use tt_types::providers::{ProjectXTenant, ProviderKind};
 use tt_types::securities::futures_helpers::{extract_month_year, extract_root, sanitize_code};
 use tt_types::securities::symbols::Instrument;
-use tt_types::wire::{
-    AccountDeltaBatch, Bytes, OrdersBatch, PositionsBatch, Trade,
-};
+use tt_types::wire::{AccountDeltaBatch, Bytes, OrdersBatch, PositionsBatch, Trade};
 // Map ProjectX depth items to MBP10 incremental updates and publish individually
 use tt_types::data::mbp10::{
     Action as MbpAction, BookLevels, BookSide as MbpSide, Flags as MbpFlags, Mbp10,
