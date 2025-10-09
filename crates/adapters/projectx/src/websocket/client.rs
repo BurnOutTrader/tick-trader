@@ -696,7 +696,7 @@ impl PxWebSocketClient {
                                             };
                                             let buf = bbo.to_aligned_bytes();
                                             tt_shm::write_snapshot(Topic::Quotes, &key, &buf);
-                                            if let Err(e) = self.bus.publish_quote(bbo).await {
+                                            if let Err(e) = self.bus.publish_quote(bbo, self.provider_kind).await {
                                                 log::warn!("failed to publish quote: {}", e);
                                             } else {
                                                 published += 1;
@@ -812,7 +812,7 @@ impl PxWebSocketClient {
                                             // Write Tick snapshot to SHM
                                             let buf = tick.to_aligned_bytes();
                                             tt_shm::write_snapshot(Topic::Ticks, &key, &buf);
-                                            if let Err(e) = self.bus.publish_tick(tick).await {
+                                            if let Err(e) = self.bus.publish_tick(tick, self.provider_kind).await {
                                                 log::warn!("failed to publish tick: {}", e);
                                             } else {
                                                 published += 1;
@@ -1105,7 +1105,7 @@ impl PxWebSocketClient {
                                             }
 
                                             if let Err(e) =
-                                                self.bus.publish_mbp10_for_key(&key, event).await
+                                                self.bus.publish_mbp10_for_key(&key, self.provider_kind, event).await
                                             {
                                                 log::warn!(target: "projectx.ws", "failed to publish MBP10: {}", e);
                                             } else {

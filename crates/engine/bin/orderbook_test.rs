@@ -60,10 +60,10 @@ impl Strategy for TestLiveOrdersStrategy {
         info!("test strategy stop");
     }
 
-    async fn on_tick(&mut self, _t: tt_types::data::core::Tick) {}
-    async fn on_quote(&mut self, _q: tt_types::data::core::Bbo) {}
-    async fn on_bar(&mut self, _b: tt_types::data::core::Candle) {}
-    async fn on_mbp10(&mut self, _d: tt_types::data::mbp10::Mbp10) {}
+    async fn on_tick(&mut self, _t: tt_types::data::core::Tick, provider_kind: ProviderKind) {}
+    async fn on_quote(&mut self, _q: tt_types::data::core::Bbo, provider_kind: ProviderKind) {}
+    async fn on_bar(&mut self, _b: tt_types::data::core::Candle, provider_kind: ProviderKind) {}
+    async fn on_mbp10(&mut self, _d: tt_types::data::mbp10::Mbp10, provider_kind: ProviderKind) {}
 
     async fn on_orders_batch(&mut self, b: wire::OrdersBatch) {
         for order in b.orders {

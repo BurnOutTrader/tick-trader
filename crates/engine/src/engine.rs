@@ -184,13 +184,13 @@ pub trait Strategy: Send + Sync + 'static {
 
     async fn on_stop(&mut self) {}
 
-    async fn on_tick(&mut self, _t: Tick) {}
+    async fn on_tick(&mut self, _t: Tick, provider_kind: ProviderKind) {}
 
-    async fn on_quote(&mut self, _q: Bbo) {}
+    async fn on_quote(&mut self, _q: Bbo, provider_kind: ProviderKind) {}
 
-    async fn on_bar(&mut self, _b: Candle) {}
+    async fn on_bar(&mut self, _b: Candle, provider_kind: ProviderKind) {}
 
-    async fn on_mbp10(&mut self, _d: Mbp10) {}
+    async fn on_mbp10(&mut self, _d: Mbp10, provider_kind: ProviderKind) {}
 
     async fn on_orders_batch(&mut self, _b: OrdersBatch) {}
 
@@ -859,7 +859,7 @@ impl EngineRuntime {
         let st = self.state.lock().await;
         if let Some(pb) = &st.last_positions {
             if let Some(p) = pb.positions.iter().find(|p| &p.instrument == instrument) {
-                return p.net_qty > Decimal::zero();
+                return p.side == PositionSide::Long;
             }
         }
         false
@@ -872,7 +872,7 @@ impl EngineRuntime {
         let st = self.state.lock().await;
         if let Some(pb) = &st.last_positions {
             if let Some(p) = pb.positions.iter().find(|p| &p.instrument == instrument) {
-                return p.net_qty > Decimal::zero();
+                return p.side == PositionSide::Short;
             }
         }
         false
@@ -885,7 +885,7 @@ impl EngineRuntime {
         let st = self.state.lock().await;
         if let Some(pb) = &st.last_positions {
             if let Some(p) = pb.positions.iter().find(|p| &p.instrument == instrument) {
-                return p.net_qty > Decimal::zero();
+                return false ;
             }
         }
         true
@@ -939,6 +939,7 @@ impl EngineRuntime {
         };
         // Start processing task BEFORE invoking strategy.on_start so correlated responses can be handled during on_start
         let strategy_for_task = strategy.clone();
+        let pm = self.portfolio_manager.clone();
         let handle_task = tokio::spawn(async move {
             let mut rx = rx;
             while let Some(resp) = rx.recv().await {
@@ -965,27 +966,27 @@ impl EngineRuntime {
                     _ => {}
                 }
                 match resp {
-                    Response::TickBatch(TickBatch { ticks, .. }) => {
+                    Response::TickBatch(TickBatch { ticks, provider_kind,.. }) => {
                         for t in ticks {
                             let mut strat = strategy_for_task.lock().await;
-                            strat.on_tick(t).await;
+                            strat.on_tick(t, provider_kind).await;
                         }
                     }
-                    Response::QuoteBatch(QuoteBatch { quotes, .. }) => {
+                    Response::QuoteBatch(QuoteBatch { quotes, provider_kind,.. }) => {
                         for q in quotes {
                             let mut strat = strategy_for_task.lock().await;
-                            strat.on_quote(q).await;
+                            strat.on_quote(q, provider_kind).await;
                         }
                     }
-                    Response::BarBatch(BarBatch { bars, .. }) => {
+                    Response::BarBatch(BarBatch { bars, provider_kind,.. }) => {
                         for b in bars {
                             let mut strat = strategy_for_task.lock().await;
-                            strat.on_bar(b).await;
+                            strat.on_bar(b, provider_kind).await;
                         }
                     }
                     Response::MBP10(ob) => {
                         let mut strat = strategy_for_task.lock().await;
-                        strat.on_mbp10(ob.event).await;
+                        strat.on_mbp10(ob.event, ob.provider_kind).await;
                     }
                     Response::OrdersBatch(ob) => {
                         {
@@ -1000,11 +1001,18 @@ impl EngineRuntime {
                     Response::PositionsBatch(pb) => {
                         {
                             let mut st = state.lock().await;
-                            st.last_positions = Some(pb.clone());
+                            // Adjust open_pnl via portfolio manager's last prices before delivering
+                            let adj = pm.adjust_positions_batch_open_pnl(pb.clone());
+                            st.last_positions = Some(adj.clone());
                         }
                         {
                             let mut strat = strategy_for_task.lock().await;
-                            strat.on_positions_batch(pb.clone()).await;
+                            // Deliver adjusted positions batch to strategy
+                            // Note: if no last price is known, open_pnl remains as provided
+                            let st = state.lock().await; // we could pass adj directly; acquiring to be consistent
+                            if let Some(adj) = &st.last_positions {
+                                strat.on_positions_batch(adj.clone()).await;
+                            }
                         }
                     }
                     Response::AccountDeltaBatch(ab) => {
@@ -1017,17 +1025,17 @@ impl EngineRuntime {
                             strat.on_account_delta(ab.accounts).await;
                         }
                     }
-                    Response::Tick(t) => {
+                    Response::Tick{tick, provider_kind} => {
                         let mut strat = strategy_for_task.lock().await;
-                        strat.on_tick(t).await;
+                        strat.on_tick(tick, provider_kind).await;
                     }
-                    Response::Quote(q) => {
+                    Response::Quote{bbo, provider_kind} => {
                         let mut strat = strategy_for_task.lock().await;
-                        strat.on_quote(q).await;
+                        strat.on_quote(bbo, provider_kind).await;
                     }
-                    Response::Bar(b) => {
+                    Response::Bar{candle, provider_kind}=> {
                         let mut strat = strategy_for_task.lock().await;
-                        strat.on_bar(b).await;
+                        strat.on_bar(candle, provider_kind).await;
                     }
                     Response::AnnounceShm(_) => {
                         //todo, we need to prefer this, run a benchmark, if slower or same, remove shm

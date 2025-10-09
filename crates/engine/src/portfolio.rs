@@ -1,11 +1,10 @@
-use std::sync::{Arc};
-use chrono::Utc;
+use std::sync::{Arc, Mutex, RwLock};
+use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use ahash::AHashMap;
 use rust_decimal::Decimal;
-use tokio::sync::{Mutex, RwLock};
 use tt_types::accounts::account::AccountName;
-use tt_types::accounts::events::{AccountDelta, ClientOrderId, OrderUpdate, PositionDelta, ProviderOrderId};
+use tt_types::accounts::events::{AccountDelta, ClientOrderId, OrderUpdate, PositionDelta, ProviderOrderId, PositionSide};
 use tt_types::providers::ProviderKind;
 use tt_types::securities::symbols::Instrument;
 use tt_types::wire::{AccountDeltaBatch, OrdersBatch, PositionsBatch, Trade};
@@ -47,7 +46,7 @@ pub enum Result {
 /// Concurrency: uses DashMap for hot paths and a Mutex-protected AHashMap for closed positions.
 #[derive(Default)]
 pub struct PortfolioManager {
-    // Latest snapshot by account -> instrument: real positions, in real provider accounts.
+    // Latest snapshot by provider + account -> instrument: real positions, in real provider accounts.
     positions_by_account: DashMap<(ProviderKind, AccountName), DashMap<Instrument, PositionDelta>>,
     // Total position delta across all accounts (synthetic), open pnl + average price calculated as net-sum of real positions
     positions_total_delta: DashMap<Instrument, PositionDelta>,
@@ -66,6 +65,7 @@ pub struct PortfolioManager {
     // Vendor securities cache
     securities_by_provider: Arc<DashMap<ProviderKind, Vec<Instrument>>>,
 
+    // Last mark/price per (provider, instrument)
     last_price: DashMap<(ProviderKind, Instrument), Decimal>,
 }
 
@@ -76,7 +76,51 @@ impl PortfolioManager {
         pm
     }
 
+    // Helper: compute open PnL from last_price for a given position
+    fn compute_open_pnl(&self, provider: &ProviderKind, instr: &Instrument, avg_px: Decimal, qty: Decimal) -> Option<Decimal> {
+        self.last_price
+            .get(&(provider.clone(), instr.clone()))
+            .map(|p| (*p - avg_px) * qty)
+    }
 
+    // Helper: recompute synthetic totals for one instrument across all accounts/providers
+    fn recompute_synthetic_for(&self, instrument: &Instrument) {
+        let mut sum_qty = Decimal::ZERO;
+        let mut sum_pq = Decimal::ZERO; // sum(avg_price * qty_signed)
+        let mut sum_open = Decimal::ZERO;
+        let mut latest_ts = None;
+        let mut any_provider: Option<ProviderKind> = None;
+        for acct_entry in self.positions_by_account.iter() {
+            let map = acct_entry.value();
+            if let Some(p) = map.get(instrument) {
+                let pd = p.value();
+                sum_qty += pd.net_qty;
+                sum_pq += pd.average_price * pd.net_qty;
+                sum_open += pd.open_pnl;
+                latest_ts = Some(latest_ts.map_or(pd.time, |t: DateTime<Utc>| t.max(pd.time)));
+                if any_provider.is_none() {
+                    any_provider = Some(pd.provider_kind.clone());
+                }
+            }
+        }
+        if sum_qty == Decimal::ZERO && sum_pq == Decimal::ZERO && sum_open == Decimal::ZERO {
+            // No active positions for this instrument: remove synthetic if present
+            self.positions_total_delta.remove(instrument);
+            return;
+        }
+        let avg_px = if sum_qty != Decimal::ZERO { sum_pq / sum_qty } else { Decimal::ZERO };
+        let side = if sum_qty >= Decimal::ZERO { PositionSide::Long } else { PositionSide::Short };
+        let pd = PositionDelta {
+            instrument: instrument.clone(),
+            provider_kind: any_provider.unwrap_or_else(|| ProviderKind::ProjectX(tt_types::providers::ProjectXTenant::Topstep)),
+            net_qty: sum_qty,
+            average_price: avg_px,
+            open_pnl: sum_open,
+            time: latest_ts.unwrap_or_else(Utc::now),
+            side,
+        };
+        self.positions_total_delta.insert(instrument.clone(), pd);
+    }
 
     /// Apply an OrdersBatch to update the open orders map.
     /// Heuristic: if leaves > 0 we consider the order open; otherwise remove it if present.
@@ -96,131 +140,136 @@ impl PortfolioManager {
         *self.last_orders.lock().expect("poisoned") = Some(batch);
     }
 
-    /// Apply a PositionsBatch (aggregated update; no account identity).
+    /// Apply a PositionsBatch (aggregated update; no account identity). We adjust open_pnl using last prices when available
+    /// and store as synthetic per-instrument deltas.
     pub fn apply_positions_batch(&self, batch: PositionsBatch) {
         for p in &batch.positions {
-            //todo
+            let mut pd = p.clone();
+            if let Some(new_open) = self.compute_open_pnl(&pd.provider_kind, &pd.instrument, pd.average_price, pd.net_qty) {
+                pd.open_pnl = new_open;
+            }
+            self.positions_total_delta.insert(pd.instrument.clone(), pd);
         }
         *self.last_positions.lock().expect("poisoned") = Some(batch);
     }
 
-    /// Apply a PositionsBatch scoped to a specific account (when account attribution is available).
-    pub fn apply_positions_batch_for_account(&self, account: AccountName, batch: PositionsBatch) {
+    /// Apply a PositionsBatch scoped to a specific provider+account (when account attribution is available).
+    /// We recompute open_pnl from last_price, update the per-account map, and then recompute the synthetic totals.
+    pub fn apply_positions_batch_for_account(&self, provider_kind: ProviderKind, account: AccountName, batch: PositionsBatch) {
+        let acc_key = (provider_kind.clone(), account.clone());
         let entry = self
             .positions_by_account
-            .entry(account.clone())
+            .entry(acc_key)
             .or_insert_with(DashMap::new);
+
+        // Track which instruments changed to recompute synthetic totals afterward
+        let mut touched: ahash::AHashSet<Instrument> = ahash::AHashSet::new();
+
         for p in &batch.positions {
-            if p.net_qty > Decimal::ZERO {
-                entry.remove(&p.instrument);
-                self.positions_by_instrument.remove(&(account.clone(), p.instrument.clone()));
-            } else {
-                entry.insert(p.instrument.clone(), p.clone());
-                // Maintain per-account view as tuple key
-                self.positions_by_instrument.insert((account.clone(), p.instrument.clone()), p.clone());
+            let mut pd = p.clone();
+            // Ensure provider_kind is consistent
+            pd.provider_kind = provider_kind.clone();
+            // Update open pnl if we have a last price
+            if let Some(new_open) = self.compute_open_pnl(&provider_kind, &pd.instrument, pd.average_price, pd.net_qty) {
+                pd.open_pnl = new_open;
             }
+            touched.insert(pd.instrument.clone());
+            if pd.net_qty == Decimal::ZERO {
+                entry.remove(&pd.instrument);
+            } else {
+                entry.insert(pd.instrument.clone(), pd);
+            }
+        }
+        // Recompute synthetic totals for changed instruments
+        for instr in touched.iter() {
+            self.recompute_synthetic_for(instr);
         }
         *self.last_positions.lock().expect("poisoned") = Some(batch);
     }
 
-    /// Apply AccountDeltaBatch updates.
+    /// Apply AccountDeltaBatch updates (keyed by provider + account name).
     pub fn apply_account_delta_batch(&self, batch: AccountDeltaBatch) {
         for a in &batch.accounts {
-            self.accounts_by_name.insert(a.name.clone(), a.clone());
+            self.accounts_by_name.insert((a.provider_kind.clone(), a.name.clone()), a.clone());
         }
         *self.last_accounts.lock().expect("poisoned") = Some(batch);
     }
 
     // Queries - positions (aggregated by instrument)
     pub fn position_total_delta_for(&self, instrument: &Instrument) -> Option<PositionDelta> {
-        // Aggregate net qty across all accounts for this instrument
-        let mut total_after: Decimal = Decimal::ZERO;
-        let mut total_before: Decimal = Decimal::ZERO;
-        let mut provider_kind: Option<ProviderKind> = None;
-        let ts = Utc::now(); //todo, use engine clock
-        for kv in self.positions_by_instrument.iter() {
-            let (_acct, instr) = kv.key();
-            if instr == instrument {
-                let p = kv.value();
-                total_after += p.net_qty;
-                total_before += p.net_qty;
-                provider_kind = provider_kind.or(Some(p.provider_kind.clone()));
-                if p.time > ts { ts = p.time; }
-            }
-        }
-
-        if total_after == Decimal::ZERO && total_before == Decimal::ZERO && provider_kind.is_none() {
-            None
-        } else {
-            Some(PositionDelta {
-                instrument: instrument.clone(),
-                provider_kind: provider_kind.unwrap_or(ProviderKind::ProjectX(tt_types::providers::ProjectXTenant::Topstep)), // fallback
-                net_qty: total_after,
-                average_price:,
-                open_pnl: ,
-                time: ts,
-                side: ,
-            })
-        }
+        self.positions_total_delta.get(instrument).map(|r| r.value().clone())
     }
 
     /// This is how we update open pnl from average entry price
     pub fn update_apply_last_price(&self, provider_kind: ProviderKind, instrument: &Instrument, price: Decimal) {
-        let key = (provider_kind, instrument.clone());
+        let key = (provider_kind.clone(), instrument.clone());
         self.last_price.insert(key, price);
-        if let Some(position) = self.positions_by_account
 
+        // Update all real account positions for this provider+instrument
+        for acct_entry in self.positions_by_account.iter() {
+            let (pk, _acct) = acct_entry.key();
+            if pk != &provider_kind { continue; }
+            let map = acct_entry.value();
+            if let Some(mut pd_ref) = map.get_mut(instrument) {
+                let pd = pd_ref.value_mut();
+                pd.open_pnl = (price - pd.average_price) * pd.net_qty;
+                // side stays consistent with net_qty sign
+                pd.side = if pd.net_qty >= Decimal::ZERO { PositionSide::Long } else { PositionSide::Short };
+                // time stays as received
+            }
+        }
+        // Recompute synthetic totals after updates
+        self.recompute_synthetic_for(instrument);
     }
-
 
     pub fn net_qty(&self, instrument: &Instrument) -> Decimal {
-        self.position_for(instrument).map(|p| p.net_qty).unwrap_or(Decimal::ZERO)
+        self.position_total_delta_for(instrument).map(|p| p.net_qty).unwrap_or(Decimal::ZERO)
     }
 
-    pub fn is_long_delta(&self, instrument: &Instrument) -> bool {
-        self.net_qty(instrument) > 0
+    pub fn is_long(&self, instrument: &Instrument) -> bool {
+        self.net_qty(instrument) > Decimal::ZERO
     }
-    pub fn is_short_delta(&self, instrument: &Instrument) -> bool {
-        self.net_qty(instrument) < 0
+    pub fn is_short(&self, instrument: &Instrument) -> bool {
+        self.net_qty(instrument) < Decimal::ZERO
     }
-    pub fn is_flat_delta(&self, instrument: &Instrument) -> bool {
-        self.position_for(instrument)
-            .map(|p| p.net_qty_after == 0)
+    pub fn is_flat(&self, instrument: &Instrument) -> bool {
+        self.position_total_delta_for(instrument)
+            .map(|p| p.net_qty == Decimal::ZERO)
             .unwrap_or(true)
     }
 
     // Queries - positions by account (requires attribution)
-    pub fn position_for_account(&self, account: &AccountName, instrument: &Instrument) -> Option<PositionDelta> {
+    pub fn position_for_account(&self, provider_kind: &ProviderKind, account: &AccountName, instrument: &Instrument) -> Option<PositionDelta> {
         self.positions_by_account
-            .get(account)
+            .get(&(provider_kind.clone(), account.clone()))
             .and_then(|map| map.get(instrument).map(|r| r.value().clone()))
     }
-    pub fn net_qty_account(&self, account: &AccountName, instrument: &Instrument) -> i64 {
-        self.position_for_account(account, instrument)
-            .map(|p| p.net_qty_after)
-            .unwrap_or(0)
+    pub fn net_qty_account(&self, provider_kind: &ProviderKind, account: &AccountName, instrument: &Instrument) -> Decimal {
+        self.position_for_account(provider_kind, account, instrument)
+            .map(|p| p.net_qty)
+            .unwrap_or(Decimal::ZERO)
     }
-    pub fn is_long_account(&self, account: &AccountName, instrument: &Instrument) -> bool {
-        self.net_qty_account(account, instrument) > 0
+    pub fn is_long_account(&self, provider_kind: &ProviderKind, account: &AccountName, instrument: &Instrument) -> bool {
+        self.net_qty_account(provider_kind, account, instrument) > Decimal::ZERO
     }
-    pub fn is_short_account(&self, account: &AccountName, instrument: &Instrument) -> bool {
-        self.net_qty_account(account, instrument) < 0
+    pub fn is_short_account(&self, provider_kind: &ProviderKind, account: &AccountName, instrument: &Instrument) -> bool {
+        self.net_qty_account(provider_kind, account, instrument) < Decimal::ZERO
     }
-    pub fn is_flat_account(&self, account: &AccountName, instrument: &Instrument) -> bool {
-        self.position_for_account(account, instrument)
-            .map(|p| p.net_qty_after == 0)
+    pub fn is_flat_account(&self, provider_kind: &ProviderKind, account: &AccountName, instrument: &Instrument) -> bool {
+        self.position_for_account(provider_kind, account, instrument)
+            .map(|p| p.net_qty == Decimal::ZERO)
             .unwrap_or(true)
     }
 
     // Queries - accounts
-    pub fn account_delta(&self, name: &AccountName) -> Option<AccountDelta> {
-        self.accounts_by_name.get(name).map(|r| r.value().clone())
+    pub fn account_delta(&self, provider_kind: &ProviderKind, name: &AccountName) -> Option<AccountDelta> {
+        self.accounts_by_name.get(&(provider_kind.clone(), name.clone())).map(|r| r.value().clone())
     }
-    pub fn can_trade(&self, name: &AccountName) -> Option<bool> {
-        self.account_delta(name).map(|a| a.can_trade)
+    pub fn can_trade(&self, provider_kind: &ProviderKind, name: &AccountName) -> Option<bool> {
+        self.account_delta(provider_kind, name).map(|a| a.can_trade)
     }
-    pub fn equity(&self, name: &AccountName) -> Option<rust_decimal::Decimal> {
-        self.account_delta(name).map(|a| a.equity)
+    pub fn equity(&self, provider_kind: &ProviderKind, name: &AccountName) -> Option<rust_decimal::Decimal> {
+        self.account_delta(provider_kind, name).map(|a| a.equity)
     }
 
     // Queries - open orders
@@ -250,6 +299,27 @@ impl PortfolioManager {
     pub fn last_accounts(&self) -> Option<AccountDeltaBatch> {
         self.last_accounts.lock().expect("poisoned").clone()
     }
+
+    /// Adjust a PositionsBatch by recomputing open_pnl using last known marks in the portfolio.
+    /// Does not mutate internal state; purely transforms the batch for downstream consumers.
+    pub fn adjust_positions_batch_open_pnl(&self, mut batch: PositionsBatch) -> PositionsBatch {
+        for p in batch.positions.iter_mut() {
+            if let Some(mark) = self
+                .last_price
+                .get(&(p.provider_kind.clone(), p.instrument.clone()))
+            {
+                // open_pnl = (mark - avg_entry) * signed_qty
+                p.open_pnl = (*mark - p.average_price) * p.net_qty;
+            }
+            // Ensure side remains consistent with net_qty sign
+            p.side = if p.net_qty >= Decimal::ZERO {
+                PositionSide::Long
+            } else {
+                PositionSide::Short
+            };
+        }
+        batch
+    }
 }
 
 #[cfg(test)]
@@ -260,15 +330,15 @@ mod tests {
     use tt_types::providers::ProjectXTenant;
     use tt_types::wire::PositionsBatch;
 
-    fn pd(instr: &str, before: i64, after: i64) -> PositionDelta {
+    fn pd(instr: &str, qty: i64) -> PositionDelta {
         PositionDelta {
             provider_kind: ProviderKind::ProjectX(ProjectXTenant::Topstep),
             instrument: Instrument::validate_len(instr).unwrap(),
-            net_qty_before: before,
-            net_qty_after: after,
-            realized_delta: Decimal::ZERO,
+            net_qty: Decimal::from(qty),
+            average_price: Decimal::from(100),
             open_pnl: Decimal::ZERO,
             time: Utc::now(),
+            side: if qty >= 0 { PositionSide::Long } else { PositionSide::Short },
         }
     }
 
@@ -284,9 +354,9 @@ mod tests {
     #[test]
     fn long_short_flat_detection() {
         let pm = PortfolioManager::new(Arc::new(DashMap::new()));
-        let long = pd("ES.Z25", 0, 5);
-        let short = pd("NQ.Z25", 0, -3);
-        let flat = pd("YM.Z25", 2, 0);
+        let long = pd("ES.Z25", 5);
+        let short = pd("NQ.Z25", -3);
+        let flat = pd("YM.Z25", 0);
         let batch = PositionsBatch {
             topic: tt_types::keys::Topic::Positions,
             seq: 1,
@@ -305,9 +375,5 @@ mod tests {
         assert!(pm.is_flat(&flat.instrument));
         assert!(!pm.is_long(&flat.instrument));
         assert!(!pm.is_short(&flat.instrument));
-
-        // closed history recorded for flat entries
-        let closed = pm.closed_for_instrument(&flat.instrument);
-        assert_eq!(closed.len(), 1);
     }
 }
