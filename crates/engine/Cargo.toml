@@ -29,8 +29,8 @@ path = "bin/data_test_strategy.rs"
 
 [[bin]]
 name = "tt-engine-orderbook_strategy"
-path = "bin/orderbook_strategy.rs"
+path = "bin/orderbook_test_strategy.rs"
 
 [[bin]]
 name = "tt-engine-orderbook_test"
-path = "bin/orderbook_test.rs"
+path = "bin/orderbook_place_test.rs"

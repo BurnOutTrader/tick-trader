@@ -663,15 +663,15 @@ impl Strategy for OrderBookStrategy {
     async fn on_stop(&mut self) {
         info!("strategy stop");
     }
-    async fn on_tick(&mut self, t: tt_types::data::core::Tick, provider_kind: ProviderKind) {
+    async fn on_tick(&mut self, t: tt_types::data::core::Tick, _provider_kind: ProviderKind) {
         println!("{:?}", t)
     }
-    async fn on_quote(&mut self, q: tt_types::data::core::Bbo, provider_kind: ProviderKind) {
+    async fn on_quote(&mut self, q: tt_types::data::core::Bbo, _provider_kind: ProviderKind) {
         println!("{:?}", q);
     }
-    async fn on_bar(&mut self, _b: tt_types::data::core::Candle, provider_kind: ProviderKind) {}
+    async fn on_bar(&mut self, _b: tt_types::data::core::Candle, _provider_kind: ProviderKind) {}
 
-    async fn on_mbp10(&mut self, d: Mbp10, provider_kind: ProviderKind) {
+    async fn on_mbp10(&mut self, d: Mbp10, _provider_kind: ProviderKind) {
         let ob = &mut self.book;
         if let Some(ref book) = d.book {
             ob.seed_from_snapshot(book);
@@ -726,7 +726,7 @@ impl Strategy for OrderBookStrategy {
             }
         }
         println!(
-            "positions batch (net_pos={}) : {} entries",
+            "positions batch (net_pos={:.2}) : {} entries",
             self.net_pos,
             b.positions.len()
         );

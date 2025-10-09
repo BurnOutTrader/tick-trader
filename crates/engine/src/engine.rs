@@ -967,24 +967,46 @@ impl EngineRuntime {
                 }
                 match resp {
                     Response::TickBatch(TickBatch { ticks, provider_kind,.. }) => {
+                        let pk = provider_kind.clone();
                         for t in ticks {
+                            // Update portfolio marks then deliver to strategy
+                            pm.update_apply_last_price(pk.clone(), &t.instrument, t.price);
                             let mut strat = strategy_for_task.lock().await;
-                            strat.on_tick(t, provider_kind).await;
+                            strat.on_tick(t, provider_kind.clone()).await;
                         }
                     }
                     Response::QuoteBatch(QuoteBatch { quotes, provider_kind,.. }) => {
+                        let pk = provider_kind.clone();
                         for q in quotes {
+                            // Use mid-price as mark
+                            let mid = (q.bid + q.ask) / Decimal::from(2);
+                            pm.update_apply_last_price(pk.clone(), &q.instrument, mid);
                             let mut strat = strategy_for_task.lock().await;
-                            strat.on_quote(q, provider_kind).await;
+                            strat.on_quote(q, provider_kind.clone()).await;
                         }
                     }
                     Response::BarBatch(BarBatch { bars, provider_kind,.. }) => {
+                        let pk = provider_kind.clone();
                         for b in bars {
+                            // Use close as mark
+                            pm.update_apply_last_price(pk.clone(), &b.instrument, b.close);
                             let mut strat = strategy_for_task.lock().await;
-                            strat.on_bar(b, provider_kind).await;
+                            strat.on_bar(b, provider_kind.clone()).await;
                         }
                     }
                     Response::MBP10(ob) => {
+                        // Derive a mark from MBP10: prefer mid from level 0 if present, else event.price
+                        let ev = &ob.event;
+                        let mark = if let Some(book) = &ev.book {
+                            if let (Some(b0), Some(a0)) = (book.bid_px.get(0), book.ask_px.get(0)) {
+                                (*b0 + *a0) / Decimal::from(2)
+                            } else {
+                                ev.price
+                            }
+                        } else {
+                            ev.price
+                        };
+                        pm.update_apply_last_price(ob.provider_kind.clone(), &ev.instrument, mark);
                         let mut strat = strategy_for_task.lock().await;
                         strat.on_mbp10(ob.event, ob.provider_kind).await;
                     }
@@ -998,7 +1020,7 @@ impl EngineRuntime {
                             strat.on_orders_batch(ob.clone()).await;
                         }
                     }
-                    Response::PositionsBatch(pb) => {
+                    Response::PositionsBatch(mut pb) => {
                         {
                             let mut st = state.lock().await;
                             // Adjust open_pnl via portfolio manager's last prices before delivering
@@ -1006,13 +1028,24 @@ impl EngineRuntime {
                             st.last_positions = Some(adj.clone());
                         }
                         {
-                            let mut strat = strategy_for_task.lock().await;
+
                             // Deliver adjusted positions batch to strategy
                             // Note: if no last price is known, open_pnl remains as provided
                             let st = state.lock().await; // we could pass adj directly; acquiring to be consistent
-                            if let Some(adj) = &st.last_positions {
-                                strat.on_positions_batch(adj.clone()).await;
+                            for mut p in pb.positions.iter_mut() {
+                                if p.open_pnl == Decimal::ZERO {
+                                    if let Some(ep) = st.last_positions.as_ref() {
+                                        for ep in ep.positions.iter() {
+                                            if p.provider_kind == ep.provider_kind && p.instrument == ep.instrument && p.side == ep.side {
+                                                p.open_pnl = ep.open_pnl;
+                                            }
+                                        }
+                                    }
+                                }
+
                             }
+                            let mut strat = strategy_for_task.lock().await;
+                            strat.on_positions_batch(pb.clone()).await;
                         }
                     }
                     Response::AccountDeltaBatch(ab) => {
@@ -1026,14 +1059,19 @@ impl EngineRuntime {
                         }
                     }
                     Response::Tick{tick, provider_kind} => {
+                        // Update portfolio mark before strategy
+                        pm.update_apply_last_price(provider_kind.clone(), &tick.instrument, tick.price);
                         let mut strat = strategy_for_task.lock().await;
                         strat.on_tick(tick, provider_kind).await;
                     }
                     Response::Quote{bbo, provider_kind} => {
+                        let mid = (bbo.bid + bbo.ask) / Decimal::from(2);
+                        pm.update_apply_last_price(provider_kind.clone(), &bbo.instrument, mid);
                         let mut strat = strategy_for_task.lock().await;
                         strat.on_quote(bbo, provider_kind).await;
                     }
                     Response::Bar{candle, provider_kind}=> {
+                        pm.update_apply_last_price(provider_kind.clone(), &candle.instrument, candle.close);
                         let mut strat = strategy_for_task.lock().await;
                         strat.on_bar(candle, provider_kind).await;
                     }
