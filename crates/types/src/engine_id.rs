@@ -159,7 +159,6 @@ impl fmt::Display for EngineUuid {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -195,8 +194,14 @@ mod tests {
     #[test]
     fn hex32_decoding_invalid_inputs() {
         assert!(EngineUuid::from_hex32("abc").is_none(), "too short");
-        assert!(EngineUuid::from_hex32(&"0".repeat(31)).is_none(), "31 chars");
-        assert!(EngineUuid::from_hex32(&"0".repeat(33)).is_none(), "33 chars");
+        assert!(
+            EngineUuid::from_hex32(&"0".repeat(31)).is_none(),
+            "31 chars"
+        );
+        assert!(
+            EngineUuid::from_hex32(&"0".repeat(33)).is_none(),
+            "33 chars"
+        );
         let mut bad = "0".repeat(31) + "Z"; // non-hex
         assert!(EngineUuid::from_hex32(&bad).is_none(), "non-hex char");
         bad = "x".repeat(32);
@@ -284,8 +289,7 @@ mod tests {
         let e = EngineUuid::new();
         // Two delimiters after id -> function skips exactly one, leaving one
         let s = format!("A+{}{}++B", ENGINE_TAG_PREFIX, e.to_hex32());
-        let (_, sanitized) =
-            EngineUuid::extract_and_remove_engine_tag(&s).expect("extract+remove");
+        let (_, sanitized) = EngineUuid::extract_and_remove_engine_tag(&s).expect("extract+remove");
         assert_eq!(sanitized.as_deref(), Some("A++B"));
     }
 
@@ -343,7 +347,10 @@ mod tests {
         for delim in ['+', ';', ' '] {
             let base = format!("note{}", delim);
             let out = EngineUuid::append_engine_tag(Some(base.clone()), e);
-            assert_eq!(out, format!("{}{}{}", base, ENGINE_TAG_PREFIX, e.to_hex32()));
+            assert_eq!(
+                out,
+                format!("{}{}{}", base, ENGINE_TAG_PREFIX, e.to_hex32())
+            );
         }
     }
 
@@ -351,9 +358,11 @@ mod tests {
     fn display_matches_hex32_lowercase() {
         let e = EngineUuid::new();
         assert_eq!(format!("{}", e), e.to_hex32());
-        assert!(format!("{}", e)
-            .chars()
-            .all(|c| c.is_ascii_hexdigit() && c.is_ascii_lowercase() || c.is_ascii_digit()));
+        assert!(
+            format!("{}", e)
+                .chars()
+                .all(|c| c.is_ascii_hexdigit() && c.is_ascii_lowercase() || c.is_ascii_digit())
+        );
         assert_eq!(format!("{}", e).len(), 32);
     }
 
