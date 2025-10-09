@@ -11,9 +11,6 @@ tracing-subscriber = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true }
 chrono = {workspace = true}
-tokio-util = { workspace = true }
-futures-util = { workspace = true }
-bytes = { workspace = true }
 dotenvy = { workspace = true }
 tt-types = { path = "../types" }
 tt-bus = { path = "../bus" }
@@ -26,14 +23,6 @@ ahash = { workspace = true }
 [[bin]]
 name = "tt-engine-test_strategy"
 path = "bin/data_test_strategy.rs"
-
-[[bin]]
-name = "tt-engine-orderbook_strategy"
-path = "bin/orderbook_test_strategy.rs"
-
-[[bin]]
-name = "tt-engine-orderbook_test"
-path = "bin/orderbook_place_test.rs"
 
 [[bin]]
 name = "tt-engine-total_live_test"
