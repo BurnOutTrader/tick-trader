@@ -1053,6 +1053,366 @@ const SYMBOL_INFO_PAIRS: &[(&str, SymbolInfo)] = &[
             exchange: Exchange::CBOT,
         },
     ),
+    // --- Add these to SYMBOL_INFO_PAIRS ---
+
+    // FX (CQG aliases -> CME 6* and E7)
+    (
+        "BP6",
+        SymbolInfo {
+            symbol_name: "BP6",
+            value_per_tick: dec!(0.625),
+            tick_size: dec!(0.0001),
+            decimal_accuracy: 4,
+            exchange: Exchange::CME,
+        },
+    ), // 6B
+    (
+        "CA6",
+        SymbolInfo {
+            symbol_name: "CA6",
+            value_per_tick: dec!(1.0),
+            tick_size: dec!(0.0001),
+            decimal_accuracy: 4,
+            exchange: Exchange::CME,
+        },
+    ), // 6C
+    (
+        "DA6",
+        SymbolInfo {
+            symbol_name: "DA6",
+            value_per_tick: dec!(1.0),
+            tick_size: dec!(0.0001),
+            decimal_accuracy: 4,
+            exchange: Exchange::CME,
+        },
+    ), // 6A (AUD)
+    (
+        "EU6",
+        SymbolInfo {
+            symbol_name: "EU6",
+            value_per_tick: dec!(1.25),
+            tick_size: dec!(0.0001),
+            decimal_accuracy: 4,
+            exchange: Exchange::CME,
+        },
+    ), // 6E
+    (
+        "JY6",
+        SymbolInfo {
+            symbol_name: "JY6",
+            value_per_tick: dec!(0.0125),
+            tick_size: dec!(0.000001),
+            decimal_accuracy: 6,
+            exchange: Exchange::CME,
+        },
+    ), // 6J
+    (
+        "MX6",
+        SymbolInfo {
+            symbol_name: "MX6",
+            value_per_tick: dec!(0.1),
+            tick_size: dec!(0.00001),
+            decimal_accuracy: 5,
+            exchange: Exchange::CME,
+        },
+    ), // 6M (MXN)
+    (
+        "NE6",
+        SymbolInfo {
+            symbol_name: "NE6",
+            value_per_tick: dec!(1.0),
+            tick_size: dec!(0.0001),
+            decimal_accuracy: 4,
+            exchange: Exchange::CME,
+        },
+    ), // 6N (NZD)
+    (
+        "SF6",
+        SymbolInfo {
+            symbol_name: "SF6",
+            value_per_tick: dec!(1.25),
+            tick_size: dec!(0.0001),
+            decimal_accuracy: 4,
+            exchange: Exchange::CME,
+        },
+    ), // 6S (CHF)
+    (
+        "EEU",
+        SymbolInfo {
+            symbol_name: "EEU",
+            value_per_tick: dec!(0.625),
+            tick_size: dec!(0.0001),
+            decimal_accuracy: 4,
+            exchange: Exchange::CME,
+        },
+    ), // E7 (E-mini EUR)
+    // Equity index (CQG aliases -> CME)
+    (
+        "EP",
+        SymbolInfo {
+            symbol_name: "EP",
+            value_per_tick: dec!(12.5),
+            tick_size: dec!(0.25),
+            decimal_accuracy: 2,
+            exchange: Exchange::CME,
+        },
+    ), // ES
+    (
+        "ENQ",
+        SymbolInfo {
+            symbol_name: "ENQ",
+            value_per_tick: dec!(5.0),
+            tick_size: dec!(0.25),
+            decimal_accuracy: 2,
+            exchange: Exchange::CME,
+        },
+    ), // NQ
+    // Treasuries (CQG aliases -> CBOT)
+    (
+        "USA",
+        SymbolInfo {
+            symbol_name: "USA",
+            value_per_tick: dec!(1.953125),
+            tick_size: dec!(0.0625),
+            decimal_accuracy: 4,
+            exchange: Exchange::CBOT,
+        },
+    ), // ZB (30Y)
+    (
+        "TYA",
+        SymbolInfo {
+            symbol_name: "TYA",
+            value_per_tick: dec!(0.48828125),
+            tick_size: dec!(0.015625),
+            decimal_accuracy: 5,
+            exchange: Exchange::CBOT,
+        },
+    ), // ZN (10Y)
+    (
+        "FVA",
+        SymbolInfo {
+            symbol_name: "FVA",
+            value_per_tick: dec!(0.244140625),
+            tick_size: dec!(0.0078125),
+            decimal_accuracy: 6,
+            exchange: Exchange::CBOT,
+        },
+    ), // ZF (5Y)
+    (
+        "TUA",
+        SymbolInfo {
+            symbol_name: "TUA",
+            value_per_tick: dec!(0.244140625),
+            tick_size: dec!(0.0078125),
+            decimal_accuracy: 6,
+            exchange: Exchange::CBOT,
+        },
+    ), // ZT (2Y)
+    (
+        "ULA",
+        SymbolInfo {
+            symbol_name: "ULA",
+            value_per_tick: dec!(31.25),
+            tick_size: dec!(0.03125),
+            decimal_accuracy: 5,
+            exchange: Exchange::CBOT,
+        },
+    ), // UB (Ultra Bond)
+    (
+        "TNA",
+        SymbolInfo {
+            symbol_name: "TNA",
+            value_per_tick: dec!(15.625),
+            tick_size: dec!(0.015625),
+            decimal_accuracy: 5,
+            exchange: Exchange::CBOT,
+        },
+    ), // TN (Ultra 10Y)
+    // Grains (CQG aliases -> CBOT Z*)
+    (
+        "ZCE",
+        SymbolInfo {
+            symbol_name: "ZCE",
+            value_per_tick: dec!(12.5),
+            tick_size: dec!(0.25),
+            decimal_accuracy: 2,
+            exchange: Exchange::CBOT,
+        },
+    ), // ZC Corn
+    (
+        "ZLE",
+        SymbolInfo {
+            symbol_name: "ZLE",
+            value_per_tick: dec!(6.0),
+            tick_size: dec!(0.01),
+            decimal_accuracy: 4,
+            exchange: Exchange::CBOT,
+        },
+    ), // ZL Soybean Oil
+    (
+        "ZME",
+        SymbolInfo {
+            symbol_name: "ZME",
+            value_per_tick: dec!(10.0),
+            tick_size: dec!(0.1),
+            decimal_accuracy: 1,
+            exchange: Exchange::CBOT,
+        },
+    ), // ZM Soybean Meal
+    (
+        "ZSE",
+        SymbolInfo {
+            symbol_name: "ZSE",
+            value_per_tick: dec!(12.5),
+            tick_size: dec!(0.25),
+            decimal_accuracy: 2,
+            exchange: Exchange::CBOT,
+        },
+    ), // ZS Soybeans
+    (
+        "ZWA",
+        SymbolInfo {
+            symbol_name: "ZWA",
+            value_per_tick: dec!(12.5),
+            tick_size: dec!(0.25),
+            decimal_accuracy: 2,
+            exchange: Exchange::CBOT,
+        },
+    ), // ZW Wheat
+    // Energies (CQG aliases -> NYMEX)
+    (
+        "CLE",
+        SymbolInfo {
+            symbol_name: "CLE",
+            value_per_tick: dec!(10.0),
+            tick_size: dec!(0.01),
+            decimal_accuracy: 2,
+            exchange: Exchange::NYMEX,
+        },
+    ), // CL Crude
+    (
+        "HOE",
+        SymbolInfo {
+            symbol_name: "HOE",
+            value_per_tick: dec!(4.2),
+            tick_size: dec!(0.0001),
+            decimal_accuracy: 4,
+            exchange: Exchange::NYMEX,
+        },
+    ), // HO ULSD
+    (
+        "RBE",
+        SymbolInfo {
+            symbol_name: "RBE",
+            value_per_tick: dec!(4.2),
+            tick_size: dec!(0.0001),
+            decimal_accuracy: 4,
+            exchange: Exchange::NYMEX,
+        },
+    ), // RB RBOB
+    (
+        "NGE",
+        SymbolInfo {
+            symbol_name: "NGE",
+            value_per_tick: dec!(10.0),
+            tick_size: dec!(0.001),
+            decimal_accuracy: 3,
+            exchange: Exchange::NYMEX,
+        },
+    ), // NG Nat Gas
+    (
+        "NQM",
+        SymbolInfo {
+            symbol_name: "NQM",
+            value_per_tick: dec!(5.0),
+            tick_size: dec!(0.01),
+            decimal_accuracy: 2,
+            exchange: Exchange::NYMEX,
+        },
+    ), // QM E-mini Crude
+    (
+        "NQG",
+        SymbolInfo {
+            symbol_name: "NQG",
+            value_per_tick: dec!(12.5),
+            tick_size: dec!(0.0025),
+            decimal_accuracy: 4,
+            exchange: Exchange::NYMEX,
+        },
+    ), // QG E-mini Nat Gas
+    (
+        "MCLE",
+        SymbolInfo {
+            symbol_name: "MCLE",
+            value_per_tick: dec!(1.0),
+            tick_size: dec!(0.01),
+            decimal_accuracy: 2,
+            exchange: Exchange::NYMEX,
+        },
+    ), // MCL Micro Crude
+    // Metals (CQG aliases -> COMEX/NYMEX)
+    (
+        "GCE",
+        SymbolInfo {
+            symbol_name: "GCE",
+            value_per_tick: dec!(10.0),
+            tick_size: dec!(0.1),
+            decimal_accuracy: 2,
+            exchange: Exchange::COMEX,
+        },
+    ), // GC Gold
+    (
+        "SIE",
+        SymbolInfo {
+            symbol_name: "SIE",
+            value_per_tick: dec!(0.125),
+            tick_size: dec!(0.005),
+            decimal_accuracy: 3,
+            exchange: Exchange::COMEX,
+        },
+    ), // SI Silver
+    (
+        "CPE",
+        SymbolInfo {
+            symbol_name: "CPE",
+            value_per_tick: dec!(0.0125),
+            tick_size: dec!(0.0005),
+            decimal_accuracy: 4,
+            exchange: Exchange::COMEX,
+        },
+    ), // HG Copper
+    (
+        "PLE",
+        SymbolInfo {
+            symbol_name: "PLE",
+            value_per_tick: dec!(5.0),
+            tick_size: dec!(0.1),
+            decimal_accuracy: 2,
+            exchange: Exchange::NYMEX,
+        },
+    ), // PL Platinum
+    // Crypto (CQG alias -> CME MET Micro Ether)
+    // CME spec: 0.1 ETH contract, min price fluct $0.50/ETH = $0.05 per contract
+    (
+        "GMET",
+        SymbolInfo {
+            symbol_name: "GMET",
+            value_per_tick: dec!(0.05),
+            tick_size: dec!(0.50),
+            decimal_accuracy: 2,
+            exchange: Exchange::CME,
+        },
+    ), // MET Micro Ether
+    (
+        "GLE",
+        SymbolInfo {
+            symbol_name: "GLE",
+            value_per_tick: dec!(10.0),
+            tick_size: dec!(0.1),
+            decimal_accuracy: 2,
+            exchange: Exchange::COMEX, // same as GC
+        },
+    ),
 ];
 
 use ahash::AHashMap;
