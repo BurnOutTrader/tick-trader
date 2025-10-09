@@ -79,7 +79,7 @@ impl Strategy for TestLiveOrdersStrategy {
         for a in accounts {
             info!(
                 "account: can_trade={} eq={} ts={}",
-                a.can_trade, a.equity, a.ts_ns
+                a.can_trade, a.equity, a.time
             );
         }
     }

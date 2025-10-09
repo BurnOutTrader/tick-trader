@@ -1,7 +1,9 @@
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc};
 use chrono::Utc;
 use dashmap::DashMap;
 use ahash::AHashMap;
+use rust_decimal::Decimal;
+use tokio::sync::{Mutex, RwLock};
 use tt_types::accounts::account::AccountName;
 use tt_types::accounts::events::{AccountDelta, ClientOrderId, OrderUpdate, PositionDelta, ProviderOrderId};
 use tt_types::providers::ProviderKind;
@@ -45,12 +47,12 @@ pub enum Result {
 /// Concurrency: uses DashMap for hot paths and a Mutex-protected AHashMap for closed positions.
 #[derive(Default)]
 pub struct PortfolioManager {
-    // Latest snapshot by (account, instrument)
-    positions_by_instrument: DashMap<(AccountName, Instrument), PositionDelta>,
-    // Latest snapshot by account -> instrument
-    positions_by_account: DashMap<AccountName, DashMap<Instrument, PositionDelta>>,
-    // Latest account deltas keyed by account name
-    accounts_by_name: DashMap<AccountName, AccountDelta>,
+    // Latest snapshot by account -> instrument: real positions, in real provider accounts.
+    positions_by_account: DashMap<(ProviderKind, AccountName), DashMap<Instrument, PositionDelta>>,
+    // Total position delta across all accounts (synthetic), open pnl + average price calculated as net-sum of real positions
+    positions_total_delta: DashMap<Instrument, PositionDelta>,
+    // Latest account deltas keyed by provider + account name
+    accounts_by_name: DashMap<(ProviderKind, AccountName), AccountDelta>,
     // All currently open orders (keyed by instrument + best available order id)
     open_orders: DashMap<OrderKey, OrderUpdate>,
     // Completed (closed/filled) orders kept for later reference
@@ -63,6 +65,8 @@ pub struct PortfolioManager {
     last_accounts: Mutex<Option<AccountDeltaBatch>>,
     // Vendor securities cache
     securities_by_provider: Arc<DashMap<ProviderKind, Vec<Instrument>>>,
+
+    last_price: DashMap<(ProviderKind, Instrument), Decimal>,
 }
 
 impl PortfolioManager {
@@ -71,6 +75,8 @@ impl PortfolioManager {
         pm.securities_by_provider = securities_by_provider;
         pm
     }
+
+
 
     /// Apply an OrdersBatch to update the open orders map.
     /// Heuristic: if leaves > 0 we consider the order open; otherwise remove it if present.
@@ -105,7 +111,7 @@ impl PortfolioManager {
             .entry(account.clone())
             .or_insert_with(DashMap::new);
         for p in &batch.positions {
-            if p.net_qty_after == 0 {
+            if p.net_qty > Decimal::ZERO {
                 entry.remove(&p.instrument);
                 self.positions_by_instrument.remove(&(account.clone(), p.instrument.clone()));
             } else {
@@ -126,48 +132,58 @@ impl PortfolioManager {
     }
 
     // Queries - positions (aggregated by instrument)
-    pub fn position_for(&self, instrument: &Instrument) -> Option<PositionDelta> {
+    pub fn position_total_delta_for(&self, instrument: &Instrument) -> Option<PositionDelta> {
         // Aggregate net qty across all accounts for this instrument
-        let mut total_after: i64 = 0;
-        let mut total_before: i64 = 0;
+        let mut total_after: Decimal = Decimal::ZERO;
+        let mut total_before: Decimal = Decimal::ZERO;
         let mut provider_kind: Option<ProviderKind> = None;
-        let mut ts = Utc::now();
+        let ts = Utc::now(); //todo, use engine clock
         for kv in self.positions_by_instrument.iter() {
             let (_acct, instr) = kv.key();
             if instr == instrument {
                 let p = kv.value();
-                total_after += p.net_qty_after;
-                total_before += p.net_qty_before;
+                total_after += p.net_qty;
+                total_before += p.net_qty;
                 provider_kind = provider_kind.or(Some(p.provider_kind.clone()));
-                if p.ts_ns > ts { ts = p.ts_ns; }
+                if p.time > ts { ts = p.time; }
             }
         }
-        if total_after == 0 && total_before == 0 && provider_kind.is_none() {
+
+        if total_after == Decimal::ZERO && total_before == Decimal::ZERO && provider_kind.is_none() {
             None
         } else {
             Some(PositionDelta {
                 instrument: instrument.clone(),
                 provider_kind: provider_kind.unwrap_or(ProviderKind::ProjectX(tt_types::providers::ProjectXTenant::Topstep)), // fallback
-                net_qty_before: total_before,
-                net_qty_after: total_after,
-                realized_delta: rust_decimal::Decimal::ZERO,
-                open_pnl: rust_decimal::Decimal::ZERO,
-                ts_ns: ts,
+                net_qty: total_after,
+                average_price:,
+                open_pnl: ,
+                time: ts,
+                side: ,
             })
         }
     }
 
-    pub fn net_qty(&self, instrument: &Instrument) -> i64 {
-        self.position_for(instrument).map(|p| p.net_qty_after).unwrap_or(0)
+    /// This is how we update open pnl from average entry price
+    pub fn update_apply_last_price(&self, provider_kind: ProviderKind, instrument: &Instrument, price: Decimal) {
+        let key = (provider_kind, instrument.clone());
+        self.last_price.insert(key, price);
+        if let Some(position) = self.positions_by_account
+
     }
 
-    pub fn is_long(&self, instrument: &Instrument) -> bool {
+
+    pub fn net_qty(&self, instrument: &Instrument) -> Decimal {
+        self.position_for(instrument).map(|p| p.net_qty).unwrap_or(Decimal::ZERO)
+    }
+
+    pub fn is_long_delta(&self, instrument: &Instrument) -> bool {
         self.net_qty(instrument) > 0
     }
-    pub fn is_short(&self, instrument: &Instrument) -> bool {
+    pub fn is_short_delta(&self, instrument: &Instrument) -> bool {
         self.net_qty(instrument) < 0
     }
-    pub fn is_flat(&self, instrument: &Instrument) -> bool {
+    pub fn is_flat_delta(&self, instrument: &Instrument) -> bool {
         self.position_for(instrument)
             .map(|p| p.net_qty_after == 0)
             .unwrap_or(true)
@@ -252,7 +268,7 @@ mod tests {
             net_qty_after: after,
             realized_delta: Decimal::ZERO,
             open_pnl: Decimal::ZERO,
-            ts_ns: Utc::now(),
+            time: Utc::now(),
         }
     }
 
