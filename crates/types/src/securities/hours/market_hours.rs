@@ -137,7 +137,7 @@ impl MarketHours {
     /// True if a session of the requested kind is open at `t`.
     pub fn is_open_with(&self, t: DateTime<Utc>, kind: SessionKind) -> bool {
         let local = t.with_timezone(&self.tz);
-        if self.holidays.iter().any(|d| *d == local.date_naive()) {
+        if self.holidays.contains(&local.date_naive()) {
             return false;
         }
         let w_today = local.weekday().num_days_from_monday() as usize;
@@ -179,12 +179,12 @@ impl MarketHours {
         }
 
         let yday_date = local.date_naive() - Duration::days(1);
-        if self.holidays.iter().any(|d| *d == yday_date) {
+        if self.holidays.contains(&yday_date) {
             return false;
         }
         let yday = yday_date.weekday().num_days_from_monday() as usize;
         self.iter_rules(kind).any(|r| {
-            if !(r.open_ssm > r.close_ssm) {
+            if r.open_ssm <= r.close_ssm {
                 return false;
             }
             if !r.days[yday] {
@@ -327,13 +327,13 @@ pub fn candle_end(
 
     match resolution {
         Resolution::Seconds(1) => {
-            return Some(time_open + Duration::seconds(1) - Duration::nanoseconds(1));
+            Some(time_open + Duration::seconds(1) - Duration::nanoseconds(1))
         }
         Resolution::Minutes(1) => {
-            return Some(time_open + Duration::minutes(1) - Duration::nanoseconds(1));
+            Some(time_open + Duration::minutes(1) - Duration::nanoseconds(1))
         }
         Resolution::Hours(1) => {
-            return Some(time_open + Duration::hours(1) - Duration::nanoseconds(1));
+            Some(time_open + Duration::hours(1) - Duration::nanoseconds(1))
         }
         Resolution::Daily => {
             if hours.has_daily_close {
@@ -360,7 +360,7 @@ pub fn candle_end(
             let mut d = local.date_naive();
             let mut dow = local.weekday();
             while dow != Weekday::Mon {
-                d = d + Duration::days(1);
+                d += Duration::days(1);
                 dow = d.weekday();
             }
             let next_monday_00_local = hours
@@ -378,7 +378,7 @@ pub fn candle_end(
                 // If the computed Monday is today (already Monday), move back to the prior week’s Sunday.
                 let mut d_sun = d;
                 // step back to Sunday corresponding to that Monday
-                d_sun = d_sun - Duration::days(1);
+                d_sun -= Duration::days(1);
                 let sunday_17_local = hours
                     .tz
                     .with_ymd_and_hms(d_sun.year(), d_sun.month(), d_sun.day(), 17, 0, 0)
@@ -534,7 +534,7 @@ pub fn hours_for_exchange(exch: Exchange) -> MarketHours {
                 // Asian hours: 01:00–08:00 local
                 SessionRule {
                     days: [false, true, true, true, true, true, false],
-                    open_ssm: 1 * 3600,
+                    open_ssm: 3600,
                     close_ssm: 8 * 3600,
                 },
             ],
@@ -574,7 +574,7 @@ pub fn hours_for_exchange(exch: Exchange) -> MarketHours {
             tz: Europe::London,
             regular: vec![SessionRule {
                 days: [false, true, true, true, true, true, false],
-                open_ssm: 1 * 3600,
+                open_ssm: 3600,
                 close_ssm: 23 * 3600,
             }],
             extended: vec![],
@@ -773,7 +773,7 @@ pub fn week_session_bounds(
         // If it's Sunday but before 17:00 local, the "most-recent Sunday 17:00" is last week
         let secs = local.time().num_seconds_from_midnight();
         if wd == Weekday::Sun && secs < 17 * 3600 {
-            sun_date = sun_date - chrono::Duration::days(7);
+            sun_date -= chrono::Duration::days(7);
         }
 
         let week_open_local = tz
@@ -862,7 +862,7 @@ pub fn next_session_open_after(mh: &MarketHours, after_utc: DateTime<Utc>) -> Da
     let after_local = after_utc.with_timezone(&tz);
 
     // quick holiday check
-    let is_holiday = |d: NaiveDate| mh.holidays.iter().any(|h| *h == d);
+    let is_holiday = |d: NaiveDate| mh.holidays.contains(&d);
 
     // combine regular + extended for “is open” calendar
     let mut rules: Vec<&SessionRule> = Vec::new();
@@ -901,10 +901,10 @@ pub fn next_session_open_after(mh: &MarketHours, after_utc: DateTime<Utc>) -> Da
             }
 
             // Construct local open time
-            let open_ssm = r.open_ssm.max(0).min(24 * 3600);
-            let open_h = (open_ssm / 3600) as u32;
-            let open_m = ((open_ssm % 3600) / 60) as u32;
-            let open_s = (open_ssm % 60) as u32;
+            let open_ssm = r.open_ssm.clamp(0, 24 * 3600);
+            let open_h = open_ssm / 3600;
+            let open_m = (open_ssm % 3600) / 60;
+            let open_s = open_ssm % 60;
 
             let open_local = tz
                 .with_ymd_and_hms(

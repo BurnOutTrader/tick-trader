@@ -557,7 +557,7 @@ pub trait Bytes<T> {
 }
 
 pub trait VecBytes<T> {
-    fn vec_to_aligned(data: &Vec<T>) -> AlignedVec;
+    fn vec_to_aligned(data: &[T]) -> AlignedVec;
 
     fn from_array_bytes(data: &[u8]) -> anyhow::Result<Vec<T>>;
 }
