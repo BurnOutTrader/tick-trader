@@ -3,7 +3,7 @@ use rust_decimal::Decimal;
 use std::str::FromStr;
 use std::time::Duration;
 use tokio::time::sleep;
-use tracing::info;
+use tracing::{info};
 use tracing::level_filters::LevelFilter;
 use tt_bus::ClientMessageBus;
 use tt_engine::engine::{DataTopic, EngineHandle, EngineRuntime, Strategy};
@@ -18,13 +18,13 @@ use tt_types::securities::symbols::Instrument;
 use tt_types::wire::{OrderType, OrdersBatch, PositionsBatch, Trade};
 
 pub struct TotalLiveTestStrategy {
-    _symbol: Instrument,
+    instrument: Instrument,
     data_provider: ProviderKind,
     execution_provider: ProviderKind,
     account_name: AccountName,
     subscribed: Vec<DataTopic>,
     last_order_type: OrderType,
-    engine: Option<EngineHandle>,
+    h: Option<EngineHandle>,
     symbol_key: SymbolKey,
     count: i32,
     order_id: EngineUuid,
@@ -34,17 +34,30 @@ impl Strategy for TotalLiveTestStrategy {
     fn on_start(&mut self, h: EngineHandle) {
         self.count += 1;
         info!("on_start: strategy start");
-        let instrument = Instrument::from_str("MNQ.Z25").unwrap();
 
-        h.subscribe_now(DataTopic::MBP10, self.symbol_key.clone());
+        h.subscribe_now(DataTopic::Ticks, self.symbol_key.clone());
         // store handle
-        self.engine = Some(h.clone());
+        self.h = Some(h.clone());
+
+
+    }
+
+    fn on_stop(&mut self) {
+        info!("on_stop: live strategy passed all tests");
+    }
+
+    fn on_tick(&mut self, t: &Tick, provider_kind: ProviderKind) {
+        if provider_kind != self.data_provider {
+            panic!("Incorrect provider kind {:?}", provider_kind)
+        }
+        assert!(t.price != Decimal::ZERO);
+        assert!(t.time < Utc::now());
 
         // Spawn a small workflow to exercise place -> replace -> cancel
         let account = self.account_name.clone();
         let provider = self.execution_provider;
-        let exec_key = SymbolKey::new(instrument.clone(), provider);
-
+        let exec_key = SymbolKey::new(self.instrument.clone(), provider);
+        let h = self.h.clone().unwrap();
         if self.count == 1 {
             // small delay to allow account subscriptions to come online
             // 1) Place a small JoinBid order
@@ -141,18 +154,6 @@ impl Strategy for TotalLiveTestStrategy {
         }
     }
 
-    fn on_stop(&mut self) {
-        info!("on_stop: live strategy passed all tests");
-    }
-
-    fn on_tick(&mut self, t: &Tick, provider_kind: ProviderKind) {
-        if provider_kind != self.data_provider {
-            panic!("Incorrect provider kind {:?}", provider_kind)
-        }
-        assert!(t.price != Decimal::ZERO);
-        assert!(t.time < Utc::now())
-    }
-
     fn on_quote(&mut self, _q: &Bbo, provider_kind: ProviderKind) {
         if provider_kind != self.data_provider {
             panic!("Incorrect provider kind {:?}", provider_kind)
@@ -228,13 +229,13 @@ async fn main() -> anyhow::Result<()> {
     let mut engine = EngineRuntime::new(bus.clone());
     let account_name = AccountName::from_str("PRAC-V2-64413-98419885").unwrap();
     let strategy = TotalLiveTestStrategy {
-        _symbol: Instrument::from_str("MNQ.Z25").unwrap(),
+        instrument: Instrument::from_str("MNQ.Z25").unwrap(),
         data_provider: ProviderKind::ProjectX(ProjectXTenant::Topstep),
         execution_provider: ProviderKind::ProjectX(ProjectXTenant::Topstep),
         account_name: account_name.clone(),
         subscribed: Vec::new(),
         last_order_type: OrderType::Market,
-        engine: None,
+        h: None,
         symbol_key: SymbolKey::new(
             Instrument::from_str("MNQ.Z25").unwrap(),
             ProviderKind::ProjectX(ProjectXTenant::Topstep),
