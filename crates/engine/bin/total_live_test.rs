@@ -1,6 +1,7 @@
 use chrono::Utc;
 use rust_decimal::Decimal;
 use std::str::FromStr;
+use std::sync::Mutex;
 use std::time::Duration;
 use tokio::time::sleep;
 use tracing::{info};
@@ -27,7 +28,7 @@ pub struct TotalLiveTestStrategy {
     h: Option<EngineHandle>,
     symbol_key: SymbolKey,
     count: i32,
-    order_id: EngineUuid,
+    order_id: Mutex<EngineUuid>,
 }
 //todo, we should implement a special error type for strategies and let the engine, handle depending on severity.
 impl Strategy for TotalLiveTestStrategy {
@@ -52,6 +53,7 @@ impl Strategy for TotalLiveTestStrategy {
         }
         assert!(t.price != Decimal::ZERO);
         assert!(t.time < Utc::now());
+        let mut order_id = self.order_id.lock().unwrap();
 
         // Spawn a small workflow to exercise place -> replace -> cancel
         let account = self.account_name.clone();
@@ -62,7 +64,7 @@ impl Strategy for TotalLiveTestStrategy {
             // small delay to allow account subscriptions to come online
             // 1) Place a small JoinBid order
             info!("test flow: placing JoinBid BUY qty=1");
-            self.order_id = h
+            *order_id = h
                 .place_order(
                     account.clone(),
                     exec_key.clone(),
@@ -94,7 +96,7 @@ impl Strategy for TotalLiveTestStrategy {
                         new_stop_price: None,
                         new_trail_price: None,
                     },
-                    self.order_id.clone(),
+                    order_id.clone(),
                 )
                 .unwrap();
         } else {
@@ -103,12 +105,12 @@ impl Strategy for TotalLiveTestStrategy {
 
         if self.count == 38 {
             // Cancel
-            info!("cancelling order: {}", self.order_id,);
-            let _ = h.cancel_order(provider, account.clone(), self.order_id);
+            info!("cancelling order: {}", order_id);
+            let _ = h.cancel_order(provider, account.clone(), order_id.clone());
             // 2) Place a small JoinAsk SELL order and then cancel it
             if self.count == 25 {
                 info!("test flow: placing JoinAsk SELL qty=1");
-                self.order_id = h
+                *order_id = h
                     .place_order(
                         account.clone(),
                         exec_key.clone(),
@@ -130,14 +132,14 @@ impl Strategy for TotalLiveTestStrategy {
             info!(?self.order_id, "JoinAsk placed; waiting then cancel");
             info!(?self.order_id, "cancelling JoinAsk order");
             let _ = h
-                .cancel_order(provider, account.clone(), self.order_id.clone())
+                .cancel_order(provider, account.clone(), order_id.clone())
                 .unwrap();
         }
 
         if self.count == 75 {
             // 3) Place a MARKET BUY order (fire-and-forget)
             info!("test flow: placing MARKET BUY qty=1");
-            let _ = h.place_order(
+            *order_id = h.place_order(
                 account.clone(),
                 exec_key.clone(),
                 tt_types::accounts::events::Side::Buy,
@@ -149,7 +151,7 @@ impl Strategy for TotalLiveTestStrategy {
                 Some("total_live_test".to_string()),
                 None,
                 None,
-            );
+            ).unwrap();
             info!("submitted MARKET BUY");
         }
     }
@@ -241,7 +243,7 @@ async fn main() -> anyhow::Result<()> {
             ProviderKind::ProjectX(ProjectXTenant::Topstep),
         ),
         count: 0,
-        order_id: EngineUuid::new(),
+        order_id: EngineUuid::new().into(),
     };
     let _handle = engine.start(strategy).await?;
 
