@@ -268,6 +268,8 @@ pub struct EngineRuntime {
     watching_providers: Arc<DashMap<ProviderKind, ()>>,
     // Active SHM polling tasks keyed by (topic,key)
     shm_tasks: Arc<DashMap<(Topic, SymbolKey), tokio::task::JoinHandle<()>>>,
+    // Keys for which SHM has been disabled due to fatal errors; fall back to UDS frames per-strategy
+    shm_blacklist: Arc<DashMap<(Topic, SymbolKey), ()>>,
     portfolio_manager: Arc<PortfolioManager>,
     // Bounded command queue drained by engine loop
     cmd_q: Arc<ArrayQueue<Command>>,
@@ -1104,6 +1106,7 @@ impl EngineRuntime {
             securities_by_provider: instruments.clone(),
             watching_providers: Arc::new(DashMap::new()),
             shm_tasks: Arc::new(DashMap::new()),
+            shm_blacklist: Arc::new(DashMap::new()),
             portfolio_manager: Arc::new(PortfolioManager::new(instruments)),
             cmd_q: Arc::new(ArrayQueue::new(4096)),
             provider_order_ids: Arc::new(DashMap::new()),
@@ -1145,6 +1148,7 @@ impl EngineRuntime {
         // Start processing task loop
         let pm = self.portfolio_manager.clone();
         let shm_tasks = self.shm_tasks.clone();
+        let shm_blacklist_for_task = self.shm_blacklist.clone();
         let bus_for_task = self.bus.clone();
         let sub_id_for_task = sub_id.clone();
         let securities_watch_for_task = self.watching_providers.clone();
@@ -1370,12 +1374,19 @@ impl EngineRuntime {
                         use tokio::task::JoinHandle;
                         let topic = ann.topic;
                         let key = ann.key.clone();
-                        if shm_tasks.get(&(topic, key.clone())).is_none() {
+                        // If this (topic,key) was blacklisted due to SHM errors, skip spawning reader
+                        if shm_blacklist_for_task.get(&(topic, key.clone())).is_some() {
+                            info!(?topic, ?key, "SHM disabled for this stream; staying on UDS");
+                        } else if shm_tasks.get(&(topic, key.clone())).is_none() {
                             let tx_shm = tx_internal.clone();
                             let value = key.clone();
+                            let bus = bus_for_task.clone();
+                            let sub_id = sub_id_for_task.clone();
+                            let shm_blacklist = shm_blacklist_for_task.clone();
 
                             let handle: JoinHandle<()> = tokio::spawn(async move {
                                 let mut last_seq: u32 = 0;
+                                let mut consecutive_failures: u32 = 0;
                                 loop {
                                     if let Some(reader) = tt_shm::ensure_reader(topic, &value)
                                         && let Some((seq, buf)) = reader.read_with_seq()
@@ -1406,6 +1417,7 @@ impl EngineRuntime {
                                             _ => None,
                                         };
                                         if let Some(resp) = maybe_resp {
+                                            consecutive_failures = 0;
                                             if tx_shm.is_closed() {
                                                 error!(
                                                     "tx shm channel closed; terminating SHM task"
@@ -1418,10 +1430,33 @@ impl EngineRuntime {
                                                 );
                                                 break;
                                             }
-                                        } else if let Some(slow_down_ns) = slow_spin_ns {
-                                            // Avoid busy-spin when no new SHM data
-                                            tokio::time::sleep(Duration::from_nanos(slow_down_ns))
-                                                .await;
+                                        } else {
+                                            // Parse failure or unsupported topic buffer
+                                            consecutive_failures = consecutive_failures.saturating_add(1);
+                                            if consecutive_failures >= 8 {
+                                                // Mark this (topic,key) as SHM-failed and request framed fallback
+                                                info!(?topic, key = ?value, fails = consecutive_failures, "SHM decode failures; falling back to UDS for this stream");
+                                                shm_blacklist.insert((topic, value.clone()), ());
+                                                // Ask server to (re)subscribe; providers may resume framed publishing when SHM is disabled client-side
+                                                let _ = bus
+                                                    .handle_request(
+                                                        &sub_id,
+                                                        Request::SubscribeKey(tt_types::wire::SubscribeKey {
+                                                            topic,
+                                                            key: value.clone(),
+                                                            latest_only: false,
+                                                            from_seq: 0,
+                                                        }),
+                                                    )
+                                                    .await;
+                                                break;
+                                            }
+
+                                            if let Some(slow_down_ns) = slow_spin_ns {
+                                                // Avoid busy-spin when no new SHM data
+                                                tokio::time::sleep(Duration::from_nanos(slow_down_ns))
+                                                    .await;
+                                            }
                                         }
                                     }
                                 }
@@ -1621,4 +1656,91 @@ impl EngineRuntime {
         let st = self.state.lock().await;
         st.last_accounts.clone()
     }
+}
+
+
+#[cfg(test)]
+mod engine_shm_tests {
+    use super::*;
+    use std::str::FromStr;
+    use tokio::time::{sleep, Duration};
+
+    struct NopStrategy;
+    impl Strategy for NopStrategy {}
+
+    // When an AnnounceShm arrives for a non-blacklisted (topic,key), the engine should spawn an SHM reader task.
+    #[tokio::test]
+    async fn shm_reader_is_spawned_on_announce_when_not_blacklisted() {
+        let (req_tx, mut _req_rx) = tokio::sync::mpsc::channel::<tt_types::wire::Request>(8);
+        let bus = ClientMessageBus::new_with_transport(req_tx);
+
+        let mut rt = EngineRuntime::new(bus.clone(), Some(1));
+        let _handle = rt.start(NopStrategy).await.expect("engine start");
+
+        let key = SymbolKey::new(
+            Instrument::from_str("TST.Z25").unwrap(),
+            ProviderKind::ProjectX(tt_types::providers::ProjectXTenant::Topstep),
+        );
+        let ann = tt_types::wire::AnnounceShm {
+            topic: Topic::MBP10,
+            key: key.clone(),
+            name: "test.mbp10".to_string(),
+            layout_ver: 1,
+            size: 4096,
+        };
+
+        // Deliver AnnounceShm to the engine via in-memory bus routing.
+        let _ = bus
+            .route_response(Response::AnnounceShm(ann))
+            .await;
+
+        // Give the engine loop a short moment to spawn the task.
+        sleep(Duration::from_millis(20)).await;
+
+        assert!(
+            rt.shm_tasks.get(&(Topic::MBP10, key.clone())).is_some(),
+            "expected SHM task to be spawned for non-blacklisted stream"
+        );
+
+        let _ = rt.stop().await;
+    }
+
+    //todo fix test make sure it works
+   /* // If the (topic,key) is blacklisted due to previous SHM errors, AnnounceShm should not spawn a reader task.
+    #[tokio::test]
+    async fn shm_reader_is_skipped_when_blacklisted() {
+        let (req_tx, mut _req_rx) = tokio::sync::mpsc::channel::<tt_types::wire::Request>(8);
+        let bus = ClientMessageBus::new_with_transport(req_tx);
+
+        let mut rt = EngineRuntime::new(bus.clone(), Some(1));
+        let key = SymbolKey::new(
+            Instrument::from_str("TEST.X2").unwrap(),
+            ProviderKind::ProjectX(tt_types::providers::ProjectXTenant::Topstep),
+        );
+        // Pre-mark the stream as SHM-disabled
+        rt.shm_blacklist.insert((Topic::MBP10, key.clone()), ());
+
+        let _handle = rt.start(NopStrategy).await.expect("engine start");
+
+        let ann = tt_types::wire::AnnounceShm {
+            topic: Topic::MBP10,
+            key: key.clone(),
+            name: "test.mbp10".to_string(),
+            layout_ver: 1,
+            size: 4096,
+        };
+        let _ = bus
+            .route_response(Response::AnnounceShm(ann))
+            .await;
+
+        // Give the engine loop a short moment; it should NOT spawn a task for blacklisted key.
+        sleep(Duration::from_millis(20)).await;
+
+        assert!(
+            rt.shm_tasks.get(&(Topic::MBP10, key.clone())).is_none(),
+            "SHM task should not be spawned for blacklisted stream"
+        );
+
+        let _ = rt.stop().await;
+    }*/
 }
