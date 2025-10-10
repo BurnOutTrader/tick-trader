@@ -14,6 +14,8 @@
 
 > Note: This project is experimental and under active development. Interfaces may change and breaking updates can occur without notice. Use at your own risk.
 
+Note: The first build will take a while as I am using an integrated duck database as a stand in for an external connection later.
+
 ## Live trading status and near‑term roadmap
 
 The engine can place live orders and is intended strictly for testing and evaluation. Do not use in production.
@@ -21,7 +23,7 @@ The engine can place live orders and is intended strictly for testing and evalua
 - Publish a reference “live test” strategy
 - Surface EngineHandle helpers via top‑level exports
 - Implement the backtesting engine
-- Support external databases alongside the integrated DuckDB
+- Support external databases replacing the integrated DuckDB
 - Warm up consolidators from live data plus the historical catalog
 - Expand automated tests and CI coverage
 - Adding rithmic + data bento at a later stage.
