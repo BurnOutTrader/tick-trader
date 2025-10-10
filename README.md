@@ -147,6 +147,10 @@ impl Strategy for TotalLiveTestStrategy {
 }
 ```
 
+To use stop loss and take profit brackets in ProjectX switch to OCO brackets. (not thoroughly tested) 
+
+<img src="docs/misc/px_brackets.png" alt="ProjectX brackets" width="480" />
+
 ## 🔐 Environment and credentials (.env)
 
 - The server and providers load .env automatically. ProviderSessionSpec::from_env scans all environment variables to construct credentials for multiple providers.
