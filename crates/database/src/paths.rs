@@ -33,7 +33,7 @@ pub fn provider_kind_to_db_string(provider_kind: ProviderKind) -> String {
     }
 }
 
-#[allow(clippy::unreachable_patterns)]
+#[allow(unreachable_patterns)]
 /// provider/symbol/{kind} {res}/YYYY/MM/
 pub fn partition_dir(
     data_root: &Path,
@@ -48,7 +48,7 @@ pub fn partition_dir(
         .join(market_type.to_string());
 
     let base = if market_type == MarketType::Futures {
-        let root_symbol = extract_root(&instrument);
+        let root_symbol = extract_root(instrument);
         base.join(root_symbol).join(instrument.to_string())
     } else {
         base.join(instrument.to_string())

@@ -16,6 +16,7 @@ use tt_types::keys::{AccountKey, SymbolKey};
 use tt_types::providers::{ProjectXTenant, ProviderKind};
 use tt_types::securities::symbols::Instrument;
 use tt_types::wire::{OrderType, OrdersBatch, PositionsBatch, Trade};
+#[allow(dead_code)]
 pub struct TotalLiveTestStrategy {
     instrument: Instrument,
     data_provider: ProviderKind,
@@ -82,7 +83,7 @@ impl Strategy for TotalLiveTestStrategy {
             info!(?self.order_id, "JoinBid placed; waiting to replace");
             // Replace: bump size
             info!(?self.order_id, "replacing order: new_qty=2");
-            let _ = h
+            h
                 .replace_order(
                     provider,
                     account.clone(),
@@ -94,7 +95,7 @@ impl Strategy for TotalLiveTestStrategy {
                         new_stop_price: None,
                         new_trail_price: None,
                     },
-                    order_id.clone(),
+                    *order_id,
                 )
                 .unwrap();
         }
@@ -102,7 +103,7 @@ impl Strategy for TotalLiveTestStrategy {
         if self.count == 38 {
             // Cancel
             info!("cancelling order: {}", order_id);
-            let _ = h.cancel_order(provider, account.clone(), order_id.clone());
+            let _ = h.cancel_order(provider, account.clone(), *order_id);
         }
 
         if self.count == 25 {
@@ -127,8 +128,8 @@ impl Strategy for TotalLiveTestStrategy {
         if self.count == 50 {
             info!(?self.order_id, "JoinAsk placed; waiting then cancel");
             info!(?self.order_id, "cancelling JoinAsk order");
-            let _ = h
-                .cancel_order(provider, account.clone(), order_id.clone())
+            h
+                .cancel_order(provider, account.clone(), *order_id)
                 .unwrap();
         }
 
