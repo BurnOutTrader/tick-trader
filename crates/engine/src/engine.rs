@@ -1370,7 +1370,7 @@ impl EngineRuntime {
                                             }
                                         } else {
                                             // Avoid busy-spin when no new SHM data
-                                            tokio::time::sleep(Duration::from_millis(2)).await;
+                                            tokio::time::sleep(Duration::from_nanos(100)).await;
                                         }
                                     }
                                 }
