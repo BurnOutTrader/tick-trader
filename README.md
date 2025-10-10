@@ -31,6 +31,7 @@ The engine can place live orders and is intended strictly for testing and evalua
 - Warm up consolidators from live data plus the historical catalog
 - Expand automated tests and CI coverage
 - Adding rithmic + data bento at a later stage.
+- Support for publishing strategy signals on the bus will be implemented last
 
 
 ## ✨ Brief overview
@@ -40,6 +41,7 @@ The engine can place live orders and is intended strictly for testing and evalua
 - 🔌 Adapters: multiple instances of the same adapter can run concurrently (e.g., ProjectX Tradeify + Topstep).
 - 🏢 ProjectX tenants: not all firms are pre‑encoded in `ProjectXTenant` yet; adding a new tenant is straightforward and reuses the existing logic.
 - 🚧 Status: work in progress — the architecture is largely stabilized, but features are still evolving.
+- 📡Support for publishing/sharing strategy signals/insights on the bus will be implemented last
 
 ### Strategies are straight forward
 [Example Strategy](crates/a_strategies/my_strategies/orderbook_scalper)
