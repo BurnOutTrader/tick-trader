@@ -242,9 +242,13 @@ impl PxWebSocketClient {
         let mut base = self.base_url.trim_end_matches('/').to_string();
         // Ensure websocket scheme for tungstenite
         if base.starts_with("https://") {
-            base = base.replacen("https://", "wss://", 1);
-        } else if base.starts_with("http://") {
-            base = base.replacen("http://", "ws://", 1);
+            base = base.replacen(
+                "https://",
+                "wss://",
+                1
+            );
+        } else if base.starts_with("https://") {
+            base = base.replacen("https://", "ws://", 1);
         }
         let token = self.bearer_token.read().await.clone();
         if let Some(token) = token {
@@ -857,11 +861,9 @@ impl PxWebSocketClient {
                                                     }
                                                 }
                                             } else if data.is_object() {
-                                                if let Ok(d) =
-                                                    serde_json::from_value::<models::GatewayDepth>(
-                                                        data.clone(),
-                                                    )
-                                                {
+                                                if let Ok(d) = serde_json::from_value::<models::GatewayDepth>(
+                                                    data.clone(),
+                                                ) {
                                                     items.push(d);
                                                 }
                                             }
@@ -1053,8 +1055,7 @@ impl PxWebSocketClient {
                                             let mut book_opt = None;
                                             if first_in_batch {
                                                 if let Some(bk) = attach_snapshot_book.clone() {
-                                                    flags =
-                                                        MbpFlags(flags.0 | MbpFlags::F_SNAPSHOT);
+                                                    flags = MbpFlags(flags.0 | MbpFlags::F_SNAPSHOT);
                                                     book_opt = Some(bk);
                                                 }
                                             }
@@ -1457,10 +1458,8 @@ impl PxWebSocketClient {
                                         };
                                         out.push(trade);
                                     }
-                                    if !out.is_empty() {
-                                        if let Err(e) = self.bus.publish_closed_trades(out).await {
-                                            error!(target: "projectx.ws", "failed to publish ClosedTrades: {:?}", e);
-                                        }
+                                    if !out.is_empty() && let Err(e) = self.bus.publish_closed_trades(out).await {
+                                        error!(target: "projectx.ws", "failed to publish ClosedTrades: {:?}", e);
                                     }
                                 }
                             }

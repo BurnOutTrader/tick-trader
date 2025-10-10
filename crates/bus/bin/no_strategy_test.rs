@@ -26,7 +26,7 @@ async fn main() -> anyhow::Result<()> {
     let sub_id = bus.add_client(tx).await;
 
     // simple ping sanity check (optional but useful)
-    let _ = bus
+    bus
         .handle_request(
             &sub_id,
             Request::Ping(tt_types::wire::Ping { ts_ns: Utc::now() }),

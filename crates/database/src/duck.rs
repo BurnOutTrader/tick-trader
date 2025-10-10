@@ -5,6 +5,7 @@
 //! - Discover earliest/latest availability across partitions without reading payloads.
 //! - Prune catalog rows that reference missing files and quarantine unreadable Parquet.
 //! - Resolve dataset IDs from human-friendly keys and bridge Topic -> resolution keys.
+#![allow(clippy::too_many_arguments)]
 
 use crate::models::SeqBound;
 use crate::paths::{provider_kind_to_db_string, topic_to_db_string};
@@ -38,7 +39,7 @@ fn topic_to_resolution(topic: Topic) -> Option<Resolution> {
 fn resolution_key(res: Option<Resolution>) -> String {
     // Use empty string for non-candle datasets to match ensure_dataset_row inserts
     res.map(|r| r.to_os_string())
-        .unwrap_or_else(|| "".to_string())
+        .unwrap_or_default()
 }
 
 /// Create or reuse a DuckDB connection (file-backed or in-memory).
@@ -420,7 +421,7 @@ pub fn earliest_available(
 ) -> Result<Option<SeqBound>> {
     let Some(dataset_id) = resolve_dataset_id(
         conn,
-        &provider_kind_to_db_string(provider.clone()),
+        &provider_kind_to_db_string(*provider),
         &symbol.to_string(),
         topic,
     )?
