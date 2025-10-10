@@ -22,7 +22,7 @@ struct DataTestStrategy {
 impl Strategy for DataTestStrategy {
     fn on_start(&mut self, h: EngineHandle) {
         tracing::info!("strategy start");
-        // Non-blocking subscribe via handle command queue, you can do this at run time from anywhere to subscribe or unsubscribe a universe
+        // Non-blocking subscribe via handle command queue, you can do this at run time from anywhere to subscribe or unsubscribe a custom universe
         let _ = h.subscribe_now(
             DataTopic::MBP10,
             SymbolKey::new(
