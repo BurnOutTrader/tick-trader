@@ -282,7 +282,7 @@ impl Router {
                 let (is_first, subs_count) = {
                     let mut entry = self.sub_index[shard]
                         .entry(key_tuple.clone())
-                        .or_insert(HashSet::new());
+                        .or_default();
                     let was_empty = entry.is_empty();
                     entry.insert(id.clone());
                     (was_empty, entry.len())
@@ -426,7 +426,7 @@ impl Router {
                     let mut set = self
                         .accounts_by_client
                         .entry(id.clone())
-                        .or_insert(HashSet::new());
+                        .or_default();
                     set.insert(key.clone());
                 }
                 // Track global subscribers for this account; call backend only when first appears
@@ -434,7 +434,7 @@ impl Router {
                     let mut entry = self
                         .account_subs
                         .entry(key.clone())
-                        .or_insert(HashSet::new());
+                        .or_default();
                     let was_empty = entry.is_empty();
                     entry.insert(id.clone());
                     was_empty
