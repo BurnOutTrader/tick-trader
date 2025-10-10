@@ -91,11 +91,7 @@ impl DownloadTaskHandle {
 
 impl Default for DownloadManager {
     fn default() -> Self {
-        Self {
-            inner: std::sync::Arc::new(DownloadManagerInner {
-                inflight: Arc::new(Mutex::new(HashMap::new())),
-            }),
-        }
+        Self::new()
     }
 }
 

@@ -138,3 +138,9 @@ impl SecurityRegistry {
         all
     }
 }
+
+impl Default for SecurityRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}

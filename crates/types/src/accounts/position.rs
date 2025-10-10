@@ -38,10 +38,15 @@ impl PositionSegment {
     }
 }
 
-#[derive(Default)]
 pub struct PositionLedger {
     pub segments: AHashMap<Instrument, PositionSegment>,
     next_id: u64,
+}
+
+impl Default for PositionLedger {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl PositionLedger {
@@ -137,7 +142,6 @@ impl PositionLedger {
         id
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;

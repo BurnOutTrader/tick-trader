@@ -159,6 +159,12 @@ impl fmt::Display for EngineUuid {
     }
 }
 
+impl Default for EngineUuid {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
