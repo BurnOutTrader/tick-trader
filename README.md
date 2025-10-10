@@ -38,6 +38,8 @@ The engine can place live orders and is intended strictly for testing and evalua
 - 🚧 Status: work in progress — the architecture is largely stabilized, but features are still evolving.
 
 ### Strategies are straight forward
+[Example Strategy](crates/a_strategies/my_strategies/orderbook_scalper)
+
 Just implement the strategy trait
 ```rust
 
