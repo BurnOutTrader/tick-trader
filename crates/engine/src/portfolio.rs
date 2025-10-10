@@ -528,9 +528,16 @@ mod tests {
         pm.apply_positions_batch_for_account(
             provider.clone(),
             account.clone(),
-            PositionsBatch { topic: tt_types::keys::Topic::Positions, seq: 1, positions: vec![pd] },
+            PositionsBatch {
+                topic: tt_types::keys::Topic::Positions,
+                seq: 1,
+                positions: vec![pd],
+            },
         );
-        assert_eq!(pm.account_open_pnl_sum(&provider, &account), Decimal::from(5));
+        assert_eq!(
+            pm.account_open_pnl_sum(&provider, &account),
+            Decimal::from(5)
+        );
 
         // Seed a closed trade today with PnL 7
         let tr = Trade {

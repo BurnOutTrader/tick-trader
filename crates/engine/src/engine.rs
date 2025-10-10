@@ -3,6 +3,7 @@ use crate::models::{
 };
 use crate::portfolio::PortfolioManager;
 use anyhow::anyhow;
+use chrono::Utc;
 use dashmap::DashMap;
 use duckdb::Connection;
 use rust_decimal::prelude::ToPrimitive;
@@ -30,7 +31,6 @@ use tt_types::wire::{
     AccountDeltaBatch, BarBatch, Kick, OrdersBatch, PositionsBatch, QuoteBatch, Request, Response,
     TickBatch, Trade,
 };
-use chrono::Utc;
 // SHM snapshots
 use tt_shm;
 // Bytes trait for rkyv deserialization of individual items
@@ -1293,8 +1293,15 @@ impl EngineRuntime {
                         pm.apply_closed_trades(t.clone());
                         strategy_for_task.on_trades_closed(t);
                     }
-                    Response::Tick { tick, provider_kind } => {
-                        pm.update_apply_last_price(provider_kind.clone(), &tick.instrument, tick.price);
+                    Response::Tick {
+                        tick,
+                        provider_kind,
+                    } => {
+                        pm.update_apply_last_price(
+                            provider_kind.clone(),
+                            &tick.instrument,
+                            tick.price,
+                        );
                         strategy_for_task.on_tick(&tick, provider_kind);
                     }
                     Response::Quote { bbo, provider_kind } => {
@@ -1302,12 +1309,26 @@ impl EngineRuntime {
                         pm.update_apply_last_price(provider_kind.clone(), &bbo.instrument, mid);
                         strategy_for_task.on_quote(&bbo, provider_kind);
                     }
-                    Response::Bar { candle, provider_kind } => {
-                        pm.update_apply_last_price(provider_kind.clone(), &candle.instrument, candle.close);
+                    Response::Bar {
+                        candle,
+                        provider_kind,
+                    } => {
+                        pm.update_apply_last_price(
+                            provider_kind.clone(),
+                            &candle.instrument,
+                            candle.close,
+                        );
                         strategy_for_task.on_bar(&candle, provider_kind);
                     }
-                    Response::Mbp10 { mbp10, provider_kind } => {
-                        pm.update_apply_last_price(provider_kind.clone(), &mbp10.instrument, mbp10.price);
+                    Response::Mbp10 {
+                        mbp10,
+                        provider_kind,
+                    } => {
+                        pm.update_apply_last_price(
+                            provider_kind.clone(),
+                            &mbp10.instrument,
+                            mbp10.price,
+                        );
                         strategy_for_task.on_mbp10(&mbp10, provider_kind);
                     }
                     Response::AnnounceShm(ann) => {
@@ -1327,13 +1348,22 @@ impl EngineRuntime {
                                                 let maybe_resp = match topic {
                                                     Topic::Quotes => Bbo::from_bytes(&buf)
                                                         .ok()
-                                                        .map(|bbo| Response::Quote { bbo, provider_kind: key.provider }),
+                                                        .map(|bbo| Response::Quote {
+                                                            bbo,
+                                                            provider_kind: key.provider,
+                                                        }),
                                                     Topic::Ticks => Tick::from_bytes(&buf)
                                                         .ok()
-                                                        .map(|t| Response::Tick { tick: t, provider_kind: key.provider }),
+                                                        .map(|t| Response::Tick {
+                                                            tick: t,
+                                                            provider_kind: key.provider,
+                                                        }),
                                                     Topic::MBP10 => Mbp10::from_bytes(&buf)
                                                         .ok()
-                                                        .map(|m| Response::Mbp10 { mbp10: m, provider_kind: key.provider }),
+                                                        .map(|m| Response::Mbp10 {
+                                                            mbp10: m,
+                                                            provider_kind: key.provider,
+                                                        }),
                                                     _ => None,
                                                 };
                                                 if let Some(resp) = maybe_resp {
@@ -1350,7 +1380,11 @@ impl EngineRuntime {
                             shm_tasks.insert((topic, key), handle);
                         }
                     }
-                    Response::SubscribeResponse { topic, instrument, success } => {
+                    Response::SubscribeResponse {
+                        topic,
+                        instrument,
+                        success,
+                    } => {
                         let data_topic = DataTopic::from(topic);
                         strategy_for_task.on_subscribe(instrument, data_topic, success);
                     }
