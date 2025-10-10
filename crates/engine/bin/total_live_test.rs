@@ -24,14 +24,15 @@ pub struct TotalLiveTestStrategy {
     subscribed: Vec<DataTopic>,
     last_order_type: OrderType,
     engine: Option<EngineHandle>,
+    symbol_key: SymbolKey,
 }
 //todo, we should implement a special error type for strategies and let the engine, handle depending on severity.
 impl Strategy for TotalLiveTestStrategy {
     fn on_start(&mut self, h: EngineHandle) {
         info!("on_start: strategy start");
         let instrument = Instrument::from_str("MNQ.Z25").unwrap();
-        let data_key = SymbolKey::new(instrument.clone(), self.data_provider);
-        h.subscribe_now(DataTopic::MBP10, data_key);
+
+        h.subscribe_now(DataTopic::MBP10, self.symbol_key.clone());
         // store handle
         self.engine = Some(h.clone());
 
@@ -219,6 +220,7 @@ async fn main() -> anyhow::Result<()> {
         subscribed: Vec::new(),
         last_order_type: OrderType::Market,
         engine: None,
+        symbol_key: SymbolKey::new(Instrument::from_str("MNQ.Z25").unwrap(), ProviderKind::ProjectX(ProjectXTenant::Topstep))
     };
     let _handle = engine.start(strategy).await?;
 
