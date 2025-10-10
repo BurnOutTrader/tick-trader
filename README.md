@@ -12,6 +12,7 @@
 [![Columnar](https://img.shields.io/badge/Columnar-Arrow-5c6bc0)](https://arrow.apache.org/)
 [![Catalog](https://img.shields.io/badge/Catalog-DuckDB-43b581)](https://duckdb.org/)
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-Sponsor-FFDD00?logo=buymeacoffee&logoColor=000)](https://buymeacoffee.com/BurnOutTrader)
+[![Sponsor](https://img.shields.io/badge/Sponsor-GitHub-181717?logo=github&logoColor=white)](https://github.com/sponsors/BurnOutTrader)
 
 > Note: This project is experimental and under active development. Interfaces may change and breaking updates can occur without notice. Use at your own risk.
 
