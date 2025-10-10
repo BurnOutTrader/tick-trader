@@ -19,7 +19,7 @@
       <sourceFolder url="file://$MODULE_DIR$/crates/types/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/types/tests" isTestSource="true" />
       <sourceFolder url="file://$MODULE_DIR$/crates/database/tests" isTestSource="true" />
-      <sourceFolder url="file://$MODULE_DIR$/crates/a_strategies/examples/orderbook_scalper/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/a_strategies/my_strategies/orderbook_scalper/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />

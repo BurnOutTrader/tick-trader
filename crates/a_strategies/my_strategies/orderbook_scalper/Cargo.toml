@@ -5,7 +5,7 @@ edition.workspace = true
 
 [dependencies]
 tt-database = {path = "../../../database", features = ["queries"]}
-tt-engine = {path = "../../../engine"}
+tt-engine = {path = "../../../engine" }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
