@@ -86,7 +86,7 @@ impl Strategy for DataTestStrategy {
     }
 
     fn accounts(&self) -> Vec<AccountKey> {
-        let target_account_name = "PRAC-V2-64413-98419885";
+        let target_account_name = "PRAC-V2-1";
         let account = AccountKey::new(
             ProviderKind::ProjectX(ProjectXTenant::Topstep),
             AccountName::from_str(target_account_name).unwrap(),
