@@ -187,3 +187,80 @@ We are planning to introduce optional zero-copy data paths in the engine to redu
 - Safety and ergonomics: The existing owned-struct API remains supported; zero-copy will be additive and opt-in.
 
 Benefits: fewer allocations, less memcpy, lower CPU for tick/quote/depth bursts.
+
+
+
+---
+
+## 🌟 2025-10 Update: Strategies are now synchronous
+
+Your strategy runs on a single engine task. No async/await inside callbacks; no locks on the hot path. The engine performs all async work around your code.
+
+Key changes
+- Trait is sync. Methods take borrowed data: &Tick, &Bbo, &Candle, &Mbp10.
+- Engine owns your strategy by value: engine.start(MyStrat::default()).await?
+- Non-blocking helpers via EngineHandle: subscribe_now, unsubscribe_now, place_now.
+- Instant getters via EngineHandle: is_long/is_short/is_flat(&Instrument).
+
+Sync trait skeleton
+
+```rust
+use tt_engine::engine::{Strategy, EngineHandle, DataTopic};
+use tt_types::{keys::SymbolKey, providers::{ProviderKind, ProjectXTenant}};
+use std::str::FromStr;
+
+#[derive(Default)]
+struct MyStrat { engine: Option<EngineHandle> }
+
+impl Strategy for MyStrat {
+    fn on_start(&mut self, h: EngineHandle) {
+        self.engine = Some(h.clone());
+        h.subscribe_now(
+            DataTopic::MBP10,
+            SymbolKey::new(
+                tt_types::securities::symbols::Instrument::from_str("MNQ.Z25").unwrap(),
+                ProviderKind::ProjectX(ProjectXTenant::Topstep),
+            ),
+        );
+    }
+
+    fn on_mbp10(&mut self, d: &tt_types::data::mbp10::Mbp10, _pk: ProviderKind) {
+        if let Some(h) = &self.engine {
+            if h.is_flat(&d.instrument) {
+                // decide: h.place_now(order)
+            }
+        }
+    }
+}
+```
+
+How the engine abstracts async away
+- Engine loop: parse → update portfolio marks → call strategy.on_* → drain commands queue (bus I/O happens here).
+- SHM tasks decode frames and push events into the engine intake; they do not call your strategy.
+- Ordering guarantee: marks are updated before your callback, so getters reflect the latest tick.
+
+Async-style patterns you can use
+- Offload from callbacks into an async channel; process in your own task.
+
+```rust
+use tokio::sync::mpsc;
+
+#[derive(Default)]
+struct AsyncishStrat { tx: mpsc::UnboundedSender<tt_types::data::mbp10::Mbp10> }
+
+impl Strategy for AsyncishStrat {
+    fn on_mbp10(&mut self, d: &tt_types::data::mbp10::Mbp10, _pk: ProviderKind) {
+        let _ = self.tx.send(d.clone());
+    }
+}
+```
+
+Migration guide (from older async Strategy)
+- Remove async/await from Strategy methods; switch to &T arguments.
+- Replace direct bus I/O inside callbacks with EngineHandle fire-and-forget helpers.
+- EngineRuntime::start now takes your strategy by value, not Arc/Mutex.
+
+Tips
+- Keep callbacks light; enqueue commands and let the engine perform I/O.
+- Size bursts: the internal command queue is bounded (4096 by default). For ultra-bursty strategies, consider pacing your enqueues.
+- Use handle.list_instruments().await or other async helpers on cold paths (e.g., startup, discovery).

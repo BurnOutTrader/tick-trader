@@ -92,6 +92,12 @@ pub fn bind_uds(path: &str) -> io::Result<UnixListener> {
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_max_level(LevelFilter::INFO)
+        .with_target(true)
+        .with_thread_names(true)
+        .with_line_number(true)
+        .with_file(true)
+        .with_ansi(true)
+        .compact()
         .init();
 
     // Allow overriding the UDS path via env. Defaults:

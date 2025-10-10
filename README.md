@@ -167,3 +167,103 @@ use tt_types::securities::symbols::Instrument;
 let instrument: Instrument = Instrument::from_str("MNQ.Z25").unwrap();
 let symbol: String = "MNQ".to_string();
 ```
+
+
+## 🌈 New Engine × Strategy model (2025-10)
+
+Good news: your strategy logic is now single-threaded, lock-free on the hot path, and blissfully unaware of async plumbing. The engine does the heavy lifting so your code stays simple and fast.
+
+Highlights
+- 🧠 Strategy trait is synchronous (no async/await inside callbacks).
+- 🧩 Engine owns the strategy by value and is the only task that calls it — deterministic and re-entrant.
+- 📨 Non-blocking handle methods: fire-and-forget subscribe/place that enqueue commands instantly.
+- ⚡ Instant getters: read portfolio state without awaiting (e.g., is_long/is_flat).
+- 🔌 SHM workers never call your strategy; they push decoded events to the engine which updates marks and then calls you.
+
+At a glance
+
+```
+[Providers] → Router → Engine intake mpsc ─→ (loop per message)
+                                   │
+                   [SHM workers] ──┘    1) update marks (PortfolioManager)
+                                        2) strategy.on_*(&msg)
+                                        3) drain command queue → bus I/O
+```
+
+Synchronous Strategy API
+
+```rust
+use tt_engine::engine::{Strategy, EngineHandle, DataTopic};
+use tt_types::{keys::SymbolKey, providers::{ProviderKind, ProjectXTenant}};
+use std::str::FromStr;
+
+#[derive(Default)]
+struct MyStrat { engine: Option<EngineHandle> }
+
+impl Strategy for MyStrat {
+    fn on_start(&mut self, h: EngineHandle) {
+        self.engine = Some(h.clone());
+        h.subscribe_now(
+            DataTopic::MBP10,
+            SymbolKey::new(
+                tt_types::securities::symbols::Instrument::from_str("MNQ.Z25").unwrap(),
+                ProviderKind::ProjectX(ProjectXTenant::Topstep),
+            ),
+        );
+    }
+
+    fn on_mbp10(&mut self, ob: &tt_types::data::mbp10::Mbp10, _pk: ProviderKind) {
+        if let Some(h) = &self.engine {
+            if h.is_flat(&ob.instrument) {
+                // decide → h.place_now(order_spec)
+            }
+        }
+    }
+}
+```
+
+Fire-and-forget commands + instant reads
+- subscribe_now(topic, key)
+- unsubscribe_now(topic, key)
+- place_now(place_spec) → returns EngineUuid (tag added into custom_tag for correlation)
+- is_long/is_short/is_flat(&Instrument)
+
+Async is still available (where it’s cold path)
+- Need discovery? Use handle.list_instruments().await.
+- Need account snapshots? EngineRuntime keeps last_* caches with async getters for tooling/UI.
+
+How we abstracted async away from your strategy
+- The engine runs a single task that receives messages, updates portfolio marks, invokes your sync callbacks, then drains the command queue for any fire-and-forget requests.
+- SHM readers decode bytes and send compact events into the same intake mpsc; they never call the strategy directly.
+- Because the engine updates marks before calling you, instant getters reflect the latest state in the same tick.
+
+Want an async-style strategy anyway? You can.
+- Pattern: send from sync callbacks into an async channel that your own background task consumes.
+
+```rust
+use tokio::sync::mpsc;
+
+struct AsyncishStrat {
+    tx: mpsc::UnboundedSender<tt_types::data::mbp10::Mbp10>,
+}
+
+impl Strategy for AsyncishStrat {
+    fn on_start(&mut self, _h: EngineHandle) {}
+    fn on_mbp10(&mut self, d: &tt_types::data::mbp10::Mbp10, _pk: ProviderKind) {
+        let _ = self.tx.send(d.clone()); // offload to your async worker
+    }
+}
+
+// elsewhere: spawn the consumer task that can .await, debounce, do I/O, etc.
+```
+
+Migration notes (from older async Strategy)
+- Remove async from Strategy methods; they now take &T or &mut self by reference with no awaits.
+- EngineRuntime::start takes your strategy by value: engine.start(MyStrat::default()).await?
+- Replace any direct bus calls from callbacks with handle.subscribe_now/place_now.
+
+Why this is faster and simpler
+- Zero locks in the hot path, no await in callbacks, deterministic single-threaded strategy execution.
+- Bounded command queue provides backpressure isolation — your decisions enqueue instantly; the engine handles I/O.
+
+More details: see docs/strategies.md and docs/advanced.md.
