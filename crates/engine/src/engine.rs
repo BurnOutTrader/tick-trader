@@ -30,6 +30,7 @@ use tt_types::wire::{
     AccountDeltaBatch, BarBatch, Kick, OrdersBatch, PositionsBatch, QuoteBatch, Request, Response,
     TickBatch, Trade,
 };
+use chrono::Utc;
 // SHM snapshots
 use tt_shm;
 // Bytes trait for rkyv deserialization of individual items
@@ -269,7 +270,7 @@ pub struct EngineRuntime {
     shm_tasks: Arc<DashMap<(Topic, SymbolKey), tokio::task::JoinHandle<()>>>,
     portfolio_manager: Arc<PortfolioManager>,
     // Bounded command queue drained by engine loop
-    pub(crate) cmd_q: Arc<ArrayQueue<Command>>,
+    cmd_q: Arc<ArrayQueue<Command>>,
     // Map our EngineUuid -> provider's order id string (populated from order updates)
     provider_order_ids: Arc<DashMap<EngineUuid, String>>,
 }
@@ -293,8 +294,8 @@ enum Command {
     Subscribe { topic: Topic, key: SymbolKey },
     Unsubscribe { topic: Topic, key: SymbolKey },
     Place(tt_types::wire::PlaceOrder),
-    Cancel(tt_types::wire::CancelOrder, EngineUuid),
-    Replace(tt_types::wire::ReplaceOrder, EngineUuid),
+    Cancel(tt_types::wire::CancelOrder),
+    Replace(tt_types::wire::ReplaceOrder),
 }
 
 #[derive(Clone)]
@@ -452,7 +453,7 @@ impl EngineHandle {
                 account_name,
                 provider_order_id: pid.value().clone(),
             };
-            let _ = self.cmd_q.push(Command::Cancel(spec, order_id));
+            let _ = self.cmd_q.push(Command::Cancel(spec));
             Ok(())
         } else {
             Err(anyhow!(
@@ -478,7 +479,7 @@ impl EngineHandle {
                 new_stop_price: incoming.new_stop_price,
                 new_trail_price: incoming.new_trail_price,
             };
-            let _ = self.cmd_q.push(Command::Replace(spec, order_id));
+            let _ = self.cmd_q.push(Command::Replace(spec));
             Ok(())
         } else {
             Err(anyhow!(
@@ -1075,7 +1076,6 @@ impl EngineRuntime {
         let (tx, rx) = mpsc::channel::<Response>(2048);
         let tx_internal = tx.clone();
         let sub_id = self.bus.add_client(tx).await;
-        let tx_internal_for_task = tx_internal.clone();
         self.sub_id = Some(sub_id.clone());
         self.rx = Some(rx);
         let rx = self.rx.take().expect("rx present after start");
@@ -1260,10 +1260,25 @@ impl EngineRuntime {
                             strategy_for_task.on_positions_batch(&pb);
                         }
                     }
-                    Response::AccountDeltaBatch(ab) => {
+                    Response::AccountDeltaBatch(mut ab) => {
                         {
                             // Update portfolio manager with latest account deltas
                             pm.apply_account_delta_batch(ab.clone());
+                        }
+                        {
+                            // If provider returned zeros for both fields, compute from our portfolio view
+                            for a in ab.accounts.iter_mut() {
+                                if a.day_realized_pnl.is_zero() && a.open_pnl.is_zero() {
+                                    let open = pm.account_open_pnl_sum(&a.provider_kind, &a.name);
+                                    let day = pm.account_day_realized_pnl_utc(
+                                        &a.provider_kind,
+                                        &a.name,
+                                        Utc::now(),
+                                    );
+                                    a.open_pnl = open;
+                                    a.day_realized_pnl = day;
+                                }
+                            }
                         }
                         {
                             let mut st = state.lock().await;
@@ -1273,16 +1288,13 @@ impl EngineRuntime {
                             strategy_for_task.on_account_delta(&ab.accounts);
                         }
                     }
-                    Response::Tick {
-                        tick,
-                        provider_kind,
-                    } => {
-                        // Update portfolio mark before strategy
-                        pm.update_apply_last_price(
-                            provider_kind.clone(),
-                            &tick.instrument,
-                            tick.price,
-                        );
+                    Response::ClosedTrades(t) => {
+                        // Record closed trades for realized PnL computation
+                        pm.apply_closed_trades(t.clone());
+                        strategy_for_task.on_trades_closed(t);
+                    }
+                    Response::Tick { tick, provider_kind } => {
+                        pm.update_apply_last_price(provider_kind.clone(), &tick.instrument, tick.price);
                         strategy_for_task.on_tick(&tick, provider_kind);
                     }
                     Response::Quote { bbo, provider_kind } => {
@@ -1290,28 +1302,12 @@ impl EngineRuntime {
                         pm.update_apply_last_price(provider_kind.clone(), &bbo.instrument, mid);
                         strategy_for_task.on_quote(&bbo, provider_kind);
                     }
-                    Response::Bar {
-                        candle,
-                        provider_kind,
-                    } => {
-                        pm.update_apply_last_price(
-                            provider_kind.clone(),
-                            &candle.instrument,
-                            candle.close,
-                        );
+                    Response::Bar { candle, provider_kind } => {
+                        pm.update_apply_last_price(provider_kind.clone(), &candle.instrument, candle.close);
                         strategy_for_task.on_bar(&candle, provider_kind);
                     }
-                    Response::Mbp10 {
-                        mbp10,
-                        provider_kind,
-                    } => {
-                        // Update mark from MBP10 event (trade/quote-derived)
-                        pm.update_apply_last_price(
-                            provider_kind.clone(),
-                            &mbp10.instrument,
-                            mbp10.price,
-                        );
-                        // Deliver event to strategy (single-message path)
+                    Response::Mbp10 { mbp10, provider_kind } => {
+                        pm.update_apply_last_price(provider_kind.clone(), &mbp10.instrument, mbp10.price);
                         strategy_for_task.on_mbp10(&mbp10, provider_kind);
                     }
                     Response::AnnounceShm(ann) => {
@@ -1319,7 +1315,7 @@ impl EngineRuntime {
                         let topic = ann.topic;
                         let key = ann.key.clone();
                         if shm_tasks.get(&(topic, key.clone())).is_none() {
-                            let tx_shm = tx_internal_for_task.clone();
+                            let tx_shm = tx_internal.clone();
                             let value = key.clone();
                             let handle: JoinHandle<()> = tokio::spawn(async move {
                                 let mut last_seq: u32 = 0;
@@ -1331,22 +1327,13 @@ impl EngineRuntime {
                                                 let maybe_resp = match topic {
                                                     Topic::Quotes => Bbo::from_bytes(&buf)
                                                         .ok()
-                                                        .map(|bbo| Response::Quote {
-                                                            bbo,
-                                                            provider_kind: key.provider,
-                                                        }),
+                                                        .map(|bbo| Response::Quote { bbo, provider_kind: key.provider }),
                                                     Topic::Ticks => Tick::from_bytes(&buf)
                                                         .ok()
-                                                        .map(|t| Response::Tick {
-                                                            tick: t,
-                                                            provider_kind: key.provider,
-                                                        }),
+                                                        .map(|t| Response::Tick { tick: t, provider_kind: key.provider }),
                                                     Topic::MBP10 => Mbp10::from_bytes(&buf)
                                                         .ok()
-                                                        .map(|m| Response::Mbp10 {
-                                                            mbp10: m,
-                                                            provider_kind: key.provider,
-                                                        }),
+                                                        .map(|m| Response::Mbp10 { mbp10: m, provider_kind: key.provider }),
                                                     _ => None,
                                                 };
                                                 if let Some(resp) = maybe_resp {
@@ -1363,11 +1350,7 @@ impl EngineRuntime {
                             shm_tasks.insert((topic, key), handle);
                         }
                     }
-                    Response::SubscribeResponse {
-                        topic,
-                        instrument,
-                        success,
-                    } => {
+                    Response::SubscribeResponse { topic, instrument, success } => {
                         let data_topic = DataTopic::from(topic);
                         strategy_for_task.on_subscribe(instrument, data_topic, success);
                     }
@@ -1391,9 +1374,6 @@ impl EngineRuntime {
                         }
                         let data_topic = DataTopic::from(topic);
                         strategy_for_task.on_unsubscribe(instrument, data_topic);
-                    }
-                    Response::ClosedTrades(t) => {
-                        strategy_for_task.on_trades_closed(t);
                     }
                     Response::Pong(_)
                     | Response::InstrumentsResponse(_)
@@ -1508,12 +1488,12 @@ impl EngineRuntime {
                 Command::Place(spec) => {
                     let _ = bus.handle_request(&sub_id, Request::PlaceOrder(spec)).await;
                 }
-                Command::Cancel(spec, _) => {
+                Command::Cancel(spec) => {
                     let _ = bus
                         .handle_request(&sub_id, Request::CancelOrder(spec))
                         .await;
                 }
-                Command::Replace(spec, _) => {
+                Command::Replace(spec) => {
                     let _ = bus
                         .handle_request(&sub_id, Request::ReplaceOrder(spec))
                         .await;

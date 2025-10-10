@@ -5,7 +5,6 @@ use std::str::FromStr;
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
 use tracing::info;
-use tracing::level_filters::LevelFilter;
 use tt_bus::ClientMessageBus;
 use tt_engine::engine::{DataTopic, EngineHandle, EngineRuntime, Strategy};
 use tt_types::accounts::account::AccountName;
