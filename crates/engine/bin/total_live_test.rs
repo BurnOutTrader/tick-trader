@@ -4,7 +4,7 @@ use std::str::FromStr;
 use std::sync::Mutex;
 use std::time::Duration;
 use tokio::time::sleep;
-use tracing::{info};
+use tracing::info;
 use tt_bus::ClientMessageBus;
 use tt_engine::engine::{DataTopic, EngineHandle, EngineRuntime, Strategy};
 use tt_types::accounts::account::AccountName;
@@ -38,8 +38,6 @@ impl Strategy for TotalLiveTestStrategy {
         h.subscribe_now(DataTopic::Ticks, self.symbol_key.clone());
         // store handle
         self.h = Some(h.clone());
-
-
     }
 
     fn on_stop(&mut self) {
@@ -138,19 +136,21 @@ impl Strategy for TotalLiveTestStrategy {
         if self.count == 75 {
             // 3) Place a MARKET BUY order (fire-and-forget)
             info!("test flow: placing MARKET BUY qty=1");
-            *order_id = h.place_order(
-                account.clone(),
-                exec_key.clone(),
-                tt_types::accounts::events::Side::Buy,
-                1,
-                OrderType::Market,
-                None,
-                None,
-                None,
-                Some("total_live_test".to_string()),
-                None,
-                None,
-            ).unwrap();
+            *order_id = h
+                .place_order(
+                    account.clone(),
+                    exec_key.clone(),
+                    tt_types::accounts::events::Side::Buy,
+                    1,
+                    OrderType::Market,
+                    None,
+                    None,
+                    None,
+                    Some("total_live_test".to_string()),
+                    None,
+                    None,
+                )
+                .unwrap();
             info!("submitted MARKET BUY");
         }
     }
@@ -243,7 +243,7 @@ async fn main() -> anyhow::Result<()> {
         ),
         count: 0,
         order_id: EngineUuid::new().into(),
-        first_order_done: false, 
+        first_order_done: false,
     };
     let _handle = engine.start(strategy).await?;
 
