@@ -360,7 +360,11 @@ impl EngineHandle {
         self.inner.pending.insert(corr_id, tx);
         let req = make(corr_id);
         // forward and ignore the result here; the response path uses corr_id
-        self.inner.bus.handle_request(&self.inner.sub_id, req).await.ok();
+        self.inner
+            .bus
+            .handle_request(&self.inner.sub_id, req)
+            .await
+            .ok();
         rx
     }
 
@@ -487,6 +491,8 @@ impl EngineHandle {
             ))
         }
     }
+
+    #[allow(clippy::too_many_arguments)]
     /// Convenience: construct a `PlaceOrder` from parameters and enqueue it.
     /// This keeps strategies from having to allocate and own a full `PlaceOrder` struct.
     /// Do not use +oId: as part of your order's custom tag, it is reserved for internal order management
@@ -657,8 +663,7 @@ impl EngineRuntime {
         let (tx, rx) = oneshot::channel();
         self.pending.insert(corr_id, tx);
         let req = make(corr_id);
-        self
-            .bus
+        self.bus
             .handle_request(self.sub_id.as_ref().expect("engine started"), req)
             .await
             .ok();
@@ -732,18 +737,24 @@ impl EngineRuntime {
         self.ensure_vendor_securities_watch(key.provider).await;
         // Forward to server
         self.bus
-            .handle_request(self.sub_id.as_ref().expect("engine started"), Request::SubscribeKey(tt_types::wire::SubscribeKey {
-                topic,
-                key,
-                latest_only: false,
-                from_seq: 0,
-            }))
+            .handle_request(
+                self.sub_id.as_ref().expect("engine started"),
+                Request::SubscribeKey(tt_types::wire::SubscribeKey {
+                    topic,
+                    key,
+                    latest_only: false,
+                    from_seq: 0,
+                }),
+            )
             .await?;
         Ok(())
     }
     pub async fn unsubscribe_symbol(&self, topic: Topic, key: SymbolKey) -> anyhow::Result<()> {
         self.bus
-            .handle_request(self.sub_id.as_ref().expect("engine started"), Request::UnsubscribeKey(tt_types::wire::UnsubscribeKey { topic, key }))
+            .handle_request(
+                self.sub_id.as_ref().expect("engine started"),
+                Request::UnsubscribeKey(tt_types::wire::UnsubscribeKey { topic, key }),
+            )
             .await?;
         Ok(())
     }
@@ -754,12 +765,15 @@ impl EngineRuntime {
         let topic = data_topic.to_topic_or_err()?;
         self.ensure_vendor_securities_watch(key.provider).await;
         self.bus
-            .handle_request(self.sub_id.as_ref().expect("engine started"), Request::SubscribeKey(tt_types::wire::SubscribeKey {
-                topic,
-                key,
-                latest_only: false,
-                from_seq: 0,
-            }))
+            .handle_request(
+                self.sub_id.as_ref().expect("engine started"),
+                Request::SubscribeKey(tt_types::wire::SubscribeKey {
+                    topic,
+                    key,
+                    latest_only: false,
+                    from_seq: 0,
+                }),
+            )
             .await?;
         Ok(())
     }
@@ -779,25 +793,35 @@ impl EngineRuntime {
         spec: tt_types::wire::PlaceOrder,
     ) -> anyhow::Result<()> {
         self.bus
-            .handle_request(self.sub_id.as_ref().expect("engine started"), tt_types::wire::Request::PlaceOrder(spec))
+            .handle_request(
+                self.sub_id.as_ref().expect("engine started"),
+                tt_types::wire::Request::PlaceOrder(spec),
+            )
             .await?;
         Ok(())
     }
 
     pub async fn cancel_order(&self, spec: tt_types::wire::CancelOrder) -> anyhow::Result<()> {
         self.bus
-            .handle_request(self.sub_id.as_ref().expect("engine started"), tt_types::wire::Request::CancelOrder(spec))
+            .handle_request(
+                self.sub_id.as_ref().expect("engine started"),
+                tt_types::wire::Request::CancelOrder(spec),
+            )
             .await?;
         Ok(())
     }
 
     pub async fn replace_order(&self, spec: tt_types::wire::ReplaceOrder) -> anyhow::Result<()> {
         self.bus
-            .handle_request(self.sub_id.as_ref().expect("engine started"), tt_types::wire::Request::ReplaceOrder(spec))
+            .handle_request(
+                self.sub_id.as_ref().expect("engine started"),
+                tt_types::wire::Request::ReplaceOrder(spec),
+            )
             .await?;
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     /// Convenience: construct and send a `PlaceOrder` from individual parameters.
     pub async fn place_order_with(
         &self,
@@ -834,9 +858,11 @@ impl EngineRuntime {
         &self,
         key: tt_types::keys::AccountKey,
     ) -> anyhow::Result<()> {
-        let _ = self
-            .bus
-            .handle_request(self.sub_id.as_ref().expect("engine started"), tt_types::wire::Request::SubscribeAccount(tt_types::wire::SubscribeAccount { key }))
+        self.bus
+            .handle_request(
+                self.sub_id.as_ref().expect("engine started"),
+                tt_types::wire::Request::SubscribeAccount(tt_types::wire::SubscribeAccount { key }),
+            )
             .await?;
         Ok(())
     }
@@ -845,9 +871,13 @@ impl EngineRuntime {
         &self,
         key: tt_types::keys::AccountKey,
     ) -> anyhow::Result<()> {
-        let _ = self
-            .bus
-            .handle_request(self.sub_id.as_ref().expect("engine started"), tt_types::wire::Request::UnsubscribeAccount(tt_types::wire::UnsubscribeAccount { key }))
+        self.bus
+            .handle_request(
+                self.sub_id.as_ref().expect("engine started"),
+                tt_types::wire::Request::UnsubscribeAccount(tt_types::wire::UnsubscribeAccount {
+                    key,
+                }),
+            )
             .await?;
         Ok(())
     }
@@ -982,7 +1012,9 @@ impl EngineRuntime {
         instrument: &Instrument,
     ) -> bool {
         let st = self.state.lock().await;
-        if let Some(pb) = &st.last_positions && let Some(p) = pb.positions.iter().find(|p| &p.instrument == instrument) {
+        if let Some(pb) = &st.last_positions
+            && let Some(p) = pb.positions.iter().find(|p| &p.instrument == instrument)
+        {
             return p.side == PositionSide::Long;
         }
         false
@@ -993,7 +1025,9 @@ impl EngineRuntime {
         instrument: &Instrument,
     ) -> bool {
         let st = self.state.lock().await;
-        if let Some(pb) = &st.last_positions && let Some(p) = pb.positions.iter().find(|p| &p.instrument == instrument) {
+        if let Some(pb) = &st.last_positions
+            && let Some(p) = pb.positions.iter().find(|p| &p.instrument == instrument)
+        {
             return p.side == PositionSide::Short;
         }
         false
@@ -1004,7 +1038,9 @@ impl EngineRuntime {
         instrument: &Instrument,
     ) -> bool {
         let st = self.state.lock().await;
-        if let Some(pb) = &st.last_positions && pb.positions.iter().find(|p| &p.instrument == instrument).is_some() {
+        if let Some(pb) = &st.last_positions
+            && pb.positions.iter().any(|p| &p.instrument == instrument)
+        {
             return false;
         }
         true
@@ -1160,7 +1196,8 @@ impl EngineRuntime {
                         // Derive a mark from MBP10: prefer mid from level 0 if present, else event.price
                         let ev = &ob.event;
                         let mark = if let Some(book) = &ev.book {
-                            if let (Some(b0), Some(a0)) = (book.bid_px.first(), book.ask_px.first()) {
+                            if let (Some(b0), Some(a0)) = (book.bid_px.first(), book.ask_px.first())
+                            {
                                 (*b0 + *a0) / rust_decimal::Decimal::from(2)
                             } else {
                                 ev.price
@@ -1206,19 +1243,20 @@ impl EngineRuntime {
                             let st = state.lock().await;
                             for p in pb.positions.iter_mut() {
                                 if p.open_pnl == rust_decimal::Decimal::ZERO
-                                    && let Some(ep) = st.last_positions.as_ref() {
-                                        for ep in ep.positions.iter() {
-                                            if p.provider_kind == ep.provider_kind
-                                                && p.instrument == ep.instrument
-                                                && p.side == ep.side
-                                            {
-                                                p.open_pnl = ep.open_pnl;
-                                            }
+                                    && let Some(ep) = st.last_positions.as_ref()
+                                {
+                                    for ep in ep.positions.iter() {
+                                        if p.provider_kind == ep.provider_kind
+                                            && p.instrument == ep.instrument
+                                            && p.side == ep.side
+                                        {
+                                            p.open_pnl = ep.open_pnl;
                                         }
                                     }
-                             }
-                             strategy_for_task.on_positions_batch(&pb);
-                         }
+                                }
+                            }
+                            strategy_for_task.on_positions_batch(&pb);
+                        }
                     }
                     Response::AccountDeltaBatch(mut ab) => {
                         {
@@ -1253,7 +1291,10 @@ impl EngineRuntime {
                         pm.apply_closed_trades(t.clone());
                         strategy_for_task.on_trades_closed(t);
                     }
-                    Response::Tick { tick, provider_kind } => {
+                    Response::Tick {
+                        tick,
+                        provider_kind,
+                    } => {
                         pm.update_apply_last_price(provider_kind, &tick.instrument, tick.price);
                         strategy_for_task.on_tick(&tick, provider_kind);
                     }
@@ -1262,11 +1303,17 @@ impl EngineRuntime {
                         pm.update_apply_last_price(provider_kind, &bbo.instrument, mid);
                         strategy_for_task.on_quote(&bbo, provider_kind);
                     }
-                    Response::Bar { candle, provider_kind } => {
+                    Response::Bar {
+                        candle,
+                        provider_kind,
+                    } => {
                         pm.update_apply_last_price(provider_kind, &candle.instrument, candle.close);
                         strategy_for_task.on_bar(&candle, provider_kind);
                     }
-                    Response::Mbp10 { mbp10, provider_kind } => {
+                    Response::Mbp10 {
+                        mbp10,
+                        provider_kind,
+                    } => {
                         pm.update_apply_last_price(provider_kind, &mbp10.instrument, mbp10.price);
                         strategy_for_task.on_mbp10(&mbp10, provider_kind);
                     }
@@ -1281,38 +1328,53 @@ impl EngineRuntime {
                                 let mut last_seq: u32 = 0;
                                 loop {
                                     if let Some(reader) = tt_shm::ensure_reader(topic, &value)
-                                        && let Some((seq, buf)) = reader.read_with_seq() {
-                                            if seq != last_seq {
-                                                last_seq = seq;
-                                                let maybe_resp = match topic {
-                                                    Topic::Quotes => Bbo::from_bytes(&buf)
-                                                        .ok()
-                                                        .map(|bbo| Response::Quote {
-                                                            bbo,
-                                                            provider_kind: key.provider,
-                                                        }),
-                                                    Topic::Ticks => Tick::from_bytes(&buf)
-                                                        .ok()
-                                                        .map(|t| Response::Tick {
-                                                            tick: t,
-                                                            provider_kind: key.provider,
-                                                        }),
-                                                    Topic::MBP10 => Mbp10::from_bytes(&buf)
-                                                        .ok()
-                                                        .map(|m| Response::Mbp10 {
-                                                            mbp10: m,
-                                                            provider_kind: key.provider,
-                                                        }),
-                                                    _ => None,
-                                                };
-                                                if let Some(resp) = maybe_resp && tx_shm.try_send(resp).is_err() {
-                                                    error!("tx shm task is panicked");
+                                        && let Some((seq, buf)) = reader.read_with_seq()
+                                        && seq != last_seq
+                                    {
+                                        last_seq = seq;
+                                        let maybe_resp = match topic {
+                                            Topic::Quotes => {
+                                                Bbo::from_bytes(&buf).ok().map(|bbo| {
+                                                    Response::Quote {
+                                                        bbo,
+                                                        provider_kind: key.provider,
+                                                    }
+                                                })
+                                            }
+                                            Topic::Ticks => Tick::from_bytes(&buf).ok().map(|t| {
+                                                Response::Tick {
+                                                    tick: t,
+                                                    provider_kind: key.provider,
                                                 }
-                                             }
-                                         }
+                                            }),
+                                            Topic::MBP10 => Mbp10::from_bytes(&buf).ok().map(|m| {
+                                                Response::Mbp10 {
+                                                    mbp10: m,
+                                                    provider_kind: key.provider,
+                                                }
+                                            }),
+                                            _ => None,
+                                        };
+                                        if let Some(resp) = maybe_resp {
+                                            if tx_shm.is_closed() {
+                                                error!(
+                                                    "tx shm channel closed; terminating SHM task"
+                                                );
+                                                break;
+                                            }
+                                            if let Err(e) = tx_shm.send(resp).await {
+                                                error!(
+                                                    "tx shm send failed: {e}; terminating SHM task"
+                                                );
+                                                break;
+                                            }
+                                        } else {
+                                            // Avoid busy-spin when no new SHM data
+                                            tokio::time::sleep(Duration::from_millis(2)).await;
+                                        }
                                     }
-                                    tokio::time::sleep(Duration::from_millis(5)).await;
-                             });
+                                }
+                            });
                             shm_tasks.insert((topic, key), handle);
                         }
                     }
@@ -1476,20 +1538,23 @@ impl EngineRuntime {
         info!("engine: stopping");
         // Send Kick to bus; await to ensure delivery attempt before shutdown
         self.bus
-            .handle_request(self.sub_id.as_ref().expect("engine started"), tt_types::wire::Request::Kick(Kick {
-                reason: Some("Shutting Down".to_string()),
-            }))
+            .handle_request(
+                self.sub_id.as_ref().expect("engine started"),
+                tt_types::wire::Request::Kick(Kick {
+                    reason: Some("Shutting Down".to_string()),
+                }),
+            )
             .await
             .ok();
-         if let Some(handle) = self.task.take() {
-             handle.abort();
-         }
-         for task in self.shm_tasks.iter() {
-             task.abort();
-         }
-         self.rx.take();
-         info!("engine: shutdown complete");
-         Ok(())
+        if let Some(handle) = self.task.take() {
+            handle.abort();
+        }
+        for task in self.shm_tasks.iter() {
+            task.abort();
+        }
+        self.rx.take();
+        info!("engine: shutdown complete");
+        Ok(())
     }
 
     // Account state getters

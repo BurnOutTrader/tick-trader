@@ -33,6 +33,7 @@ pub struct Entry {
     join: Mutex<Option<JoinHandle<()>>>,
 }
 
+#[allow(clippy::type_complexity)]
 struct DownloadManagerInner {
     inflight: Arc<Mutex<HashMap<(ProviderKind, Instrument, Topic), std::sync::Arc<Entry>>>>,
 }

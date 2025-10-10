@@ -183,10 +183,7 @@ impl PortfolioManager {
         batch: PositionsBatch,
     ) {
         let acc_key = (provider_kind, account.clone());
-        let entry = self
-            .positions_by_account
-            .entry(acc_key)
-            .or_insert_with(DashMap::new);
+        let entry = self.positions_by_account.entry(acc_key).or_default();
 
         // Track which instruments changed to recompute synthetic totals afterward
         let mut touched: ahash::AHashSet<Instrument> = ahash::AHashSet::new();
@@ -383,7 +380,10 @@ impl PortfolioManager {
     /// Does not mutate internal state; purely transforms the batch for downstream consumers.
     pub fn adjust_positions_batch_open_pnl(&self, mut batch: PositionsBatch) -> PositionsBatch {
         for p in batch.positions.iter_mut() {
-            if let Some(mark) = self.last_price.get(&(p.provider_kind, p.instrument.clone())) {
+            if let Some(mark) = self
+                .last_price
+                .get(&(p.provider_kind, p.instrument.clone()))
+            {
                 // open_pnl = (mark - avg_entry) * signed_qty
                 p.open_pnl = (*mark - p.average_price) * p.net_qty;
             }
@@ -518,7 +518,7 @@ mod tests {
         let instr = Instrument::validate_len("ES.Z25").unwrap();
         let pd = PositionDelta {
             instrument: instr.clone(),
-            provider_kind: provider.clone(),
+            provider_kind: provider,
             net_qty: Decimal::from(2),
             average_price: Decimal::from(100),
             open_pnl: Decimal::from(5),
@@ -526,7 +526,7 @@ mod tests {
             side: PositionSide::Long,
         };
         pm.apply_positions_batch_for_account(
-            provider.clone(),
+            provider,
             account.clone(),
             PositionsBatch {
                 topic: tt_types::keys::Topic::Positions,

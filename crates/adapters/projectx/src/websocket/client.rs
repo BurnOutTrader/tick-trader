@@ -733,12 +733,12 @@ impl PxWebSocketClient {
                                                     trades.push(t);
                                                 }
                                             }
-                                        } else if data_val.is_object() {
-                                            if let Ok(t) = serde_json::from_value::<GatewayTrade>(
+                                        } else if data_val.is_object()
+                                            && let Ok(t) = serde_json::from_value::<GatewayTrade>(
                                                 data_val.clone(),
-                                            ) {
-                                                trades.push(t);
-                                            }
+                                            )
+                                        {
+                                            trades.push(t);
                                         }
                                     }
 
@@ -830,7 +830,7 @@ impl PxWebSocketClient {
                                     let data_val = if args.len() >= 2 {
                                         Some(&args[1])
                                     } else {
-                                        args.get(0)
+                                        args.first()
                                     };
 
                                     if let Some(instrument) = instr_opt {
@@ -856,14 +856,13 @@ impl PxWebSocketClient {
                                                         }
                                                     }
                                                 }
-                                            } else if data.is_object() {
-                                                if let Ok(d) =
+                                            } else if data.is_object()
+                                                && let Ok(d) =
                                                     serde_json::from_value::<models::GatewayDepth>(
                                                         data.clone(),
                                                     )
-                                                {
-                                                    items.push(d);
-                                                }
+                                            {
+                                                items.push(d);
                                             }
                                         }
 
