@@ -280,9 +280,7 @@ impl Router {
                 let shard = self.shard_idx(topic0, &key0);
                 let key_tuple = (topic0, key0.clone());
                 let (is_first, subs_count) = {
-                    let mut entry = self.sub_index[shard]
-                        .entry(key_tuple.clone())
-                        .or_default();
+                    let mut entry = self.sub_index[shard].entry(key_tuple.clone()).or_default();
                     let was_empty = entry.is_empty();
                     entry.insert(id.clone());
                     (was_empty, entry.len())
@@ -423,18 +421,12 @@ impl Router {
                 let key = sa.key.clone();
                 // Track per-client accounts
                 {
-                    let mut set = self
-                        .accounts_by_client
-                        .entry(id.clone())
-                        .or_default();
+                    let mut set = self.accounts_by_client.entry(id.clone()).or_default();
                     set.insert(key.clone());
                 }
                 // Track global subscribers for this account; call backend only when first appears
                 let is_first = {
-                    let mut entry = self
-                        .account_subs
-                        .entry(key.clone())
-                        .or_default();
+                    let mut entry = self.account_subs.entry(key.clone()).or_default();
                     let was_empty = entry.is_empty();
                     entry.insert(id.clone());
                     was_empty

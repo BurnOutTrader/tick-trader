@@ -326,15 +326,9 @@ pub fn candle_end(
     let minus_1ns = |t: DateTime<Utc>| t.checked_sub_signed(Duration::nanoseconds(1)).unwrap_or(t);
 
     match resolution {
-        Resolution::Seconds(1) => {
-            Some(time_open + Duration::seconds(1) - Duration::nanoseconds(1))
-        }
-        Resolution::Minutes(1) => {
-            Some(time_open + Duration::minutes(1) - Duration::nanoseconds(1))
-        }
-        Resolution::Hours(1) => {
-            Some(time_open + Duration::hours(1) - Duration::nanoseconds(1))
-        }
+        Resolution::Seconds(1) => Some(time_open + Duration::seconds(1) - Duration::nanoseconds(1)),
+        Resolution::Minutes(1) => Some(time_open + Duration::minutes(1) - Duration::nanoseconds(1)),
+        Resolution::Hours(1) => Some(time_open + Duration::hours(1) - Duration::nanoseconds(1)),
         Resolution::Daily => {
             if hours.has_daily_close {
                 let (_open, close) = session_bounds(&hours, time_open);

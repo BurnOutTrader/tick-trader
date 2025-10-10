@@ -83,21 +83,20 @@ impl Strategy for TotalLiveTestStrategy {
             info!(?self.order_id, "JoinBid placed; waiting to replace");
             // Replace: bump size
             info!(?self.order_id, "replacing order: new_qty=2");
-            h
-                .replace_order(
-                    provider,
-                    account.clone(),
-                    tt_types::wire::ReplaceOrder {
-                        account_name: account.clone(),
-                        provider_order_id: String::new(),
-                        new_qty: Some(2),
-                        new_limit_price: None,
-                        new_stop_price: None,
-                        new_trail_price: None,
-                    },
-                    *order_id,
-                )
-                .unwrap();
+            h.replace_order(
+                provider,
+                account.clone(),
+                tt_types::wire::ReplaceOrder {
+                    account_name: account.clone(),
+                    provider_order_id: String::new(),
+                    new_qty: Some(2),
+                    new_limit_price: None,
+                    new_stop_price: None,
+                    new_trail_price: None,
+                },
+                *order_id,
+            )
+            .unwrap();
         }
 
         if self.count == 38 {
@@ -128,8 +127,7 @@ impl Strategy for TotalLiveTestStrategy {
         if self.count == 50 {
             info!(?self.order_id, "JoinAsk placed; waiting then cancel");
             info!(?self.order_id, "cancelling JoinAsk order");
-            h
-                .cancel_order(provider, account.clone(), *order_id)
+            h.cancel_order(provider, account.clone(), *order_id)
                 .unwrap();
         }
 

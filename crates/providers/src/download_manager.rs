@@ -82,7 +82,8 @@ impl DownloadTaskHandle {
     }
     pub fn cancel(&self) {
         if let Ok(mut g) = self.entry.join.try_lock()
-            && let Some(j) = g.take() {
+            && let Some(j) = g.take()
+        {
             j.abort();
         }
     }
@@ -164,7 +165,9 @@ impl DownloadManager {
 
         // If join is empty, we are the creator; spawn and set the join handle.
         let mut should_spawn = false;
-        if let Ok(mut jg) = entry_arc.join.try_lock() && jg.is_none() {
+        if let Ok(mut jg) = entry_arc.join.try_lock()
+            && jg.is_none()
+        {
             should_spawn = true;
             // placeholder so other threads don't also spawn
             *jg = Some(tokio::spawn(async {}));
