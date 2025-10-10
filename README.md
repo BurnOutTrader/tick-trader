@@ -12,6 +12,128 @@
 [![Columnar](https://img.shields.io/badge/Columnar-Arrow-5c6bc0)](https://arrow.apache.org/)
 [![Catalog](https://img.shields.io/badge/Catalog-DuckDB-43b581)](https://duckdb.org/)
 
+> Note: This project is experimental and under active development. Interfaces may change and breaking updates can occur without notice. Use at your own risk.
+
+## Live trading status and near‑term roadmap
+
+The engine can place live orders and is intended strictly for testing and evaluation. Do not use in production.
+
+- Publish a reference “live test” strategy
+- Surface EngineHandle helpers via top‑level exports
+- Implement the backtesting engine
+- Support external databases alongside the integrated DuckDB
+- Warm up consolidators from live data plus the historical catalog
+- Expand automated tests and CI coverage
+- Adding rithmic + data bento at a later stage.
+
+
+## ✨ Brief overview
+- 💻 Platforms: macOS (tested) and Linux (experimental) are supported out of the box.
+- 🧠 Strategies: run multiple strategies as separate processes/binaries.
+- 🖧 Server: runs as a separate service; communicates over UDS and SHM; automatically starts/stops adapters (e.g., ProjectX) to minimize resource usage.
+- 🔌 Adapters: multiple instances of the same adapter can run concurrently (e.g., ProjectX Tradeify + Topstep).
+- 🏢 ProjectX tenants: not all firms are pre‑encoded in `ProjectXTenant` yet; adding a new tenant is straightforward and reuses the existing logic.
+- 🚧 Status: work in progress — the architecture is largely stabilized, but features are still evolving.
+
+### Strategies are straight forward
+Just implement the strategy trait
+```rust
+
+pub trait Strategy: Send + 'static {
+    fn on_start(&mut self, _h: EngineHandle) {}
+    fn on_stop(&mut self) {}
+
+    fn on_tick(&mut self, _t: &Tick, _provider_kind: ProviderKind) {}
+    fn on_quote(&mut self, _q: &Bbo, _provider_kind: ProviderKind) {}
+    fn on_bar(&mut self, _b: &Candle, _provider_kind: ProviderKind) {}
+    fn on_mbp10(&mut self, _d: &Mbp10, _provider_kind: ProviderKind) {}
+
+    fn on_orders_batch(&mut self, _b: &OrdersBatch) {}
+    fn on_positions_batch(&mut self, _b: &PositionsBatch) {}
+    fn on_account_delta(&mut self, _accounts: &[AccountDelta]) {}
+
+    fn on_trades_closed(&mut self, _trades: Vec<Trade>) {}
+
+    fn on_subscribe(&mut self, _instrument: Instrument, _data_topic: DataTopic, _success: bool) {}
+    fn on_unsubscribe(&mut self, _instrument: Instrument, _data_topic: DataTopic) {}
+
+    fn accounts(&self) -> Vec<AccountKey> { Vec::new() }
+}
+```
+Then in main
+```rust
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    use tracing_subscriber::EnvFilter;
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info,tt_bus=info,tt_engine=info,projectx.ws=info"));
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(true)
+        .init();
+  
+  let instrument = Instrument::from_str("MNQ.Z25").unwrap();
+  let provider = ProviderKind::ProjectX(ProjectXTenant::Topstep);
+
+    let addr = std::env::var("TT_BUS_ADDR").unwrap_or_else(|_| "/tmp/tick-trader.sock".to_string());
+    let bus = ClientMessageBus::connect(&addr).await?;
+    let mut engine = EngineRuntime::new(bus.clone());
+    let account_name = AccountName::from_str("PRAC-V2-64").unwrap();
+    let strategy = TotalLiveTestStrategy {
+        _symbol: instrument.clone(),
+        data_provider: provider,
+        execution_provider: provider,
+        account_name: account_name.clone(),
+        subscribed: Vec::new(),
+        last_order_type: OrderType::Market,
+        engine: None,
+        symbol_key: SymbolKey::new(instrument, )
+    };
+    let _handle = engine.start(strategy).await?;
+
+    sleep(Duration::from_secs(60)).await;
+
+    let _ = engine.stop().await?;
+
+    Ok(())
+}
+```
+
+There are stratey helpers for queries, like portfolio, orders, positions etc, you access these via the engine handle
+```rust
+fn on_start(&mut self, _h: EngineHandle) {}
+```
+
+Your strategy should store this handle after starting 
+```rust
+pub struct TotalLiveTestStrategy {
+    engine: Option<EngineHandle>,
+}
+impl Strategy for TotalLiveTestStrategy {
+    fn on_start(&mut self, h: EngineHandle) {
+        // store handle
+        self.engine = Some(h.clone());
+    }
+
+  fn on_tick(&mut self, t: &Tick, provider_kind: ProviderKind) {
+      println!("{:?}", t);
+    // then use the handle helper to place orders etc
+    let _ = h.place_order(
+      account.clone(),
+      exec_key.clone(),
+      tt_types::accounts::events::Side::Buy,
+      1,
+      OrderType::Market,
+      None,
+      None,
+      None,
+      Some("total_live_test".to_string()),
+      None,
+      None,
+    );
+  }
+}
+```
 
 ## 🔐 Environment and credentials (.env)
 
