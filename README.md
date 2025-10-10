@@ -95,7 +95,8 @@ async fn main() -> anyhow::Result<()> {
     };
     let _handle = engine.start(strategy).await?;
 
-    sleep(Duration::from_secs(60)).await;
+    // Auto shutdown in 1000000 seconds
+    sleep(Duration::from_secs(1000000)).await;
 
     let _ = engine.stop().await?;
 
