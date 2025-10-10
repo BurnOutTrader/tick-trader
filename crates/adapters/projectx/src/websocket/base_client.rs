@@ -106,7 +106,7 @@ impl WebSocketClient {
     pub async fn kill(&self) {
         let mut lock = self.recv_task.lock().await;
         if let Some(recv_task) = lock.take() {
-            let _ = recv_task.abort();
+            recv_task.abort();
         }
     }
 }

@@ -96,7 +96,7 @@ impl PXClient {
                 symbol_info.exchange,
                 SecurityType::Future,
                 inst.id.clone(),
-                self.provider_kind.clone(),
+                self.provider_kind,
                 tick_value,
                 Some(Currency::USD),
                 tick_size,
@@ -105,9 +105,8 @@ impl PXClient {
                 Some(s) => s,
             };
             s.value_per_tick =
-                Decimal::from_f64(inst.tick_value).unwrap_or_else(|| symbol_info.value_per_tick);
-            s.tick_size =
-                Decimal::from_f64(inst.tick_size).unwrap_or_else(|| symbol_info.tick_size);
+                Decimal::from_f64(inst.tick_value).unwrap_or(symbol_info.value_per_tick);
+            s.tick_size = Decimal::from_f64(inst.tick_size).unwrap_or(symbol_info.tick_size);
             self.instruments.insert(instrument, s);
         }
         info!(
@@ -153,7 +152,7 @@ impl PXClient {
                         "Failed to find account id for {}, please check the account name and try again",
                         account_name
                     )),
-                    Some(acc) => Ok(acc.id.clone()),
+                    Some(acc) => Ok(acc.id),
                 }
             }
             Some(acc) => Ok(acc.id.clone()),
@@ -207,8 +206,8 @@ impl PXClient {
     async fn state(&self) -> ConnectionState {
         let http_state = self.http_connection_state.read().await;
         if *http_state == ConnectionState::Disconnected
-            || self.websocket.is_user_connected() == false
-            || self.websocket.is_market_connected() == false
+            || !self.websocket.is_user_connected()
+            || !self.websocket.is_market_connected()
         {
             return ConnectionState::Disconnected;
         }
@@ -234,7 +233,7 @@ impl PXClient {
                 }
             }
         }
-        if self.websocket.is_market_connected() == false {
+        if !self.websocket.is_market_connected() {
             *conn_state = ConnectionState::Connecting;
             match self.websocket.connect_market().await {
                 Ok(_conn) => {}
@@ -244,7 +243,7 @@ impl PXClient {
                 }
             };
         }
-        if self.websocket.is_user_connected() == false {
+        if !self.websocket.is_user_connected() {
             match self.websocket.connect_user().await {
                 Ok(_conn) => {}
                 Err(e) => {
@@ -299,7 +298,7 @@ impl PXClient {
 
         let limit: i32 = 20_000;
         let step = resolution.as_duration();
-        let chunk_span = step * (limit as i32);
+        let chunk_span = step * limit;
 
         let mut out: Vec<Candle> = Vec::new();
         let mut cur_start: DateTime<Utc> = req.start;
@@ -353,7 +352,7 @@ impl PXClient {
             if batch.is_empty() {
                 // Provider likely returned inclusive overlap at the boundary — nudge forward.
                 // We advance by 1 second because API granularity is seconds.
-                cur_start = cur_start + chrono::Duration::seconds(1);
+                cur_start += chrono::Duration::seconds(1);
                 continue;
             }
 
@@ -404,10 +403,7 @@ impl MarketDataProvider for PXClient {
     }
 
     fn supports(&self, topic: Topic) -> bool {
-        match topic {
-            Topic::Ticks | Topic::Quotes | Topic::MBP10 => true,
-            _ => false,
-        }
+        matches!(topic, Topic::Ticks | Topic::Quotes | Topic::MBP10)
     }
 
     async fn connect_to_market(
@@ -657,7 +653,7 @@ impl ExecutionProvider for PXClient {
             let contract = contract.value();
             if let Some(account) = self.internal_accounts.get(&spec.account_name) {
                 let req = PlaceOrderReq {
-                    account_id: account.id.clone(),
+                    account_id: account.id,
                     contract_id: contract.provider_contract_name.clone(),
                     type_: type_i,
                     side: side_i,
@@ -746,7 +742,7 @@ impl ExecutionProvider for PXClient {
         };
         if let Some(account) = self.internal_accounts.get(&spec.account_name) {
             let req = ModifyOrderReq {
-                account_id: account.id.clone(),
+                account_id: account.id,
                 order_id,
                 size: spec.new_qty,
                 limit_price: spec.new_limit_price,

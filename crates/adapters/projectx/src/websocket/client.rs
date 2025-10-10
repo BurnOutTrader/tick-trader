@@ -359,7 +359,7 @@ impl PxWebSocketClient {
         // Perform SignalR handshake: {"protocol":"json","version":1}\x1e
         self.send_user_text(format!(
             "{}\u{001e}",
-            serde_json::json!({"protocol":"json","version":1}).to_string()
+            serde_json::json!({"protocol":"json","version":1})
         ))
         .await?;
 
@@ -393,10 +393,10 @@ impl PxWebSocketClient {
                     Ok(Message::Ping(payload)) => {
                         // Respond with Pong to keep the connection healthy
                         let guard = this.user_ws.lock().await;
-                        if let Some(client) = guard.as_ref() {
-                            if let Err(e) = client.send_pong(payload).await {
-                                tracing::warn!(target: "projectx.ws", "failed to send Pong on user ws: {e}");
-                            }
+                        if let Some(client) = guard.as_ref()
+                            && let Err(e) = client.send_pong(payload).await
+                        {
+                            tracing::warn!(target: "projectx.ws", "failed to send Pong on user ws: {e}");
                         }
                     }
                     Ok(Message::Pong(_)) => {}
@@ -480,7 +480,7 @@ impl PxWebSocketClient {
         // Perform SignalR handshake: {"protocol":"json","version":1}\x1e
         self.send_market_text(format!(
             "{}\u{001e}",
-            serde_json::json!({"protocol":"json","version":1}).to_string()
+            serde_json::json!({"protocol":"json","version":1})
         ))
         .await?;
 

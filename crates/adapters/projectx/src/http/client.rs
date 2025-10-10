@@ -35,7 +35,7 @@ impl PxHttpClient {
         retry_delay_max_ms: Option<u64>,
     ) -> anyhow::Result<Self> {
         Ok(Self {
-            firm: px_credential.firm.clone(),
+            firm: px_credential.firm,
             inner: Arc::new(PxHttpInnerClient::new(
                 px_credential,
                 timeout_secs,
@@ -74,11 +74,11 @@ impl PxHttpClient {
             loop {
                 tokio::select! {
                     _ = ticker.tick() => {
-                        if client.validate().await.is_ok() {
-                            if let Some(cur) = client.token.read().await.clone() {
-                                if last_token.as_ref().map(|s| s.as_str()) != Some(cur.as_str()) {
-                                    last_token = Some(cur.clone());
-                                }
+                        if client.validate().await.is_ok()
+                            && let Some(cur) = client.token.read().await.clone()
+                        {
+                            if last_token.as_deref() != Some(cur.as_str()) {
+                                last_token = Some(cur.clone());
                             }
                         }
                     }

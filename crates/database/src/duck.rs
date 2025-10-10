@@ -407,10 +407,7 @@ fn ns_to_dt(ns: i64) -> std::result::Result<DateTime<Utc>, Error> {
         duckdb::Error::FromSqlConversionFailure(
             8,
             duckdb::types::Type::BigInt,
-            Box::new(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "invalid nanos",
-            )),
+            Box::new(std::io::Error::other("invalid nanos")),
         )
     })
 }

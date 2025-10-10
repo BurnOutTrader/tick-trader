@@ -52,6 +52,7 @@ fn bbo(sym: &str, t_ns: i64, bid: i64, ask: i64) -> Bbo {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn candle(
     sym: &str,
     start: chrono::DateTime<Utc>,

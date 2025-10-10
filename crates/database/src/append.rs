@@ -36,14 +36,13 @@ pub fn append_merge_parquet(
 
     // When the file doesn't exist yet OR existing file is empty/corrupt, short-circuit: move the new parquet in place without invoking DuckDB.
     let mut exists = existing_path.exists();
-    if exists {
-        if let Ok(meta) = fs::metadata(existing_path) {
-            if meta.len() == 0 {
-                // Remove the zero-byte file to avoid DuckDB assertion when reading it
-                let _ = fs::remove_file(existing_path);
-                exists = false;
-            }
-        }
+    if exists
+        && let Ok(meta) = fs::metadata(existing_path)
+        && meta.len() == 0
+    {
+        // Remove the zero-byte file to avoid DuckDB assertion when reading it
+        let _ = fs::remove_file(existing_path);
+        exists = false;
     }
     if !exists {
         if let Some(parent) = existing_path.parent() {
