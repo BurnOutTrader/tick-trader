@@ -11,6 +11,7 @@ use chrono::{DateTime, Utc};
 use rkyv::AlignedVec;
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use rust_decimal::Decimal;
+use crate::data::mbp10::Mbp10;
 
 pub const ENGINE_TAG_PREFIX: &str = "+eId:";
 
@@ -482,7 +483,7 @@ pub enum Response {
     TickBatch(TickBatch),
     QuoteBatch(QuoteBatch),
     BarBatch(BarBatch),
-    MBP10(MBP10Batch),
+    MBP10Batch(MBP10Batch),
     VendorData(VendorData),
     OrdersBatch(OrdersBatch),
     PositionsBatch(PositionsBatch),
@@ -510,6 +511,10 @@ pub enum Response {
         candle: Candle,
         provider_kind: ProviderKind,
     },
+    Mbp10 {
+        mbp10: Mbp10,
+        provider_kind: ProviderKind,
+    }
 }
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, PartialEq, Clone, Debug)]

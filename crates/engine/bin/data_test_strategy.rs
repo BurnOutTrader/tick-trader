@@ -1,7 +1,5 @@
 use std::str::FromStr;
-use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Mutex;
 use tokio::time::sleep;
 use tracing::info;
 use tracing::level_filters::LevelFilter;
@@ -21,64 +19,69 @@ struct DataTestStrategy {
     engine: Option<EngineHandle>,
 }
 
-#[async_trait::async_trait]
 impl Strategy for DataTestStrategy {
-    async fn on_start(&mut self, h: EngineHandle) {
+    fn on_start(&mut self, h: EngineHandle) {
         info!("strategy start");
-        h.subscribe_key(
+        // Non-blocking subscribe via handle command queue
+        let _ = h.subscribe_now(
             DataTopic::MBP10,
             SymbolKey::new(
                 Instrument::from_str("MNQ.Z25").unwrap(),
                 ProviderKind::ProjectX(ProjectXTenant::Topstep),
             ),
-        )
-        .await
-        .unwrap();
+        );
         self.engine = Some(h);
     }
-    async fn on_stop(&mut self) {
+
+    fn on_stop(&mut self) {
         info!("strategy stop");
     }
-    async fn on_tick(&mut self, t: tt_types::data::core::Tick, _provider_kind: ProviderKind) {
+
+    fn on_tick(&mut self, t: &tt_types::data::core::Tick, _provider_kind: ProviderKind) {
         println!("{:?}", t)
     }
-    async fn on_quote(&mut self, q: tt_types::data::core::Bbo, _provider_kind: ProviderKind) {
+
+    fn on_quote(&mut self, q: &tt_types::data::core::Bbo, _provider_kind: ProviderKind) {
         println!("{:?}", q);
     }
-    async fn on_bar(&mut self, b: tt_types::data::core::Candle, _provider_kind: ProviderKind) {
+
+    fn on_bar(&mut self, b: &tt_types::data::core::Candle, _provider_kind: ProviderKind) {
         println!("{:?}", b)
     }
 
-    async fn on_mbp10(&mut self, d: Mbp10, _provider_kind: ProviderKind) {
+    fn on_mbp10(&mut self, d: &Mbp10, _provider_kind: ProviderKind) {
         println!(
             "MBP10 evt: action={:?} side={:?} px={} sz={} flags={:?} ts_event={} ts_recv={}",
             d.action, d.side, d.price, d.size, d.flags, d.ts_event, d.ts_recv
         );
     }
 
-    async fn on_orders_batch(&mut self, b: wire::OrdersBatch) {
+    fn on_orders_batch(&mut self, b: &wire::OrdersBatch) {
         println!("{:?}", b);
     }
-    async fn on_positions_batch(&mut self, b: wire::PositionsBatch) {
+
+    fn on_positions_batch(&mut self, b: &wire::PositionsBatch) {
         println!("{:?}", b);
     }
-    async fn on_account_delta(&mut self, accounts: Vec<AccountDelta>) {
+
+    fn on_account_delta(&mut self, accounts: &[AccountDelta]) {
         for account_delta in accounts {
             println!("{:?}", account_delta);
         }
     }
 
-    async fn on_trades_closed(&mut self, _trades: Vec<Trade>) {
-        todo!()
+    fn on_trades_closed(&mut self, _trades: Vec<Trade>) {
+        // implement when needed
     }
 
-    async fn on_subscribe(&mut self, instrument: Instrument, data_topic: DataTopic, success: bool) {
+    fn on_subscribe(&mut self, instrument: Instrument, data_topic: DataTopic, success: bool) {
         println!(
             "Subscribed to {} on topic {:?}: Success: {}",
             instrument, data_topic, success
         );
     }
-    async fn on_unsubscribe(&mut self, _instrument: Instrument, data_topic: DataTopic) {
+
+    fn on_unsubscribe(&mut self, _instrument: Instrument, data_topic: DataTopic) {
         println!("{:?}", data_topic);
     }
 
@@ -102,8 +105,8 @@ async fn main() -> anyhow::Result<()> {
     let bus = ClientMessageBus::connect(&addr).await?;
 
     let mut engine = EngineRuntime::new(bus.clone());
-    let strategy = Arc::new(Mutex::new(DataTestStrategy::default()));
-    let _handle = engine.start(strategy.clone()).await?;
+    let strategy = DataTestStrategy::default();
+    let _handle = engine.start(strategy).await?;
 
     sleep(Duration::from_secs(60)).await;
 
