@@ -8,6 +8,7 @@ use tracing::info;
 use tracing::level_filters::LevelFilter;
 use tt_bus::ClientMessageBus;
 use tt_engine::engine::{DataTopic, EngineHandle, EngineRuntime, Strategy};
+use tt_engine::portfolio::OrderKey;
 use tt_types::accounts::account::AccountName;
 use tt_types::accounts::events::AccountDelta;
 use tt_types::data::mbp10::{Action as MbpAction, BookLevels, BookSide as MbpSide, Mbp10};
@@ -15,7 +16,7 @@ use tt_types::keys::{AccountKey, SymbolKey};
 use tt_types::providers::{ProjectXTenant, ProviderKind};
 use tt_types::securities::symbols::Instrument;
 use tt_types::wire;
-use tt_types::wire::Trade;
+use tt_types::wire::{OrderType, Trade};
 
 #[allow(dead_code)]
 #[derive(Default, Debug, Clone)]
@@ -122,6 +123,7 @@ impl OrderBook {
     }
 }
 
+#[derive(Clone)]
 // New: lightweight config and state for the strategy
 struct StrategyConfig {
     key: SymbolKey,
@@ -225,7 +227,7 @@ impl OrderBookStrategy {
             let mut did_cancel = false;
             for ou in open {
                 if let Some(poid) = ou.provider_order_id {
-                    let _ = h.cancel_now(wire::CancelOrder {
+                    let _ = h.cancel_order(wire::CancelOrder {
                         account_name: cfg.account_name.clone(),
                         provider_order_id: poid.0,
                     });
@@ -246,7 +248,7 @@ impl OrderBookStrategy {
             let open = h.open_orders_for_instrument(&cfg.instrument);
             for ou in open {
                 if let Some(poid) = ou.provider_order_id {
-                    let _ = h.cancel_now(wire::CancelOrder {
+                    let _ = h.cancel_order(wire::CancelOrder {
                         account_name: cfg.account_name.clone(),
                         provider_order_id: poid.0,
                     });
@@ -472,41 +474,42 @@ impl OrderBookStrategy {
 
         if self.can_trade {
             // Re-place desired sides using join orders to stick to BBO
+            let key = SymbolKey {
+                instrument: self.cfg.clone().unwrap().instrument,
+                provider: self.cfg.clone().unwrap().provider,
+            };
             if want_bid {
                 self.buy_count += 1;
                 self.last_place_bid_at = Some(now);
-                /*let order = wire::PlaceOrder {
-                    account_name: account_name_clone.clone(),
-                    key: key_clone.clone(),
-                    side: tt_types::accounts::events::Side::Buy,
-                    qty: 1,
-                    r#type: wire::OrderType::JoinBid,
-                    limit_price: None,
-                    stop_price: None,
-                    trail_price: None,
-                    custom_tag: None,
-                    stop_loss: None,
-                    take_profit: None,
-                };
-                let _ = h.place_order(order);*/
+
+                let order_id = h.place_order(
+                    self.account_name.clone(),
+                    key.clone(),
+                    tt_types::accounts::events::Side::Buy,
+                    1,
+                    OrderType::JoinBid,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                ).unwrap();
             }
             if want_ask {
-                /*self.sell_count += 1;
-                self.last_place_ask_at = Some(now);
-                let order = wire::PlaceOrder {
-                    account_name: account_name_clone.clone(),
-                    key: key_clone.clone(),
-                    side: tt_types::accounts::events::Side::Sell,
-                    qty: 1,
-                    r#type: wire::OrderType::JoinAsk,
-                    limit_price: None,
-                    stop_price: None,
-                    trail_price: None,
-                    custom_tag: None,
-                    stop_loss: None,
-                    take_profit: None,
-                };
-                let _ = h.place_order(order);*/
+                let order_id = h.place_order(
+                    self.account_name.clone(),
+                    key,
+                    tt_types::accounts::events::Side::Sell,
+                    1,
+                    OrderType::JoinBid,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                ).unwrap();
             }
         }
     }
@@ -533,7 +536,7 @@ impl Strategy for OrderBookStrategy {
         let cfg = self.cfg.as_ref().unwrap();
         // Non-blocking subscriptions via command queue
         let _ = h.subscribe_now(DataTopic::MBP10, cfg.key.clone());
-        let _ = h.subscribe_now(DataTopic::Ticks, cfg.key.clone());
+        //let _ = h.subscribe_now(DataTopic::Ticks, cfg.key.clone());
     }
 
     fn on_stop(&mut self) {
@@ -551,6 +554,7 @@ impl Strategy for OrderBookStrategy {
     fn on_bar(&mut self, _b: &tt_types::data::core::Candle, _provider_kind: ProviderKind) {}
 
     fn on_mbp10(&mut self, d: &Mbp10, _provider_kind: ProviderKind) {
+        //info!("{:?}", d);
         let ob = &mut self.book;
         if let Some(ref book) = d.book {
             ob.seed_from_snapshot(book);
@@ -583,8 +587,8 @@ impl Strategy for OrderBookStrategy {
     }
 
     fn on_orders_batch(&mut self, b: &wire::OrdersBatch) {
-        for _order in &b.orders {
-            // println!("{:?}", order);
+        for order in &b.orders {
+            println!("{:?}", order);
         }
     }
 
