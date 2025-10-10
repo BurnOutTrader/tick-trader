@@ -1,4 +1,3 @@
-use tracing::trace;
 use crate::models::{
     BarRec, DepthDeltaRec, EngineConfig, InterestEntry, StreamKey, StreamMetrics, SubState, TickRec,
 };
@@ -13,6 +12,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, mpsc, oneshot};
+use tracing::trace;
 use tracing::{error, info};
 use tt_bus::{ClientMessageBus, ClientSubId};
 use tt_database::init::init_db;
@@ -33,8 +33,8 @@ use tt_types::wire::{
 // SHM snapshots
 use tt_shm;
 // Bytes trait for rkyv deserialization of individual items
-use tt_types::wire::Bytes as WireBytes;
 use crossbeam::queue::ArrayQueue;
+use tt_types::wire::Bytes as WireBytes;
 
 #[derive(Default)]
 pub struct Caches {
@@ -204,7 +204,9 @@ pub trait Strategy: Send + 'static {
     fn on_subscribe(&mut self, _instrument: Instrument, _data_topic: DataTopic, _success: bool) {}
     fn on_unsubscribe(&mut self, _instrument: Instrument, _data_topic: DataTopic) {}
 
-    fn accounts(&self) -> Vec<AccountKey> { Vec::new() }
+    fn accounts(&self) -> Vec<AccountKey> {
+        Vec::new()
+    }
 }
 
 #[derive(Clone, Debug, Copy)]
@@ -305,15 +307,17 @@ impl EngineHandle {
     // === FIRE-AND-FORGET ===
     #[inline]
     pub fn subscribe_now(&self, topic: DataTopic, key: SymbolKey) {
-        let _ = self
-            .cmd_q
-            .push(Command::Subscribe { topic: topic.to_topic_or_err().unwrap(), key });
+        let _ = self.cmd_q.push(Command::Subscribe {
+            topic: topic.to_topic_or_err().unwrap(),
+            key,
+        });
     }
     #[inline]
     pub fn unsubscribe_now(&self, topic: DataTopic, key: SymbolKey) {
-        let _ = self
-            .cmd_q
-            .push(Command::Unsubscribe { topic: topic.to_topic_or_err().unwrap(), key });
+        let _ = self.cmd_q.push(Command::Unsubscribe {
+            topic: topic.to_topic_or_err().unwrap(),
+            key,
+        });
     }
     #[inline]
     pub fn place_now(&self, mut spec: tt_types::wire::PlaceOrder) -> EngineUuid {
@@ -436,7 +440,12 @@ impl EngineHandle {
     }
 
     // Fire-and-forget: enqueue cancel; engine task performs I/O
-    pub fn cancel_order(&self, _provider_kind: ProviderKind, account_name: AccountName, order_id: EngineUuid) -> anyhow::Result<()> {
+    pub fn cancel_order(
+        &self,
+        _provider_kind: ProviderKind,
+        account_name: AccountName,
+        order_id: EngineUuid,
+    ) -> anyhow::Result<()> {
         // Look up provider order ID from map populated by order updates
         if let Some(pid) = self.inner.provider_order_ids.get(&order_id) {
             let spec = tt_types::wire::CancelOrder {
@@ -446,11 +455,20 @@ impl EngineHandle {
             let _ = self.cmd_q.push(Command::Cancel(spec, order_id));
             Ok(())
         } else {
-            Err(anyhow!("provider_order_id not known for engine order {}", order_id))
+            Err(anyhow!(
+                "provider_order_id not known for engine order {}",
+                order_id
+            ))
         }
     }
     // Fire-and-forget: enqueue replace; engine task performs I/O
-    pub fn replace_order(&self, _provider_kind: ProviderKind, account_name: AccountName, incoming: tt_types::wire::ReplaceOrder, order_id: EngineUuid) -> anyhow::Result<()> {
+    pub fn replace_order(
+        &self,
+        _provider_kind: ProviderKind,
+        account_name: AccountName,
+        incoming: tt_types::wire::ReplaceOrder,
+        order_id: EngineUuid,
+    ) -> anyhow::Result<()> {
         if let Some(pid) = self.inner.provider_order_ids.get(&order_id) {
             let spec = tt_types::wire::ReplaceOrder {
                 account_name,
@@ -463,7 +481,10 @@ impl EngineHandle {
             let _ = self.cmd_q.push(Command::Replace(spec, order_id));
             Ok(())
         } else {
-            Err(anyhow!("provider_order_id not known for engine order {}", order_id))
+            Err(anyhow!(
+                "provider_order_id not known for engine order {}",
+                order_id
+            ))
         }
     }
     /// Convenience: construct a `PlaceOrder` from parameters and enqueue it.
@@ -765,7 +786,10 @@ impl EngineRuntime {
     }
 
     // Orders API helpers
-    pub async fn send_order_for_execution(&self, spec: tt_types::wire::PlaceOrder) -> anyhow::Result<()> {
+    pub async fn send_order_for_execution(
+        &self,
+        spec: tt_types::wire::PlaceOrder,
+    ) -> anyhow::Result<()> {
         let _ = self
             .bus
             .handle_request(
@@ -1107,7 +1131,8 @@ impl EngineRuntime {
                 sub_id_for_task.clone(),
                 securities_watch_for_task.clone(),
                 securities_by_provider_for_task.clone(),
-            ).await;
+            )
+            .await;
             while let Some(resp) = rx.recv().await {
                 // Fulfill engine-local correlated callbacks first
                 match &resp {
@@ -1198,7 +1223,9 @@ impl EngineRuntime {
                             // Populate provider order ID map from updates
                             for o in ob.orders.iter() {
                                 if let Some(pid) = &o.provider_order_id {
-                                    handle_inner_for_task.provider_order_ids.insert(o.order_id, pid.0.clone());
+                                    handle_inner_for_task
+                                        .provider_order_ids
+                                        .insert(o.order_id, pid.0.clone());
                                 }
                             }
                         }
@@ -1302,15 +1329,24 @@ impl EngineRuntime {
                                             if seq != last_seq {
                                                 last_seq = seq;
                                                 let maybe_resp = match topic {
-                                                    Topic::Quotes => {
-                                                        Bbo::from_bytes(&buf).ok().map(|bbo| Response::Quote { bbo, provider_kind: key.provider })
-                                                    }
-                                                    Topic::Ticks => {
-                                                        Tick::from_bytes(&buf).ok().map(|t| Response::Tick { tick: t, provider_kind: key.provider })
-                                                    }
-                                                    Topic::MBP10 => {
-                                                        Mbp10::from_bytes(&buf).ok().map(|m| Response::Mbp10 { mbp10: m, provider_kind: key.provider })
-                                                    }
+                                                    Topic::Quotes => Bbo::from_bytes(&buf)
+                                                        .ok()
+                                                        .map(|bbo| Response::Quote {
+                                                            bbo,
+                                                            provider_kind: key.provider,
+                                                        }),
+                                                    Topic::Ticks => Tick::from_bytes(&buf)
+                                                        .ok()
+                                                        .map(|t| Response::Tick {
+                                                            tick: t,
+                                                            provider_kind: key.provider,
+                                                        }),
+                                                    Topic::MBP10 => Mbp10::from_bytes(&buf)
+                                                        .ok()
+                                                        .map(|m| Response::Mbp10 {
+                                                            mbp10: m,
+                                                            provider_kind: key.provider,
+                                                        }),
                                                     _ => None,
                                                 };
                                                 if let Some(resp) = maybe_resp {
@@ -1372,11 +1408,11 @@ impl EngineRuntime {
                     sub_id_for_task.clone(),
                     securities_watch_for_task.clone(),
                     securities_by_provider_for_task.clone(),
-                ).await;
+                )
+                .await;
             }
 
             strategy_for_task.on_stop();
-
         });
         self.task = Some(handle_task);
         Ok(handle)
@@ -1398,7 +1434,9 @@ impl EngineRuntime {
             watch: Arc<DashMap<ProviderKind, ()>>,
             sec_map: Arc<DashMap<ProviderKind, Vec<Instrument>>>,
         ) {
-            if watch.get(&provider).is_some() { return; }
+            if watch.get(&provider).is_some() {
+                return;
+            }
             watch.insert(provider, ());
             // immediate fetch
             let bus2 = bus.clone();
@@ -1409,9 +1447,21 @@ impl EngineRuntime {
                 sec_map: Arc<DashMap<ProviderKind, Vec<Instrument>>>,
             ) {
                 use tokio::time::timeout;
-                use tt_types::wire::{InstrumentsRequest, Request as WireReq, Response as WireResp};
-                let rx = bus.request_with_corr(|corr_id| WireReq::InstrumentsRequest(InstrumentsRequest { provider, pattern: None, corr_id })).await;
-                if let Ok(Ok(WireResp::InstrumentsResponse(ir))) = timeout(Duration::from_secs(3), rx).await {
+                use tt_types::wire::{
+                    InstrumentsRequest, Request as WireReq, Response as WireResp,
+                };
+                let rx = bus
+                    .request_with_corr(|corr_id| {
+                        WireReq::InstrumentsRequest(InstrumentsRequest {
+                            provider,
+                            pattern: None,
+                            corr_id,
+                        })
+                    })
+                    .await;
+                if let Ok(Ok(WireResp::InstrumentsResponse(ir))) =
+                    timeout(Duration::from_secs(3), rx).await
+                {
                     sec_map.insert(provider, ir.instruments);
                 }
             }
@@ -1428,20 +1478,45 @@ impl EngineRuntime {
         while let Some(cmd) = cmd_q.pop() {
             match cmd {
                 Command::Subscribe { topic, key } => {
-                    ensure_vendor(bus.clone(), key.provider, securities_watch.clone(), securities_by_provider.clone()).await;
-                    let _ = bus.handle_request(&sub_id, Request::SubscribeKey(SubscribeKey { topic, key, latest_only: false, from_seq: 0 })).await;
+                    ensure_vendor(
+                        bus.clone(),
+                        key.provider,
+                        securities_watch.clone(),
+                        securities_by_provider.clone(),
+                    )
+                    .await;
+                    let _ = bus
+                        .handle_request(
+                            &sub_id,
+                            Request::SubscribeKey(SubscribeKey {
+                                topic,
+                                key,
+                                latest_only: false,
+                                from_seq: 0,
+                            }),
+                        )
+                        .await;
                 }
                 Command::Unsubscribe { topic, key } => {
-                    let _ = bus.handle_request(&sub_id, Request::UnsubscribeKey(UnsubscribeKey { topic, key })).await;
+                    let _ = bus
+                        .handle_request(
+                            &sub_id,
+                            Request::UnsubscribeKey(UnsubscribeKey { topic, key }),
+                        )
+                        .await;
                 }
                 Command::Place(spec) => {
                     let _ = bus.handle_request(&sub_id, Request::PlaceOrder(spec)).await;
                 }
                 Command::Cancel(spec, _) => {
-                    let _ = bus.handle_request(&sub_id, Request::CancelOrder(spec)).await;
+                    let _ = bus
+                        .handle_request(&sub_id, Request::CancelOrder(spec))
+                        .await;
                 }
                 Command::Replace(spec, _) => {
-                    let _ = bus.handle_request(&sub_id, Request::ReplaceOrder(spec)).await;
+                    let _ = bus
+                        .handle_request(&sub_id, Request::ReplaceOrder(spec))
+                        .await;
                 }
             }
         }

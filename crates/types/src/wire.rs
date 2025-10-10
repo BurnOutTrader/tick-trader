@@ -1,6 +1,7 @@
 use crate::accounts::account::AccountName;
 use crate::accounts::events::{ProviderOrderId, Side};
 use crate::data::core::{Bbo, Candle, Tick};
+use crate::data::mbp10::Mbp10;
 use crate::engine_id::EngineUuid;
 use crate::keys::{SymbolKey, Topic};
 use crate::providers::ProviderKind;
@@ -11,7 +12,6 @@ use chrono::{DateTime, Utc};
 use rkyv::AlignedVec;
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use rust_decimal::Decimal;
-use crate::data::mbp10::Mbp10;
 
 pub const ENGINE_TAG_PREFIX: &str = "+eId:";
 
@@ -514,7 +514,7 @@ pub enum Response {
     Mbp10 {
         mbp10: Mbp10,
         provider_kind: ProviderKind,
-    }
+    },
 }
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, PartialEq, Clone, Debug)]

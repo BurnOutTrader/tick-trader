@@ -7,11 +7,11 @@ use tracing::info;
 use tracing::level_filters::LevelFilter;
 use tt_bus::ClientMessageBus;
 use tt_engine::engine::{DataTopic, EngineHandle, EngineRuntime, Strategy};
+use tt_types::accounts::account::AccountName;
 use tt_types::accounts::events::AccountDelta;
 use tt_types::data::core::{Bbo, Candle, Tick};
 use tt_types::data::mbp10::Mbp10;
 use tt_types::keys::{AccountKey, SymbolKey};
-use tt_types::accounts::account::AccountName;
 use tt_types::providers::{ProjectXTenant, ProviderKind};
 use tt_types::securities::symbols::Instrument;
 use tt_types::wire::{OrderType, OrdersBatch, PositionsBatch, Trade};
@@ -166,9 +166,9 @@ impl Strategy for TotalLiveTestStrategy {
     }
 
     fn on_positions_batch(&mut self, b: &PositionsBatch) {
-       for position in b.positions.iter() {
-           println!("{:?}", position);
-       }
+        for position in b.positions.iter() {
+            println!("{:?}", position);
+        }
     }
 
     fn on_account_delta(&mut self, accounts: &[AccountDelta]) {
@@ -194,7 +194,10 @@ impl Strategy for TotalLiveTestStrategy {
     }
 
     fn accounts(&self) -> Vec<AccountKey> {
-        vec![AccountKey::new(self.execution_provider, self.account_name.clone())]
+        vec![AccountKey::new(
+            self.execution_provider,
+            self.account_name.clone(),
+        )]
     }
 }
 
@@ -220,7 +223,10 @@ async fn main() -> anyhow::Result<()> {
         subscribed: Vec::new(),
         last_order_type: OrderType::Market,
         engine: None,
-        symbol_key: SymbolKey::new(Instrument::from_str("MNQ.Z25").unwrap(), ProviderKind::ProjectX(ProjectXTenant::Topstep))
+        symbol_key: SymbolKey::new(
+            Instrument::from_str("MNQ.Z25").unwrap(),
+            ProviderKind::ProjectX(ProjectXTenant::Topstep),
+        ),
     };
     let _handle = engine.start(strategy).await?;
 
