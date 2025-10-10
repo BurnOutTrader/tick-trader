@@ -19,6 +19,7 @@ dashmap = { workspace = true }
 duckdb = {workspace = true}
 rust_decimal = {workspace = true}
 ahash = { workspace = true }
+crossbeam = { workspace = true }
 
 [[bin]]
 name = "tt-engine-test_strategy"

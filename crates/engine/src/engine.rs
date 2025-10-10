@@ -3,7 +3,6 @@ use crate::models::{
 };
 use crate::portfolio::PortfolioManager;
 use anyhow::anyhow;
-use async_trait::async_trait;
 use dashmap::DashMap;
 use duckdb::Connection;
 use rust_decimal::prelude::ToPrimitive;
@@ -13,7 +12,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, mpsc, oneshot};
-use tracing::info;
+use tracing::{error, info};
 use tt_bus::{ClientMessageBus, ClientSubId};
 use tt_database::init::init_db;
 use tt_types::accounts::account::AccountName;
@@ -34,6 +33,7 @@ use tt_types::wire::{
 use tt_shm;
 // Bytes trait for rkyv deserialization of individual items
 use tt_types::wire::Bytes as WireBytes;
+use crossbeam::queue::ArrayQueue;
 
 #[derive(Default)]
 pub struct Caches {
@@ -185,41 +185,25 @@ impl<P: MarketDataProvider + 'static> Engine<P> {
     }
 }
 
-#[async_trait]
-pub trait Strategy: Send + Sync + 'static {
-    async fn on_start(&mut self, _h: EngineHandle);
+pub trait Strategy: Send + 'static {
+    fn on_start(&mut self, _h: EngineHandle) {}
+    fn on_stop(&mut self) {}
 
-    async fn on_stop(&mut self);
+    fn on_tick(&mut self, _t: &Tick, _provider_kind: ProviderKind) {}
+    fn on_quote(&mut self, _q: &Bbo, _provider_kind: ProviderKind) {}
+    fn on_bar(&mut self, _b: &Candle, _provider_kind: ProviderKind) {}
+    fn on_mbp10(&mut self, _d: &Mbp10, _provider_kind: ProviderKind) {}
 
-    async fn on_tick(&mut self, _t: Tick, provider_kind: ProviderKind);
+    fn on_orders_batch(&mut self, _b: &OrdersBatch) {}
+    fn on_positions_batch(&mut self, _b: &PositionsBatch) {}
+    fn on_account_delta(&mut self, _accounts: &[AccountDelta]) {}
 
-    async fn on_quote(&mut self, _q: Bbo, provider_kind: ProviderKind);
+    fn on_trades_closed(&mut self, _trades: Vec<Trade>) {}
 
-    async fn on_bar(&mut self, _b: Candle, provider_kind: ProviderKind);
+    fn on_subscribe(&mut self, _instrument: Instrument, _data_topic: DataTopic, _success: bool) {}
+    fn on_unsubscribe(&mut self, _instrument: Instrument, _data_topic: DataTopic) {}
 
-    async fn on_mbp10(&mut self, _d: Mbp10, provider_kind: ProviderKind);
-
-    async fn on_orders_batch(&mut self, _b: OrdersBatch);
-
-    async fn on_positions_batch(&mut self, _b: PositionsBatch);
-
-    /// Receive snapshots of account state, these are messages, not mutable objects.
-    async fn on_account_delta(&mut self, _accounts: Vec<AccountDelta>);
-
-    async fn on_trades_closed(&mut self, _trades: Vec<Trade>);
-
-    async fn on_subscribe(
-        &mut self,
-        _instrument: Instrument,
-        _data_topic: DataTopic,
-        _success: bool,
-    );
-
-    async fn on_unsubscribe(&mut self, _instrument: Instrument, _data_topic: DataTopic);
-
-    /// Optional: declare which accounts this strategy wants the engine to subscribe to
-    /// (orders, positions, and account events) at engine start. Default: none.
-    fn accounts(&self) -> Vec<AccountKey>;
+    fn accounts(&self) -> Vec<AccountKey> { Vec::new() }
 }
 
 #[derive(Clone, Debug, Copy)]
@@ -281,6 +265,8 @@ pub struct EngineRuntime {
     // Active SHM polling tasks keyed by (topic,key)
     shm_tasks: Arc<DashMap<(Topic, SymbolKey), tokio::task::JoinHandle<()>>>,
     portfolio_manager: Arc<PortfolioManager>,
+    // Bounded command queue drained by engine loop
+    pub(crate) cmd_q: Arc<ArrayQueue<Command>>,
 }
 
 // Shared view used by EngineHandle
@@ -295,12 +281,57 @@ pub(crate) struct EngineRuntimeShared {
     portfolio_manager: Arc<PortfolioManager>,
 }
 
+// Non-blocking commands enqueued by the strategy/handle and drained by the engine task
+enum Command {
+    Subscribe { topic: Topic, key: SymbolKey },
+    Unsubscribe { topic: Topic, key: SymbolKey },
+    Place(tt_types::wire::PlaceOrder),
+    Cancel(tt_types::wire::CancelOrder),
+    Replace(tt_types::wire::ReplaceOrder),
+}
+
 #[derive(Clone)]
 pub struct EngineHandle {
     inner: Arc<EngineRuntimeShared>,
+    cmd_q: Arc<ArrayQueue<Command>>,
 }
 
 impl EngineHandle {
+    // === FIRE-AND-FORGET ===
+    #[inline]
+    pub fn subscribe_now(&self, topic: DataTopic, key: SymbolKey) {
+        let _ = self
+            .cmd_q
+            .push(Command::Subscribe { topic: topic.to_topic_or_err().unwrap(), key });
+    }
+    #[inline]
+    pub fn unsubscribe_now(&self, topic: DataTopic, key: SymbolKey) {
+        let _ = self
+            .cmd_q
+            .push(Command::Unsubscribe { topic: topic.to_topic_or_err().unwrap(), key });
+    }
+    #[inline]
+    pub fn place_now(&self, mut spec: tt_types::wire::PlaceOrder) -> EngineUuid {
+        let id = EngineUuid::new();
+        spec.custom_tag = Some(EngineUuid::append_engine_tag(spec.custom_tag.take(), id));
+        let _ = self.cmd_q.push(Command::Place(spec));
+        id
+    }
+
+    // === SYNC GETTERS (instant) ===
+    #[inline]
+    pub fn is_long(&self, instr: &Instrument) -> bool {
+        self.inner.portfolio_manager.is_long(instr)
+    }
+    #[inline]
+    pub fn is_short(&self, instr: &Instrument) -> bool {
+        self.inner.portfolio_manager.is_short(instr)
+    }
+    #[inline]
+    pub fn is_flat(&self, instr: &Instrument) -> bool {
+        self.inner.portfolio_manager.is_flat(instr)
+    }
+
     async fn request_with_corr<F>(&self, make: F) -> oneshot::Receiver<Response>
     where
         F: FnOnce(u64) -> Request,
@@ -1006,15 +1037,15 @@ impl EngineRuntime {
             watching_providers: Arc::new(DashMap::new()),
             shm_tasks: Arc::new(DashMap::new()),
             portfolio_manager: Arc::new(PortfolioManager::new(instruments)),
+            cmd_q: Arc::new(ArrayQueue::new(4096)),
         }
     }
 
-    pub async fn start<S: Strategy>(
-        &mut self,
-        strategy: Arc<Mutex<S>>,
-    ) -> anyhow::Result<EngineHandle> {
+    pub async fn start<S: Strategy>(&mut self, mut strategy: S) -> anyhow::Result<EngineHandle> {
         let (tx, rx) = mpsc::channel::<Response>(2048);
+        let tx_internal = tx.clone();
         let sub_id = self.bus.add_client(tx).await;
+        let tx_internal_for_task = tx_internal.clone();
         self.sub_id = Some(sub_id.clone());
         self.rx = Some(rx);
         let rx = self.rx.take().expect("rx present after start");
@@ -1033,13 +1064,43 @@ impl EngineRuntime {
         };
         let handle = EngineHandle {
             inner: Arc::new(shared),
+            cmd_q: self.cmd_q.clone(),
         };
-        // Start processing task BEFORE invoking strategy.on_start so correlated responses can be handled during on_start
-        let strategy_for_task = strategy.clone();
+        // Start processing task loop
         let pm = self.portfolio_manager.clone();
         let shm_tasks = self.shm_tasks.clone();
+        let bus_for_task = self.bus.clone();
+        let sub_id_for_task = sub_id.clone();
+        let securities_watch_for_task = self.watching_providers.clone();
+        let handle_inner_for_task = handle.inner.clone();
+        let securities_by_provider_for_task = handle_inner_for_task.securities_by_provider.clone();
+        let cmd_q_for_task = self.cmd_q.clone();
+        // Call on_start before moving strategy
+        info!("engine: invoking strategy.on_start");
+        strategy.on_start(handle.clone());
+        info!("engine: strategy.on_start returned");
+        // Auto-subscribe to account streams declared by the strategy, if any.
+        // We lock briefly to fetch the list, then drop before awaiting network calls.
+        let accounts_to_init: Vec<AccountKey> = strategy.accounts();
+        if !accounts_to_init.is_empty() {
+            info!(
+                "engine: initializing {} account(s) for strategy",
+                accounts_to_init.len()
+            );
+            self.initialize_accounts(accounts_to_init).await?;
+        }
+        // Move strategy into the spawned task after on_start and accounts have been called
+        let mut strategy_for_task = strategy;
         let handle_task = tokio::spawn(async move {
             let mut rx = rx;
+            // Initial drain to process any commands enqueued during on_start (e.g., subscribe_now)
+            Self::drain_commands_for_task(
+                cmd_q_for_task.clone(),
+                bus_for_task.clone(),
+                sub_id_for_task.clone(),
+                securities_watch_for_task.clone(),
+                securities_by_provider_for_task.clone(),
+            ).await;
             while let Some(resp) = rx.recv().await {
                 // Fulfill engine-local correlated callbacks first
                 match &resp {
@@ -1073,8 +1134,7 @@ impl EngineRuntime {
                         for t in ticks {
                             // Update portfolio marks then deliver to strategy
                             pm.update_apply_last_price(pk.clone(), &t.instrument, t.price);
-                            let mut strat = strategy_for_task.lock().await;
-                            strat.on_tick(t, provider_kind.clone()).await;
+                            strategy_for_task.on_tick(&t, provider_kind.clone());
                         }
                     }
                     Response::QuoteBatch(QuoteBatch {
@@ -1087,8 +1147,7 @@ impl EngineRuntime {
                             // Use mid-price as mark
                             let mid = (q.bid + q.ask) / rust_decimal::Decimal::from(2);
                             pm.update_apply_last_price(pk.clone(), &q.instrument, mid);
-                            let mut strat = strategy_for_task.lock().await;
-                            strat.on_quote(q, provider_kind.clone()).await;
+                            strategy_for_task.on_quote(&q, provider_kind.clone());
                         }
                     }
                     Response::BarBatch(BarBatch {
@@ -1100,11 +1159,10 @@ impl EngineRuntime {
                         for b in bars {
                             // Use close as mark
                             pm.update_apply_last_price(pk.clone(), &b.instrument, b.close);
-                            let mut strat = strategy_for_task.lock().await;
-                            strat.on_bar(b, provider_kind.clone()).await;
+                            strategy_for_task.on_bar(&b, provider_kind.clone());
                         }
                     }
-                    Response::MBP10(ob) => {
+                    Response::MBP10Batch(ob) => {
                         // Derive a mark from MBP10: prefer mid from level 0 if present, else event.price
                         let ev = &ob.event;
                         let mark = if let Some(book) = &ev.book {
@@ -1117,8 +1175,7 @@ impl EngineRuntime {
                             ev.price
                         };
                         pm.update_apply_last_price(ob.provider_kind.clone(), &ev.instrument, mark);
-                        let mut strat = strategy_for_task.lock().await;
-                        strat.on_mbp10(ob.event, ob.provider_kind).await;
+                        strategy_for_task.on_mbp10(&ob.event, ob.provider_kind);
                     }
                     Response::OrdersBatch(ob) => {
                         {
@@ -1126,8 +1183,7 @@ impl EngineRuntime {
                             st.last_orders = Some(ob.clone());
                         }
                         {
-                            let mut strat = strategy_for_task.lock().await;
-                            strat.on_orders_batch(ob.clone()).await;
+                            strategy_for_task.on_orders_batch(&ob);
                         }
                     }
                     Response::PositionsBatch(mut pb) => {
@@ -1138,9 +1194,8 @@ impl EngineRuntime {
                             st.last_positions = Some(adj.clone());
                         }
                         {
-                            // Deliver adjusted positions batch to strategy
-                            // Note: if no last price is known, open_pnl remains as provided
-                            let st = state.lock().await; // we could pass adj directly; acquiring to be consistent
+                            // Deliver adjusted positions batch to strategy (by-ref, sync)
+                            let st = state.lock().await;
                             for p in pb.positions.iter_mut() {
                                 if p.open_pnl == rust_decimal::Decimal::ZERO {
                                     if let Some(ep) = st.last_positions.as_ref() {
@@ -1155,8 +1210,7 @@ impl EngineRuntime {
                                     }
                                 }
                             }
-                            let mut strat = strategy_for_task.lock().await;
-                            strat.on_positions_batch(pb.clone()).await;
+                            strategy_for_task.on_positions_batch(&pb);
                         }
                     }
                     Response::AccountDeltaBatch(ab) => {
@@ -1165,8 +1219,7 @@ impl EngineRuntime {
                             st.last_accounts = Some(ab.clone());
                         }
                         {
-                            let mut strat = strategy_for_task.lock().await;
-                            strat.on_account_delta(ab.accounts).await;
+                            strategy_for_task.on_account_delta(&ab.accounts);
                         }
                     }
                     Response::Tick {
@@ -1179,14 +1232,12 @@ impl EngineRuntime {
                             &tick.instrument,
                             tick.price,
                         );
-                        let mut strat = strategy_for_task.lock().await;
-                        strat.on_tick(tick, provider_kind).await;
+                        strategy_for_task.on_tick(&tick, provider_kind);
                     }
                     Response::Quote { bbo, provider_kind } => {
                         let mid = (bbo.bid + bbo.ask) / rust_decimal::Decimal::from(2);
                         pm.update_apply_last_price(provider_kind.clone(), &bbo.instrument, mid);
-                        let mut strat = strategy_for_task.lock().await;
-                        strat.on_quote(bbo, provider_kind).await;
+                        strategy_for_task.on_quote(&bbo, provider_kind);
                     }
                     Response::Bar {
                         candle,
@@ -1197,95 +1248,55 @@ impl EngineRuntime {
                             &candle.instrument,
                             candle.close,
                         );
-                        let mut strat = strategy_for_task.lock().await;
-                        strat.on_bar(candle, provider_kind).await;
+                        strategy_for_task.on_bar(&candle, provider_kind);
+                    }
+                    Response::Mbp10 {
+                        mbp10,
+                        provider_kind,
+                    } => {
+                        // Update mark from MBP10 event (trade/quote-derived)
+                        pm.update_apply_last_price(
+                            provider_kind.clone(),
+                            &mbp10.instrument,
+                            mbp10.price,
+                        );
+                        // Deliver event to strategy (single-message path)
+                        strategy_for_task.on_mbp10(&mbp10, provider_kind);
                     }
                     Response::AnnounceShm(ann) => {
                         use tokio::task::JoinHandle;
                         let topic = ann.topic;
                         let key = ann.key.clone();
-                        // Start a SHM polling task if not already running for this (topic,key)
                         if shm_tasks.get(&(topic, key.clone())).is_none() {
-                            let strategy_for_task = strategy_for_task.clone();
-                            let pm = pm.clone();
-                            let key_for_task = key.clone();
+                            let tx_shm = tx_internal_for_task.clone();
+                            let value = key.clone();
                             let handle: JoinHandle<()> = tokio::spawn(async move {
-                                // Try to open reader; if not yet created by provider, retry with backoff
                                 let mut last_seq: u32 = 0;
                                 loop {
-                                    // Ensure reader exists
-                                    let reader_opt = tt_shm::ensure_reader(topic, &key_for_task);
-                                    if let Some(reader) = reader_opt {
+                                    if let Some(reader) = tt_shm::ensure_reader(topic, &value) {
                                         if let Some((seq, buf)) = reader.read_with_seq() {
                                             if seq != last_seq {
                                                 last_seq = seq;
-                                                match topic {
+                                                let maybe_resp = match topic {
                                                     Topic::Quotes => {
-                                                        if let Ok(bbo) = Bbo::from_bytes(&buf) {
-                                                            let mid = (bbo.bid + bbo.ask)
-                                                                / rust_decimal::Decimal::from(2);
-                                                            pm.update_apply_last_price(
-                                                                key_for_task.provider,
-                                                                &bbo.instrument,
-                                                                mid,
-                                                            );
-                                                            let mut strat =
-                                                                strategy_for_task.lock().await;
-                                                            strat
-                                                                .on_quote(
-                                                                    bbo,
-                                                                    key_for_task.provider,
-                                                                )
-                                                                .await;
-                                                        }
+                                                        Bbo::from_bytes(&buf).ok().map(|bbo| Response::Quote { bbo, provider_kind: key.provider })
                                                     }
                                                     Topic::Ticks => {
-                                                        if let Ok(t) = Tick::from_bytes(&buf) {
-                                                            pm.update_apply_last_price(
-                                                                key.provider,
-                                                                &t.instrument,
-                                                                t.price,
-                                                            );
-                                                            let mut strat =
-                                                                strategy_for_task.lock().await;
-                                                            strat.on_tick(t, key.provider).await;
-                                                        }
+                                                        Tick::from_bytes(&buf).ok().map(|t| Response::Tick { tick: t, provider_kind: key.provider })
                                                     }
                                                     Topic::MBP10 => {
-                                                        if let Ok(m) = Mbp10::from_bytes(&buf) {
-                                                            // Derive mark from mbp10 level 0
-                                                            let mark = if let Some(book) = &m.book {
-                                                                if let (Some(b0), Some(a0)) = (
-                                                                    book.bid_px.get(0),
-                                                                    book.ask_px.get(0),
-                                                                ) {
-                                                                    (*b0 + *a0)
-                                                                        / rust_decimal::Decimal::from(2)
-                                                                } else {
-                                                                    m.price
-                                                                }
-                                                            } else {
-                                                                m.price
-                                                            };
-                                                            pm.update_apply_last_price(
-                                                                key_for_task.provider,
-                                                                &m.instrument,
-                                                                mark,
-                                                            );
-                                                            let mut strat =
-                                                                strategy_for_task.lock().await;
-                                                            strat
-                                                                .on_mbp10(m, key_for_task.provider)
-                                                                .await;
-                                                        }
+                                                        Mbp10::from_bytes(&buf).ok().map(|m| Response::Mbp10 { mbp10: m, provider_kind: key.provider })
                                                     }
-                                                    // Bars and other topics are not published via SHM in current adapters; ignore
-                                                    _ => {}
+                                                    _ => None,
+                                                };
+                                                if let Some(resp) = maybe_resp {
+                                                    if tx_shm.try_send(resp).is_err() {
+                                                        error!("tx shm task is panicked");
+                                                    }
                                                 }
                                             }
                                         }
                                     }
-                                    // Avoid busy-looping
                                     tokio::time::sleep(Duration::from_millis(5)).await;
                                 }
                             });
@@ -1298,8 +1309,7 @@ impl EngineRuntime {
                         success,
                     } => {
                         let data_topic = DataTopic::from(topic);
-                        let mut strat = strategy_for_task.lock().await;
-                        strat.on_subscribe(instrument, data_topic, success).await;
+                        strategy_for_task.on_subscribe(instrument, data_topic, success);
                     }
                     Response::UnsubscribeResponse { topic, instrument } => {
                         // Stop any SHM polling task(s) for this topic/instrument
@@ -1320,12 +1330,10 @@ impl EngineRuntime {
                             }
                         }
                         let data_topic = DataTopic::from(topic);
-                        let mut strat = strategy_for_task.lock().await;
-                        strat.on_unsubscribe(instrument, data_topic).await;
+                        strategy_for_task.on_unsubscribe(instrument, data_topic);
                     }
                     Response::ClosedTrades(t) => {
-                        let mut strat = strategy_for_task.lock().await;
-                        strat.on_trades_closed(t).await;
+                        strategy_for_task.on_trades_closed(t);
                     }
                     Response::Pong(_)
                     | Response::InstrumentsResponse(_)
@@ -1333,31 +1341,86 @@ impl EngineRuntime {
                     | Response::VendorData(_)
                     | Response::AccountInfoResponse(_) => {}
                 }
+                // Flush any commands the strategy enqueued during this message
+                Self::drain_commands_for_task(
+                    cmd_q_for_task.clone(),
+                    bus_for_task.clone(),
+                    sub_id_for_task.clone(),
+                    securities_watch_for_task.clone(),
+                    securities_by_provider_for_task.clone(),
+                ).await;
             }
-            let mut strat = strategy_for_task.lock().await;
-            let _ = strat.on_stop().await;
+
+            strategy_for_task.on_stop();
+
         });
         self.task = Some(handle_task);
-        {
-            info!("engine: invoking strategy.on_start");
-            let mut strat = strategy.lock().await;
-            strat.on_start(handle.clone()).await;
-            info!("engine: strategy.on_start returned");
-        }
-        // Auto-subscribe to account streams declared by the strategy, if any.
-        // We lock briefly to fetch the list, then drop before awaiting network calls.
-        let accounts_to_init: Vec<AccountKey> = {
-            let strat = strategy.lock().await;
-            strat.accounts()
-        };
-        if !accounts_to_init.is_empty() {
-            info!(
-                "engine: initializing {} account(s) for strategy",
-                accounts_to_init.len()
-            );
-            self.initialize_accounts(accounts_to_init).await?;
-        }
         Ok(handle)
+    }
+
+    async fn drain_commands_for_task(
+        cmd_q: Arc<ArrayQueue<Command>>,
+        bus: Arc<ClientMessageBus>,
+        sub_id: ClientSubId,
+        securities_watch: Arc<DashMap<ProviderKind, ()>>,
+        securities_by_provider: Arc<DashMap<ProviderKind, Vec<Instrument>>>,
+    ) {
+        use tt_types::wire::{SubscribeKey, UnsubscribeKey};
+
+        // Local helper to ensure vendor securities watch is running
+        async fn ensure_vendor(
+            bus: Arc<ClientMessageBus>,
+            provider: ProviderKind,
+            watch: Arc<DashMap<ProviderKind, ()>>,
+            sec_map: Arc<DashMap<ProviderKind, Vec<Instrument>>>,
+        ) {
+            if watch.get(&provider).is_some() { return; }
+            watch.insert(provider, ());
+            // immediate fetch
+            let bus2 = bus.clone();
+            let sec_map2 = sec_map.clone();
+            async fn fetch_into(
+                bus: Arc<ClientMessageBus>,
+                provider: ProviderKind,
+                sec_map: Arc<DashMap<ProviderKind, Vec<Instrument>>>,
+            ) {
+                use tokio::time::timeout;
+                use tt_types::wire::{InstrumentsRequest, Request as WireReq, Response as WireResp};
+                let rx = bus.request_with_corr(|corr_id| WireReq::InstrumentsRequest(InstrumentsRequest { provider, pattern: None, corr_id })).await;
+                if let Ok(Ok(WireResp::InstrumentsResponse(ir))) = timeout(Duration::from_secs(3), rx).await {
+                    sec_map.insert(provider, ir.instruments);
+                }
+            }
+            fetch_into(bus2.clone(), provider, sec_map2.clone()).await;
+            tokio::spawn(async move {
+                let mut tick = tokio::time::interval(Duration::from_secs(3600));
+                loop {
+                    tick.tick().await;
+                    fetch_into(bus2.clone(), provider, sec_map2.clone()).await;
+                }
+            });
+        }
+
+        while let Some(cmd) = cmd_q.pop() {
+            match cmd {
+                Command::Subscribe { topic, key } => {
+                    ensure_vendor(bus.clone(), key.provider, securities_watch.clone(), securities_by_provider.clone()).await;
+                    let _ = bus.handle_request(&sub_id, Request::SubscribeKey(SubscribeKey { topic, key, latest_only: false, from_seq: 0 })).await;
+                }
+                Command::Unsubscribe { topic, key } => {
+                    let _ = bus.handle_request(&sub_id, Request::UnsubscribeKey(UnsubscribeKey { topic, key })).await;
+                }
+                Command::Place(spec) => {
+                    let _ = bus.handle_request(&sub_id, Request::PlaceOrder(spec)).await;
+                }
+                Command::Cancel(spec) => {
+                    let _ = bus.handle_request(&sub_id, Request::CancelOrder(spec)).await;
+                }
+                Command::Replace(spec) => {
+                    let _ = bus.handle_request(&sub_id, Request::ReplaceOrder(spec)).await;
+                }
+            }
+        }
     }
 
     pub async fn stop(&mut self) -> anyhow::Result<()> {
