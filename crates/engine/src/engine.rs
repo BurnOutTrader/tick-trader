@@ -1389,61 +1389,68 @@ impl EngineRuntime {
                                 let mut consecutive_failures: u32 = 0;
                                 loop {
                                     let mut progressed = false;
+                                    #[allow(clippy::collapsible_if)]
                                     if let Some(reader) = tt_shm::ensure_reader(topic, &value) {
                                         if let Some((seq, buf)) = reader.read_with_seq() {
                                             if seq != last_seq {
                                                 progressed = true;
                                                 last_seq = seq;
                                                 let maybe_resp = match topic {
-                                                    Topic::Quotes => {
-                                                        Bbo::from_bytes(&buf).ok().map(|bbo| {
-                                                            Response::Quote {
-                                                                bbo,
-                                                                provider_kind: key.provider,
-                                                            }
-                                                        })
-                                                    }
-                                                    Topic::Ticks => Tick::from_bytes(&buf).ok().map(|t| {
-                                                        Response::Tick {
+                                                    Topic::Quotes => Bbo::from_bytes(&buf)
+                                                        .ok()
+                                                        .map(|bbo| Response::Quote {
+                                                            bbo,
+                                                            provider_kind: key.provider,
+                                                        }),
+                                                    Topic::Ticks => Tick::from_bytes(&buf)
+                                                        .ok()
+                                                        .map(|t| Response::Tick {
                                                             tick: t,
                                                             provider_kind: key.provider,
-                                                        }
-                                                    }),
-                                                    Topic::MBP10 => Mbp10::from_bytes(&buf).ok().map(|m| {
-                                                        Response::Mbp10 {
+                                                        }),
+                                                    Topic::MBP10 => Mbp10::from_bytes(&buf)
+                                                        .ok()
+                                                        .map(|m| Response::Mbp10 {
                                                             mbp10: m,
                                                             provider_kind: key.provider,
-                                                        }
-                                                    }),
+                                                        }),
                                                     _ => None,
                                                 };
                                                 if let Some(resp) = maybe_resp {
                                                     consecutive_failures = 0;
                                                     if tx_shm.is_closed() {
-                                                        error!("tx shm channel closed; terminating SHM task");
+                                                        error!(
+                                                            "tx shm channel closed; terminating SHM task"
+                                                        );
                                                         break;
                                                     }
                                                     if let Err(e) = tx_shm.send(resp).await {
-                                                        error!("tx shm send failed: {e}; terminating SHM task");
+                                                        error!(
+                                                            "tx shm send failed: {e}; terminating SHM task"
+                                                        );
                                                         break;
                                                     }
                                                 } else {
                                                     // Parse failure or unsupported topic buffer
-                                                    consecutive_failures = consecutive_failures.saturating_add(1);
+                                                    consecutive_failures =
+                                                        consecutive_failures.saturating_add(1);
                                                     if consecutive_failures >= 8 {
                                                         // Mark this (topic,key) as SHM-failed and request framed fallback
                                                         info!(?topic, key = ?value, fails = consecutive_failures, "SHM decode failures; falling back to UDS for this stream");
-                                                        shm_blacklist.insert((topic, value.clone()), ());
+                                                        shm_blacklist
+                                                            .insert((topic, value.clone()), ());
                                                         // Ask server to (re)subscribe; providers may resume framed publishing when SHM is disabled client-side
                                                         let _ = bus
                                                             .handle_request(
                                                                 &sub_id,
-                                                                Request::SubscribeKey(tt_types::wire::SubscribeKey {
-                                                                    topic,
-                                                                    key: value.clone(),
-                                                                    latest_only: false,
-                                                                    from_seq: 0,
-                                                                }),
+                                                                Request::SubscribeKey(
+                                                                    tt_types::wire::SubscribeKey {
+                                                                        topic,
+                                                                        key: value.clone(),
+                                                                        latest_only: false,
+                                                                        from_seq: 0,
+                                                                    },
+                                                                ),
                                                             )
                                                             .await;
                                                         break;
@@ -1661,12 +1668,11 @@ impl EngineRuntime {
     }
 }
 
-
 #[cfg(test)]
 mod engine_shm_tests {
     use super::*;
     use std::str::FromStr;
-    use tokio::time::{sleep, Duration};
+    use tokio::time::{Duration, sleep};
 
     struct NopStrategy;
     impl Strategy for NopStrategy {}
@@ -1693,9 +1699,7 @@ mod engine_shm_tests {
         };
 
         // Deliver AnnounceShm to the engine via in-memory bus routing.
-        let _ = bus
-            .route_response(Response::AnnounceShm(ann))
-            .await;
+        let _ = bus.route_response(Response::AnnounceShm(ann)).await;
 
         // Give the engine loop a short moment to spawn the task.
         sleep(Duration::from_millis(20)).await;
@@ -1704,11 +1708,13 @@ mod engine_shm_tests {
             rt.shm_tasks.get(&(Topic::MBP10, key.clone())).is_some(),
             "expected SHM task to be spawned for non-blacklisted stream"
         );
-        let _ = tokio::time::timeout(Duration::from_secs(2), rt.stop()).await.expect("engine stop should not hang");
+        let _ = tokio::time::timeout(Duration::from_secs(2), rt.stop())
+            .await
+            .expect("engine stop should not hang");
     }
 
     //todo fix test make sure it works
-   // If the (topic,key) is blacklisted due to previous SHM errors, AnnounceShm should not spawn a reader task.
+    // If the (topic,key) is blacklisted due to previous SHM errors, AnnounceShm should not spawn a reader task.
     #[tokio::test]
     async fn shm_reader_is_skipped_when_blacklisted() {
         let (req_tx, mut _req_rx) = tokio::sync::mpsc::channel::<tt_types::wire::Request>(8);
@@ -1731,9 +1737,7 @@ mod engine_shm_tests {
             layout_ver: 1,
             size: 4096,
         };
-        let _ = bus
-            .route_response(Response::AnnounceShm(ann))
-            .await;
+        let _ = bus.route_response(Response::AnnounceShm(ann)).await;
 
         // Give the engine loop a short moment; it should NOT spawn a task for blacklisted key.
         sleep(Duration::from_millis(20)).await;
@@ -1743,6 +1747,8 @@ mod engine_shm_tests {
             "SHM task should not be spawned for blacklisted stream"
         );
 
-        let _ = tokio::time::timeout(Duration::from_secs(2), rt.stop()).await.expect("engine stop should not hang");
+        let _ = tokio::time::timeout(Duration::from_secs(2), rt.stop())
+            .await
+            .expect("engine stop should not hang");
     }
 }
