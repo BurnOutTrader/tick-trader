@@ -16,7 +16,6 @@ use tt_types::keys::{AccountKey, SymbolKey};
 use tt_types::providers::{ProjectXTenant, ProviderKind};
 use tt_types::securities::symbols::Instrument;
 use tt_types::wire::{OrderType, OrdersBatch, PositionsBatch, Trade};
-
 pub struct TotalLiveTestStrategy {
     instrument: Instrument,
     data_provider: ProviderKind,

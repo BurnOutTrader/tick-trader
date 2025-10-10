@@ -81,10 +81,19 @@ impl DownloadTaskHandle {
         }
     }
     pub fn cancel(&self) {
-        if let Ok(mut g) = self.entry.join.try_lock() {
-            if let Some(j) = g.take() {
-                j.abort();
-            }
+        if let Ok(mut g) = self.entry.join.try_lock()
+            && let Some(j) = g.take() {
+            j.abort();
+        }
+    }
+}
+
+impl Default for DownloadManager {
+    fn default() -> Self {
+        Self {
+            inner: std::sync::Arc::new(DownloadManagerInner {
+                inflight: Arc::new(Mutex::new(HashMap::new())),
+            }),
         }
     }
 }
@@ -105,7 +114,7 @@ impl DownloadManager {
         _client: std::sync::Arc<dyn HistoricalDataProvider>,
         req: HistoricalRequest,
     ) -> anyhow::Result<Option<DownloadTaskHandle>> {
-        let key = (req.provider_kind, req.instrument.clone(), req.topic.clone());
+        let key = (req.provider_kind, req.instrument.clone(), req.topic);
         let guard = self.inner.inflight.lock().await;
         if let Some(entry) = guard.get(&key) {
             let handle = DownloadTaskHandle {
@@ -125,7 +134,7 @@ impl DownloadManager {
         client: std::sync::Arc<dyn HistoricalDataProvider>,
         req: HistoricalRequest,
     ) -> anyhow::Result<DownloadTaskHandle> {
-        let key = (req.provider_kind, req.instrument.clone(), req.topic.clone());
+        let key = (req.provider_kind, req.instrument.clone(), req.topic);
         // fast path: existing
         {
             let guard = self.inner.inflight.lock().await;
@@ -155,12 +164,10 @@ impl DownloadManager {
 
         // If join is empty, we are the creator; spawn and set the join handle.
         let mut should_spawn = false;
-        if let Ok(mut jg) = entry_arc.join.try_lock() {
-            if jg.is_none() {
-                should_spawn = true;
-                // placeholder so other threads don't also spawn
-                *jg = Some(tokio::spawn(async {}));
-            }
+        if let Ok(mut jg) = entry_arc.join.try_lock() && jg.is_none() {
+            should_spawn = true;
+            // placeholder so other threads don't also spawn
+            *jg = Some(tokio::spawn(async {}));
         }
         if should_spawn {
             let dm = self.clone();
@@ -201,7 +208,7 @@ async fn run_download(
     let db_path = std::env::var("DB_PATH").unwrap_or_else(|_| "./storage".to_string());
     let db_path = Path::new(&db_path);
     const CAL_TZ: Tz = chrono_tz::UTC;
-    let connection = init_db(&db_path)?;
+    let connection = init_db(db_path)?;
     let resolution = match req.topic {
         Topic::Ticks => None,
         Topic::Quotes => None,
@@ -262,7 +269,7 @@ async fn run_download(
 
         let req = HistoricalRequest {
             provider_kind: req.provider_kind,
-            topic: req.topic.clone(),
+            topic: req.topic,
             instrument: req.instrument.clone(),
             exchange: req.exchange,
             start: cursor,
@@ -376,7 +383,7 @@ async fn run_download(
                         market_type,
                         req.topic,
                         &ticks,
-                        &db_path,
+                        db_path,
                         9,
                     )?;
                     tracing::info!(files = out_paths.len(), start=%cursor, end=%end, "persisted ticks");
@@ -393,7 +400,7 @@ async fn run_download(
                         market_type,
                         req.topic,
                         &quotes,
-                        &db_path,
+                        db_path,
                         9,
                     )?;
                     tracing::info!(files = out_paths.len(), start=%cursor, end=%end, "persisted bbo");
@@ -410,7 +417,7 @@ async fn run_download(
                         market_type,
                         req.topic,
                         &candles,
-                        &db_path,
+                        db_path,
                         9,
                     )?;
                     tracing::info!(files = out_paths.len(), start=%cursor, end=%end, "persisted candles");
