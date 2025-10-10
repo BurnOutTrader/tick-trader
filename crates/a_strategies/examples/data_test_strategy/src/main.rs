@@ -108,7 +108,7 @@ async fn main() -> anyhow::Result<()> {
     let strategy = DataTestStrategy::default();
     let _handle = engine.start(strategy).await?;
 
-    sleep(Duration::from_secs(120)).await;
+    sleep(Duration::from_secs(60)).await;
 
     let _ = engine.stop().await?;
     Ok(())
