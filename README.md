@@ -11,6 +11,7 @@
 [![Provider](https://img.shields.io/badge/Provider-DataBento%20(planned)-95a5a6)](https://www.databento.com)
 [![Columnar](https://img.shields.io/badge/Columnar-Arrow-5c6bc0)](https://arrow.apache.org/)
 [![Catalog](https://img.shields.io/badge/Catalog-DuckDB-43b581)](https://duckdb.org/)
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-Sponsor-FFDD00?logo=buymeacoffee&logoColor=000)](https://buymeacoffee.com/BurnOutTrader)
 
 > Note: This project is experimental and under active development. Interfaces may change and breaking updates can occur without notice. Use at your own risk.
 
