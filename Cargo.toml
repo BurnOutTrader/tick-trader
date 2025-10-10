@@ -19,6 +19,7 @@ resolver = "2"
 edition = "2024"
 license = "GPL-3.0-or-later"
 
+
 [workspace.dependencies]
 anyhow = "1.0.100"
 ahash = "0.8.12"

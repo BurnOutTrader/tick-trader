@@ -76,10 +76,9 @@ impl PxHttpClient {
                     _ = ticker.tick() => {
                         if client.validate().await.is_ok()
                             && let Some(cur) = client.token.read().await.clone()
+                            && last_token.as_deref() != Some(cur.as_str())
                         {
-                            if last_token.as_deref() != Some(cur.as_str()) {
-                                last_token = Some(cur.clone());
-                            }
+                            last_token = Some(cur);
                         }
                     }
                     _ = rx.changed() => {

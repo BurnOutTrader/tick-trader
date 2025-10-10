@@ -424,7 +424,7 @@ impl PxWebSocketClient {
         // Re-invoke per-account subscriptions for any accounts we have tracked.
         let tracked_accounts: Vec<i64> = {
             let guard = self.account_subs.read().await;
-            guard.iter().filter_map(|s| Some(s.clone())).collect()
+            guard.iter().copied().collect()
         };
         for account_id in tracked_accounts {
             let id_val = Value::from(account_id);
@@ -515,10 +515,10 @@ impl PxWebSocketClient {
                     Ok(Message::Ping(payload)) => {
                         // Respond with Pong to keep the connection healthy
                         let guard = this.market_ws.lock().await;
-                        if let Some(client) = guard.as_ref() {
-                            if let Err(e) = client.send_pong(payload).await {
-                                tracing::warn!(target: "projectx.ws", "failed to send Pong on market ws: {e}");
-                            }
+                        if let Some(client) = guard.as_ref()
+                            && let Err(e) = client.send_pong(payload).await
+                        {
+                            tracing::warn!(target: "projectx.ws", "failed to send Pong on market ws: {e}");
                         }
                     }
                     Ok(Message::Pong(_)) => {}
@@ -621,14 +621,14 @@ impl PxWebSocketClient {
                                 if let Some(args) = args_opt {
                                     // contract id is first arg when present
                                     let instrument_opt = args
-                                        .get(0)
+                                        .first()
                                         .and_then(|v| v.as_str())
                                         .and_then(|s| Instrument::try_parse_dotted(s).ok());
                                     // data is second arg when present, otherwise first
                                     let maybe_data = if args.len() >= 2 {
                                         Some(&args[1])
                                     } else {
-                                        args.get(0)
+                                        args.first()
                                     };
 
                                     let mut quotes: Vec<GatewayQuote> = Vec::new();
@@ -711,7 +711,7 @@ impl PxWebSocketClient {
                                 if let Some(args) = args_opt {
                                     // First arg is the full contract id (e.g., "CON.F.US.MNQ.Z25"). Use it to derive Instrument.
                                     let instrument_opt = args
-                                        .get(0)
+                                        .first()
                                         .and_then(|v| v.as_str())
                                         .and_then(|s| Instrument::try_parse_dotted(s).ok());
 
@@ -719,7 +719,7 @@ impl PxWebSocketClient {
                                     let maybe_data = if args.len() >= 2 {
                                         Some(&args[1])
                                     } else {
-                                        args.get(0)
+                                        args.first()
                                     };
 
                                     let mut trades: Vec<GatewayTrade> = Vec::new();
@@ -824,7 +824,7 @@ impl PxWebSocketClient {
                                 if let Some(args) = args_opt {
                                     // contract id is first arg; data is second when present
                                     let instr_opt = args
-                                        .get(0)
+                                        .first()
                                         .and_then(|v| v.as_str())
                                         .and_then(|s| Instrument::try_parse_dotted(s).ok());
                                     let data_val = if args.len() >= 2 {
@@ -1113,7 +1113,7 @@ impl PxWebSocketClient {
                                 //info!("GatewayUserAccount: parsed args: {:?}", val);
                                 let args_opt = val.get("arguments").and_then(|a| a.as_array());
                                 if let Some(args) = args_opt {
-                                    let data_val = args.get(0);
+                                    let data_val = args.first();
                                     let mut items: Vec<GatewayUserAccount> = Vec::new();
                                     if let Some(dv) = data_val {
                                         if let Some(arr) = dv.as_array() {
@@ -1192,7 +1192,7 @@ impl PxWebSocketClient {
                                     let maybe_data = if args.len() >= 2 {
                                         Some(&args[1])
                                     } else {
-                                        args.get(0)
+                                        args.first()
                                     };
                                     let mut orders: Vec<GatewayUserOrder> = Vec::new();
                                     if let Some(dv) = maybe_data {
@@ -1239,7 +1239,7 @@ impl PxWebSocketClient {
                                         let leaves: i64 = (order.size - cum_qty).max(0);
                                         let avg_px = order
                                             .filled_price
-                                            .and_then(|p| Price::from_f64(p))
+                                            .and_then(Price::from_f64)
                                             .unwrap_or(dec!(0));
                                         let ts_dt =
                                             DateTime::<Utc>::from_str(&order.update_timestamp)
@@ -1285,7 +1285,7 @@ impl PxWebSocketClient {
                                     let maybe_data = if args.len() >= 2 {
                                         Some(&args[1])
                                     } else {
-                                        args.get(0)
+                                        args.first()
                                     };
                                     let mut positions: Vec<GatewayUserPosition> = Vec::new();
                                     if let Some(dv) = maybe_data {
@@ -1375,7 +1375,7 @@ impl PxWebSocketClient {
                                     let maybe_data = if args.len() >= 2 {
                                         Some(&args[1])
                                     } else {
-                                        args.get(0)
+                                        args.first()
                                     };
                                     let mut items: Vec<GatewayUserTrade> = Vec::new();
                                     if let Some(dv) = maybe_data {
@@ -1484,7 +1484,7 @@ impl PxWebSocketClient {
             "target": target,
             "arguments": args,
         });
-        let frame = format!("{}\u{001e}", payload.to_string());
+        let frame = format!("{payload}\u{001e}");
         self.send_market_text(frame).await
     }
 
@@ -1496,7 +1496,7 @@ impl PxWebSocketClient {
             "target": target,
             "arguments": args,
         });
-        let frame = format!("{}\u{001e}", payload.to_string());
+        let frame = format!("{payload}\u{001e}");
         self.send_user_text(frame).await
     }
 
@@ -1581,10 +1581,10 @@ impl PxWebSocketClient {
             let t = self.user_trades_subs.read().await;
             o.is_empty() && p.is_empty() && t.is_empty()
         };
-        if no_accounts {
-            if self.user_accounts_subscribed.swap(false, Ordering::SeqCst) {
-                let _ = self.invoke_user("UnsubscribeAccounts", vec![]).await;
-            }
+        if no_accounts
+            && self.user_accounts_subscribed.swap(false, Ordering::SeqCst)
+        {
+            let _ = self.invoke_user("UnsubscribeAccounts", vec![]).await;
         }
         Ok(())
     }

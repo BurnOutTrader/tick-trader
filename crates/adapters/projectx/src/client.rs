@@ -155,7 +155,7 @@ impl PXClient {
                     Some(acc) => Ok(acc.id),
                 }
             }
-            Some(acc) => Ok(acc.id.clone()),
+            Some(acc) => Ok(acc.id),
         }
     }
 
