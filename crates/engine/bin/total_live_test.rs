@@ -29,6 +29,7 @@ pub struct TotalLiveTestStrategy {
     symbol_key: SymbolKey,
     count: i32,
     order_id: Mutex<EngineUuid>,
+    first_order_done: bool,
 }
 //todo, we should implement a special error type for strategies and let the engine, handle depending on severity.
 impl Strategy for TotalLiveTestStrategy {
@@ -60,7 +61,7 @@ impl Strategy for TotalLiveTestStrategy {
         let provider = self.execution_provider;
         let exec_key = SymbolKey::new(self.instrument.clone(), provider);
         let h = self.h.clone().unwrap();
-        if self.count == 1 {
+        if self.count == 1 && !self.first_order_done {
             // small delay to allow account subscriptions to come online
             // 1) Place a small JoinBid order
             info!("test flow: placing JoinBid BUY qty=1");
@@ -79,6 +80,7 @@ impl Strategy for TotalLiveTestStrategy {
                     None,
                 )
                 .unwrap();
+            self.first_order_done = true;
         }
         if self.count == 30 {
             info!(?self.order_id, "JoinBid placed; waiting to replace");
@@ -99,33 +101,31 @@ impl Strategy for TotalLiveTestStrategy {
                     order_id.clone(),
                 )
                 .unwrap();
-        } else {
-            info!("failed to place JoinBid order");
         }
 
         if self.count == 38 {
             // Cancel
             info!("cancelling order: {}", order_id);
             let _ = h.cancel_order(provider, account.clone(), order_id.clone());
-            // 2) Place a small JoinAsk SELL order and then cancel it
-            if self.count == 25 {
-                info!("test flow: placing JoinAsk SELL qty=1");
-                *order_id = h
-                    .place_order(
-                        account.clone(),
-                        exec_key.clone(),
-                        tt_types::accounts::events::Side::Sell,
-                        1,
-                        OrderType::JoinAsk,
-                        None,
-                        None,
-                        None,
-                        Some("total_live_test".to_string()),
-                        None,
-                        None,
-                    )
-                    .unwrap();
-            }
+        }
+
+        if self.count == 25 {
+            info!("test flow: placing JoinAsk SELL qty=1");
+            *order_id = h
+                .place_order(
+                    account.clone(),
+                    exec_key.clone(),
+                    tt_types::accounts::events::Side::Sell,
+                    1,
+                    OrderType::JoinAsk,
+                    None,
+                    None,
+                    None,
+                    Some("total_live_test".to_string()),
+                    None,
+                    None,
+                )
+                .unwrap();
         }
 
         if self.count == 50 {
@@ -244,6 +244,7 @@ async fn main() -> anyhow::Result<()> {
         ),
         count: 0,
         order_id: EngineUuid::new().into(),
+        first_order_done: false, 
     };
     let _handle = engine.start(strategy).await?;
 
