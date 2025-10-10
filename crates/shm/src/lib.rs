@@ -6,6 +6,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tt_types::keys::{SymbolKey, Topic};
 
+type WriterMap = DashMap<(Topic, SymbolKey), Arc<std::sync::Mutex<ShmWriter>>>;
+
 /// Minimal SHM helper providing file-backed shared memory segments and a simple seqlock writer.
 /// This is a pragmatic implementation that works on all platforms by using a file in /dev/shm
 /// (if available) or /tmp as the shared backing object. Readers can mmap the same path read-only.
@@ -113,14 +115,12 @@ impl ShmWriter {
         // best-effort flush (not strictly required for readers in same host)
         let _ = self.mmap.flush_async();
         // Acquire fence optional for writers; readers should use Acquire around reads.
-        let _ = fence(Ordering::Acquire);
+        fence(Ordering::Acquire);
     }
 }
 
 // Global writers registry to reuse mappings
-static WRITERS: once_cell::sync::Lazy<
-    DashMap<(Topic, SymbolKey), Arc<std::sync::Mutex<ShmWriter>>>,
-> = once_cell::sync::Lazy::new(|| DashMap::new());
+static WRITERS: once_cell::sync::Lazy<WriterMap> = once_cell::sync::Lazy::new(DashMap::new);
 
 pub fn ensure_writer(
     topic: Topic,
@@ -200,7 +200,7 @@ impl ShmReader {
 
 // Global readers registry
 static READERS: once_cell::sync::Lazy<DashMap<(Topic, SymbolKey), Arc<ShmReader>>> =
-    once_cell::sync::Lazy::new(|| DashMap::new());
+    once_cell::sync::Lazy::new(DashMap::new);
 
 pub fn ensure_reader(topic: Topic, key: &SymbolKey) -> Option<Arc<ShmReader>> {
     if let Some(r) = READERS.get(&(topic, key.clone())) {

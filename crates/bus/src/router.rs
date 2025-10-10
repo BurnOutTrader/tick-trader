@@ -358,10 +358,7 @@ impl Router {
                         let _ = self.sub_index[shard].remove(&(u.topic, u.key.clone()));
                     }
                 }
-                info!(sub_id = %id.0, topic = ?u.topic, "router.unsubscribe_key");
-                if last
-                    && let Some(mgr) = self.backend.read().unwrap().as_ref().cloned()
-                {
+                if last && let Some(mgr) = self.backend.read().unwrap().as_ref().cloned() {
                     let topic = u.topic;
                     let key = u.key.clone();
                     tokio::spawn(async move {
@@ -451,9 +448,7 @@ impl Router {
                     set.remove(&key);
                     client_empty = set.is_empty();
                 }
-                if client_empty
-                    && let Some(mut meta) = self.meta.get_mut(id)
-                {
+                if client_empty && let Some(mut meta) = self.meta.get_mut(id) {
                     meta.topics.remove(&Topic::Orders);
                     meta.topics.remove(&Topic::Positions);
                     meta.topics.remove(&Topic::AccountEvt);
@@ -652,9 +647,7 @@ impl Router {
             let mut became_empty: Vec<(Topic, SymbolKey)> = Vec::new();
             // Remove sub from all sets
             for mut entry in self.sub_index[shard].iter_mut() {
-                if entry.value_mut().remove(id)
-                    && entry.value().is_empty()
-                {
+                if entry.value_mut().remove(id) && entry.value().is_empty() {
                     became_empty.push(entry.key().clone());
                 }
             }
