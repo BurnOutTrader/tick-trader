@@ -1,9 +1,8 @@
-use async_trait::async_trait;
 use chrono::Utc;
 use rust_decimal::Decimal;
 use std::str::FromStr;
-use std::sync::Arc;
 use std::time::Duration;
+use tokio::time::sleep;
 use tracing::info;
 use tracing::level_filters::LevelFilter;
 use tt_bus::ClientMessageBus;
@@ -25,27 +24,24 @@ pub struct TotalLiveTestStrategy {
     engine: Option<EngineHandle>,
 }
 
-#[async_trait]
 impl Strategy for TotalLiveTestStrategy {
-    async fn on_start(&mut self, h: EngineHandle) {
+    fn on_start(&mut self, h: EngineHandle) {
         info!("strategy start");
-        h.subscribe_key(
+        h.subscribe_now(
             DataTopic::MBP10,
             SymbolKey::new(
                 Instrument::from_str("MNQ.Z25").unwrap(),
                 ProviderKind::ProjectX(ProjectXTenant::Topstep),
             ),
-        )
-        .await
-        .unwrap();
+        );
         self.engine = Some(h);
     }
 
-    async fn on_stop(&mut self) {
+    fn on_stop(&mut self) {
         info!("live strategy passed all tests");
     }
 
-    async fn on_tick(&mut self, t: Tick, provider_kind: ProviderKind) {
+    fn on_tick(&mut self, t: &Tick, provider_kind: ProviderKind) {
         if provider_kind != self.data_provider {
             panic!("Incorrect provider kind {:?}", provider_kind)
         }
@@ -53,57 +49,52 @@ impl Strategy for TotalLiveTestStrategy {
         assert!(t.time < Utc::now())
     }
 
-    async fn on_quote(&mut self, _q: Bbo, provider_kind: ProviderKind) {
+    fn on_quote(&mut self, _q: &Bbo, provider_kind: ProviderKind) {
         if provider_kind != self.data_provider {
             panic!("Incorrect provider kind {:?}", provider_kind)
         }
     }
 
-    async fn on_bar(&mut self, _b: Candle, provider_kind: ProviderKind) {
+    fn on_bar(&mut self, _b: &Candle, provider_kind: ProviderKind) {
         if provider_kind != self.data_provider {
             panic!("Incorrect provider kind {:?}", provider_kind)
         }
     }
 
-    async fn on_mbp10(&mut self, _d: Mbp10, provider_kind: ProviderKind) {
+    fn on_mbp10(&mut self, _d: &Mbp10, provider_kind: ProviderKind) {
         if provider_kind != self.data_provider {
             panic!("Incorrect provider kind {:?}", provider_kind)
         }
     }
 
-    async fn on_orders_batch(&mut self, b: OrdersBatch) {
-        todo!()
+    fn on_orders_batch(&mut self, _b: &OrdersBatch) {
+        // test TODOs can remain; just validating callback wiring
     }
 
-    async fn on_positions_batch(&mut self, _b: PositionsBatch) {
-        todo!()
+    fn on_positions_batch(&mut self, _b: &PositionsBatch) {
+        // test TODOs can remain; just validating callback wiring
     }
 
-    async fn on_account_delta(&mut self, _accounts: Vec<AccountDelta>) {
-        todo!()
+    fn on_account_delta(&mut self, _accounts: &[AccountDelta]) {
+        // test TODOs can remain; just validating callback wiring
     }
 
-    async fn on_trades_closed(&mut self, _trades: Vec<Trade>) {
-        todo!()
+    fn on_trades_closed(&mut self, _trades: Vec<Trade>) {
+        // test TODOs can remain; just validating callback wiring
     }
 
-    async fn on_subscribe(
-        &mut self,
-        _instrument: Instrument,
-        data_topic: DataTopic,
-        success: bool,
-    ) {
+    fn on_subscribe(&mut self, _instrument: Instrument, data_topic: DataTopic, success: bool) {
         if !success {
             panic!("Failed to subscribe to {:?} {:?}", _instrument, data_topic)
         }
     }
 
-    async fn on_unsubscribe(&mut self, _instrument: Instrument, _data_topic: DataTopic) {
-        todo!()
+    fn on_unsubscribe(&mut self, _instrument: Instrument, _data_topic: DataTopic) {
+        // test TODOs can remain; just validating callback wiring
     }
 
     fn accounts(&self) -> Vec<AccountKey> {
-        todo!()
+        Vec::new()
     }
 }
 
@@ -115,15 +106,20 @@ async fn main() -> anyhow::Result<()> {
 
     let addr = std::env::var("TT_BUS_ADDR").unwrap_or_else(|_| "/tmp/tick-trader.sock".to_string());
     let bus = ClientMessageBus::connect(&addr).await?;
-    /*
-       let mut engine = EngineRuntime::new(bus.clone());
-       let strategy = Arc::new(Mutex::new(DataTestStrategy::default()));
-       let _handle = engine.start(strategy.clone()).await?;
+    let mut engine = EngineRuntime::new(bus.clone());
+    let strategy = TotalLiveTestStrategy {
+        _symbol: Instrument::from_str("MNQ.Z25").unwrap(),
+        data_provider: ProviderKind::ProjectX(ProjectXTenant::Topstep),
+        execution_provider: ProviderKind::ProjectX(ProjectXTenant::Topstep),
+        subscribed: Vec::new(),
+        last_order_type: OrderType::Market,
+        engine: None,
+    };
+    let _handle = engine.start(strategy).await?;
 
-       sleep(Duration::from_secs(60)).await;
+    sleep(Duration::from_secs(60)).await;
 
-       let _ = engine.stop().await?;
+    let _ = engine.stop().await?;
 
-    */
     Ok(())
 }
