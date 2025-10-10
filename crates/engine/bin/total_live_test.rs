@@ -32,7 +32,6 @@ pub struct TotalLiveTestStrategy {
 //todo, we should implement a special error type for strategies and let the engine, handle depending on severity.
 impl Strategy for TotalLiveTestStrategy {
     fn on_start(&mut self, h: EngineHandle) {
-        self.count += 1;
         info!("on_start: strategy start");
 
         h.subscribe_now(DataTopic::Ticks, self.symbol_key.clone());
@@ -47,6 +46,7 @@ impl Strategy for TotalLiveTestStrategy {
     }
 
     fn on_tick(&mut self, t: &Tick, provider_kind: ProviderKind) {
+        self.count += 1;
         if provider_kind != self.data_provider {
             panic!("Incorrect provider kind {:?}", provider_kind)
         }
