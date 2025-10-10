@@ -27,10 +27,10 @@ pub struct OrderKey {
 
 impl OrderKey {
     fn from_update(o: &OrderUpdate) -> Option<Self> {
-        return Some(OrderKey {
+        Some(OrderKey {
             instrument: o.instrument.clone(),
-            id: OrderKeyId::Client(o.order_id.clone()),
-        });
+            id: OrderKeyId::Client(o.order_id),
+        })
     }
 }
 
@@ -61,6 +61,7 @@ pub struct PortfolioManager {
     last_positions: Mutex<Option<PositionsBatch>>,
     last_accounts: Mutex<Option<AccountDeltaBatch>>,
     // Vendor securities cache
+    #[allow(dead_code)]
     securities_by_provider: Arc<DashMap<ProviderKind, Vec<Instrument>>>,
 
     // Last mark/price per (provider, instrument)
@@ -69,9 +70,10 @@ pub struct PortfolioManager {
 
 impl PortfolioManager {
     pub fn new(securities_by_provider: Arc<DashMap<ProviderKind, Vec<Instrument>>>) -> Self {
-        let mut pm = Self::default();
-        pm.securities_by_provider = securities_by_provider;
-        pm
+        Self {
+            securities_by_provider,
+            ..Default::default()
+        }
     }
 
     // Helper: compute open PnL from last_price for a given position
@@ -83,7 +85,7 @@ impl PortfolioManager {
         qty: Decimal,
     ) -> Option<Decimal> {
         self.last_price
-            .get(&(provider.clone(), instr.clone()))
+            .get(&(*provider, instr.clone()))
             .map(|p| (*p - avg_px) * qty)
     }
 
@@ -103,7 +105,7 @@ impl PortfolioManager {
                 sum_open += pd.open_pnl;
                 latest_ts = Some(latest_ts.map_or(pd.time, |t: DateTime<Utc>| t.max(pd.time)));
                 if any_provider.is_none() {
-                    any_provider = Some(pd.provider_kind.clone());
+                    any_provider = Some(pd.provider_kind);
                 }
             }
         }
@@ -124,9 +126,9 @@ impl PortfolioManager {
         };
         let pd = PositionDelta {
             instrument: instrument.clone(),
-            provider_kind: any_provider.unwrap_or_else(|| {
-                ProviderKind::ProjectX(tt_types::providers::ProjectXTenant::Topstep)
-            }),
+            provider_kind: any_provider.unwrap_or(ProviderKind::ProjectX(
+                tt_types::providers::ProjectXTenant::Topstep,
+            )),
             net_qty: sum_qty,
             average_price: avg_px,
             open_pnl: sum_open,
@@ -180,7 +182,7 @@ impl PortfolioManager {
         account: AccountName,
         batch: PositionsBatch,
     ) {
-        let acc_key = (provider_kind.clone(), account.clone());
+        let acc_key = (provider_kind, account.clone());
         let entry = self
             .positions_by_account
             .entry(acc_key)
@@ -192,7 +194,7 @@ impl PortfolioManager {
         for p in &batch.positions {
             let mut pd = p.clone();
             // Ensure provider_kind is consistent
-            pd.provider_kind = provider_kind.clone();
+            pd.provider_kind = provider_kind;
             // Update open pnl if we have a last price
             if let Some(new_open) =
                 self.compute_open_pnl(&provider_kind, &pd.instrument, pd.average_price, pd.net_qty)
@@ -217,7 +219,7 @@ impl PortfolioManager {
     pub fn apply_account_delta_batch(&self, batch: AccountDeltaBatch) {
         for a in &batch.accounts {
             self.accounts_by_name
-                .insert((a.provider_kind.clone(), a.name.clone()), a.clone());
+                .insert((a.provider_kind, a.name.clone()), a.clone());
         }
         *self.last_accounts.lock().expect("poisoned") = Some(batch);
     }
@@ -236,7 +238,7 @@ impl PortfolioManager {
         instrument: &Instrument,
         price: Decimal,
     ) {
-        let key = (provider_kind.clone(), instrument.clone());
+        let key = (provider_kind, instrument.clone());
         self.last_price.insert(key, price);
 
         // Update all real account positions for this provider+instrument
@@ -288,7 +290,7 @@ impl PortfolioManager {
         instrument: &Instrument,
     ) -> Option<PositionDelta> {
         self.positions_by_account
-            .get(&(provider_kind.clone(), account.clone()))
+            .get(&(*provider_kind, account.clone()))
             .and_then(|map| map.get(instrument).map(|r| r.value().clone()))
     }
     pub fn net_qty_account(
@@ -335,7 +337,7 @@ impl PortfolioManager {
         name: &AccountName,
     ) -> Option<AccountDelta> {
         self.accounts_by_name
-            .get(&(provider_kind.clone(), name.clone()))
+            .get(&(*provider_kind, name.clone()))
             .map(|r| r.value().clone())
     }
     pub fn can_trade(&self, provider_kind: &ProviderKind, name: &AccountName) -> Option<bool> {
@@ -381,10 +383,7 @@ impl PortfolioManager {
     /// Does not mutate internal state; purely transforms the batch for downstream consumers.
     pub fn adjust_positions_batch_open_pnl(&self, mut batch: PositionsBatch) -> PositionsBatch {
         for p in batch.positions.iter_mut() {
-            if let Some(mark) = self
-                .last_price
-                .get(&(p.provider_kind.clone(), p.instrument.clone()))
-            {
+            if let Some(mark) = self.last_price.get(&(p.provider_kind, p.instrument.clone())) {
                 // open_pnl = (mark - avg_entry) * signed_qty
                 p.open_pnl = (*mark - p.average_price) * p.net_qty;
             }
@@ -401,7 +400,7 @@ impl PortfolioManager {
     /// Record a batch of closed trades (appended; de-duplication by id is out of scope here).
     pub fn apply_closed_trades(&self, trades: Vec<Trade>) {
         let mut ct = self.closed_trades.write().expect("poisoned");
-        ct.extend(trades.into_iter());
+        ct.extend(trades);
     }
 
     /// Compute total open PnL for a specific provider+account, summing across its instruments.
@@ -413,7 +412,7 @@ impl PortfolioManager {
     ) -> Decimal {
         if let Some(map) = self
             .positions_by_account
-            .get(&(provider_kind.clone(), name.clone()))
+            .get(&(*provider_kind, name.clone()))
         {
             let mut sum = Decimal::ZERO;
             for p in map.iter() {
@@ -543,7 +542,7 @@ mod tests {
         // Seed a closed trade today with PnL 7
         let tr = Trade {
             id: EngineUuid::new(),
-            provider: provider,
+            provider,
             account_name: account.clone(),
             instrument: instr,
             creation_time: Utc::now(),
