@@ -46,6 +46,7 @@ pub fn latest_ts(
 }
 
 /// Get both (handy for planning incremental fetch windows).
+#[allow(clippy::type_complexity)]
 pub fn min_max_ts(
     conn: &Connection,
     parquet_glob: &str,

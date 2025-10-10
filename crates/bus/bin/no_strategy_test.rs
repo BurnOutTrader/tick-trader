@@ -26,12 +26,11 @@ async fn main() -> anyhow::Result<()> {
     let sub_id = bus.add_client(tx).await;
 
     // simple ping sanity check (optional but useful)
-    bus
-        .handle_request(
-            &sub_id,
-            Request::Ping(tt_types::wire::Ping { ts_ns: Utc::now() }),
-        )
-        .await?;
+    bus.handle_request(
+        &sub_id,
+        Request::Ping(tt_types::wire::Ping { ts_ns: Utc::now() }),
+    )
+    .await?;
 
     // flags
     let got_sub_ok = std::sync::Arc::new(AtomicBool::new(false));

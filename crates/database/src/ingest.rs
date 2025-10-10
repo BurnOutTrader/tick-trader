@@ -54,6 +54,7 @@ where
     Ok(buckets)
 }
 
+#[allow(clippy::too_many_arguments)]
 /// Ingest a batch of ticks grouped monthly
 pub fn ingest_ticks(
     conn: &Connection,
@@ -93,6 +94,7 @@ pub fn ingest_ticks(
     Ok(paths)
 }
 
+#[allow(clippy::too_many_arguments)]
 /// One-call ingestion for candles (monthly, keyed by end time)
 pub fn ingest_candles(
     conn: &Connection,
@@ -133,6 +135,7 @@ pub fn ingest_candles(
     Ok(out_paths)
 }
 
+#[allow(clippy::too_many_arguments)]
 /// One-call ingestion for BBO snapshots (monthly)
 pub fn ingest_bbo(
     conn: &Connection,

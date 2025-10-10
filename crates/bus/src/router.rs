@@ -1075,11 +1075,13 @@ mod tests {
     use tt_types::securities::symbols::Instrument;
 
     fn make_router_for_tests() -> Router {
-        let mut cfg = RouterConfig::default();
-        cfg.shards = 4;
-        cfg.client_chan_capacity = 1; // tiny to exercise backpressure/warmup
-        cfg.warmup_ms = 1000; // plenty for test
-        cfg.warmup_send_ms = 200; // awaited send during warmup
+        let cfg = RouterConfig {
+            shards: 4,
+            client_chan_capacity: 1,
+            warmup_ms: 1000,
+            warmup_send_ms: 200,
+            ..Default::default()
+        };
         Router::new_with_config(cfg)
     }
 
@@ -1252,10 +1254,10 @@ mod tests {
         // Expect both subscribers to get MBP10
         let got_topic = tokio::time::timeout(Duration::from_millis(300), async {
             loop {
-                if let Some(resp) = rx_topic.recv().await {
-                    if matches!(resp, Response::MBP10Batch(_)) {
-                        break true;
-                    }
+                if let Some(resp) = rx_topic.recv().await
+                    && matches!(resp, Response::MBP10Batch(_))
+                {
+                    break true;
                 }
             }
         })
@@ -1263,10 +1265,10 @@ mod tests {
         .unwrap_or(false);
         let got_key = tokio::time::timeout(Duration::from_millis(300), async {
             loop {
-                if let Some(resp) = rx_key.recv().await {
-                    if matches!(resp, Response::MBP10Batch(_)) {
-                        break true;
-                    }
+                if let Some(resp) = rx_key.recv().await
+                    && matches!(resp, Response::MBP10Batch(_))
+                {
+                    break true;
                 }
             }
         })

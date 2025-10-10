@@ -242,11 +242,7 @@ impl PxWebSocketClient {
         let mut base = self.base_url.trim_end_matches('/').to_string();
         // Ensure websocket scheme for tungstenite
         if base.starts_with("https://") {
-            base = base.replacen(
-                "https://",
-                "wss://",
-                1
-            );
+            base = base.replacen("https://", "wss://", 1);
         } else if base.starts_with("https://") {
             base = base.replacen("https://", "ws://", 1);
         }
@@ -645,12 +641,12 @@ impl PxWebSocketClient {
                                                     quotes.push(q);
                                                 }
                                             }
-                                        } else if data_val.is_object() {
-                                            if let Ok(q) = serde_json::from_value::<GatewayQuote>(
+                                        } else if data_val.is_object()
+                                            && let Ok(q) = serde_json::from_value::<GatewayQuote>(
                                                 data_val.clone(),
-                                            ) {
-                                                quotes.push(q);
-                                            }
+                                            )
+                                        {
+                                            quotes.push(q);
                                         }
                                     }
                                     if quotes.is_empty() {
@@ -861,9 +857,11 @@ impl PxWebSocketClient {
                                                     }
                                                 }
                                             } else if data.is_object() {
-                                                if let Ok(d) = serde_json::from_value::<models::GatewayDepth>(
-                                                    data.clone(),
-                                                ) {
+                                                if let Ok(d) =
+                                                    serde_json::from_value::<models::GatewayDepth>(
+                                                        data.clone(),
+                                                    )
+                                                {
                                                     items.push(d);
                                                 }
                                             }
@@ -876,102 +874,98 @@ impl PxWebSocketClient {
                                         // If we received a batch array, opportunistically compose an aggregated top-10 book snapshot
                                         // from the batch to align with Databento optional book levels.
                                         let mut attach_snapshot_book: Option<BookLevels> = None;
-                                        if let Some(data) = data_val {
-                                            if let Some(arr) = data.as_array() {
-                                                // Collect levels per side keyed by price
-                                                use std::collections::BTreeMap;
-                                                // For bids sort by price desc; for asks sort asc
-                                                let mut bid_map: BTreeMap<Decimal, Decimal> =
-                                                    BTreeMap::new();
-                                                let mut ask_map: BTreeMap<Decimal, Decimal> =
-                                                    BTreeMap::new();
-                                                for itv in arr.iter() {
-                                                    if let Ok(di) = serde_json::from_value::<
-                                                        models::GatewayDepth,
-                                                    >(
-                                                        itv.clone()
-                                                    ) {
-                                                        // Determine side as in event mapping
-                                                        match di.r#type {
-                                                            1 | 3 | 10 => {
-                                                                // Ask side: use total volume at price for book
-                                                                let px_nanos = (di.price
-                                                                    * 1_000_000_000.0)
-                                                                    .round()
-                                                                    as i64;
-                                                                let px_dec =
-                                                                    Decimal::from_i128_with_scale(
-                                                                        px_nanos as i128,
-                                                                        9,
-                                                                    );
-                                                                let sz_dec: Decimal = if di.volume
-                                                                    < 0
-                                                                {
-                                                                    Decimal::ZERO
-                                                                } else {
-                                                                    Decimal::from(
-                                                                        (di.volume as u64)
-                                                                            .min(u32::MAX as u64),
-                                                                    )
-                                                                };
-                                                                // For asks we want ascending sort; BTreeMap is ascending by key
-                                                                ask_map.insert(px_dec, sz_dec);
-                                                            }
-                                                            2 | 4 | 9 => {
-                                                                // Bid side
-                                                                let px_nanos = (di.price
-                                                                    * 1_000_000_000.0)
-                                                                    .round()
-                                                                    as i64;
-                                                                let px_dec =
-                                                                    Decimal::from_i128_with_scale(
-                                                                        px_nanos as i128,
-                                                                        9,
-                                                                    );
-                                                                let sz_dec: Decimal = if di.volume
-                                                                    < 0
-                                                                {
-                                                                    Decimal::ZERO
-                                                                } else {
-                                                                    Decimal::from(
-                                                                        (di.volume as u64)
-                                                                            .min(u32::MAX as u64),
-                                                                    )
-                                                                };
-                                                                bid_map.insert(px_dec, sz_dec);
-                                                            }
-                                                            _ => {}
+                                        if let Some(data) = data_val
+                                            && let Some(arr) = data.as_array()
+                                        {
+                                            // Collect levels per side keyed by price
+                                            use std::collections::BTreeMap;
+                                            // For bids sort by price desc; for asks sort asc
+                                            let mut bid_map: BTreeMap<Decimal, Decimal> =
+                                                BTreeMap::new();
+                                            let mut ask_map: BTreeMap<Decimal, Decimal> =
+                                                BTreeMap::new();
+                                            for itv in arr.iter() {
+                                                if let Ok(di) =
+                                                    serde_json::from_value::<models::GatewayDepth>(
+                                                        itv.clone(),
+                                                    )
+                                                {
+                                                    // Determine side as in event mapping
+                                                    match di.r#type {
+                                                        1 | 3 | 10 => {
+                                                            // Ask side: use total volume at price for book
+                                                            let px_nanos = (di.price
+                                                                * 1_000_000_000.0)
+                                                                .round()
+                                                                as i64;
+                                                            let px_dec =
+                                                                Decimal::from_i128_with_scale(
+                                                                    px_nanos as i128,
+                                                                    9,
+                                                                );
+                                                            let sz_dec: Decimal = if di.volume < 0 {
+                                                                Decimal::ZERO
+                                                            } else {
+                                                                Decimal::from(
+                                                                    (di.volume as u64)
+                                                                        .min(u32::MAX as u64),
+                                                                )
+                                                            };
+                                                            // For asks we want ascending sort; BTreeMap is ascending by key
+                                                            ask_map.insert(px_dec, sz_dec);
                                                         }
+                                                        2 | 4 | 9 => {
+                                                            // Bid side
+                                                            let px_nanos = (di.price
+                                                                * 1_000_000_000.0)
+                                                                .round()
+                                                                as i64;
+                                                            let px_dec =
+                                                                Decimal::from_i128_with_scale(
+                                                                    px_nanos as i128,
+                                                                    9,
+                                                                );
+                                                            let sz_dec: Decimal = if di.volume < 0 {
+                                                                Decimal::ZERO
+                                                            } else {
+                                                                Decimal::from(
+                                                                    (di.volume as u64)
+                                                                        .min(u32::MAX as u64),
+                                                                )
+                                                            };
+                                                            bid_map.insert(px_dec, sz_dec);
+                                                        }
+                                                        _ => {}
                                                     }
                                                 }
-                                                if !bid_map.is_empty() || !ask_map.is_empty() {
-                                                    // Extract top 10 bids (highest first) and asks (lowest first)
-                                                    let mut bid_px: Vec<Decimal> = Vec::new();
-                                                    let mut bid_sz: Vec<Decimal> = Vec::new();
-                                                    for (px, sz) in bid_map.iter().rev().take(10) {
-                                                        // highest first
-                                                        bid_px.push(*px);
-                                                        bid_sz.push(*sz);
-                                                    }
-                                                    let mut ask_px: Vec<Decimal> = Vec::new();
-                                                    let mut ask_sz: Vec<Decimal> = Vec::new();
-                                                    for (px, sz) in ask_map.iter().take(10) {
-                                                        // lowest first
-                                                        ask_px.push(*px);
-                                                        ask_sz.push(*sz);
-                                                    }
-                                                    // Order counts not available from PX depth payload; set zeros to keep alignment
-                                                    let bid_ct = vec![dec!(0); bid_px.len()];
-                                                    let ask_ct = vec![dec!(0); ask_px.len()];
-                                                    attach_snapshot_book = Some(BookLevels {
-                                                        bid_px,
-                                                        ask_px,
-                                                        bid_sz,
-                                                        ask_sz,
-                                                        bid_ct,
-                                                        ask_ct,
-                                                    });
+                                            }
+                                            if !bid_map.is_empty() || !ask_map.is_empty() {
+                                                // Extract top 10 bids (highest first) and asks (lowest first)
+                                                let mut bid_px: Vec<Decimal> = Vec::new();
+                                                let mut bid_sz: Vec<Decimal> = Vec::new();
+                                                for (px, sz) in bid_map.iter().rev().take(10) {
+                                                    // highest first
+                                                    bid_px.push(*px);
+                                                    bid_sz.push(*sz);
                                                 }
+                                                let mut ask_px: Vec<Decimal> = Vec::new();
+                                                let mut ask_sz: Vec<Decimal> = Vec::new();
+                                                for (px, sz) in ask_map.iter().take(10) {
+                                                    // lowest first
+                                                    ask_px.push(*px);
+                                                    ask_sz.push(*sz);
+                                                }
+                                                // Order counts not available from PX depth payload; set zeros to keep alignment
+                                                let bid_ct = vec![dec!(0); bid_px.len()];
+                                                let ask_ct = vec![dec!(0); ask_px.len()];
+                                                attach_snapshot_book = Some(BookLevels {
+                                                    bid_px,
+                                                    ask_px,
+                                                    bid_sz,
+                                                    ask_sz,
+                                                    bid_ct,
+                                                    ask_ct,
+                                                });
                                             }
                                         }
 
@@ -1053,11 +1047,11 @@ impl PxWebSocketClient {
                                             }
                                             // Attach aggregated book snapshot only once per batch if available
                                             let mut book_opt = None;
-                                            if first_in_batch {
-                                                if let Some(bk) = attach_snapshot_book.clone() {
-                                                    flags = MbpFlags(flags.0 | MbpFlags::F_SNAPSHOT);
-                                                    book_opt = Some(bk);
-                                                }
+                                            if first_in_batch
+                                                && let Some(bk) = attach_snapshot_book.clone()
+                                            {
+                                                flags = MbpFlags(flags.0 | MbpFlags::F_SNAPSHOT);
+                                                book_opt = Some(bk);
                                             }
 
                                             // Build directly instead of make_mbp10 to avoid decimal conversion corner cases
@@ -1458,7 +1452,9 @@ impl PxWebSocketClient {
                                         };
                                         out.push(trade);
                                     }
-                                    if !out.is_empty() && let Err(e) = self.bus.publish_closed_trades(out).await {
+                                    if !out.is_empty()
+                                        && let Err(e) = self.bus.publish_closed_trades(out).await
+                                    {
                                         error!(target: "projectx.ws", "failed to publish ClosedTrades: {:?}", e);
                                     }
                                 }
@@ -1580,9 +1576,7 @@ impl PxWebSocketClient {
             let t = self.user_trades_subs.read().await;
             o.is_empty() && p.is_empty() && t.is_empty()
         };
-        if no_accounts
-            && self.user_accounts_subscribed.swap(false, Ordering::SeqCst)
-        {
+        if no_accounts && self.user_accounts_subscribed.swap(false, Ordering::SeqCst) {
             let _ = self.invoke_user("UnsubscribeAccounts", vec![]).await;
         }
         Ok(())

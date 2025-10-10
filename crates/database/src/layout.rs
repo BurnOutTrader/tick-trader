@@ -38,7 +38,7 @@ impl<'a> Layout<'a> {
         p.push(format!("provider={provider}"));
         p.push(format!("topic={topic}"));
         if market_type == MarketType::Futures {
-            let root_symbol = extract_root(&instrument);
+            let root_symbol = extract_root(instrument);
             p.push(format!("symbol={root_symbol}"));
         }
         p.push(format!("symbol={instrument}"));

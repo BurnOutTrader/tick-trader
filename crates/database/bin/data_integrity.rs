@@ -1,6 +1,5 @@
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Duration, NaiveDate, TimeZone, Utc};
-use duckdb;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::str::FromStr;
@@ -225,7 +224,7 @@ fn main() -> Result<()> {
                                 let local_day = t.with_timezone(&hours.tz).date_naive();
                                 *gap_counts.entry(local_day).or_default() += 1;
                                 total_gaps += 1;
-                                t = t + Duration::minutes(1);
+                                t += Duration::minutes(1);
                             }
 
                             n_gap_events += 1;

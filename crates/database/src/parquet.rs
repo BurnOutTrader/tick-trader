@@ -28,7 +28,7 @@ fn zstd_props(level: i32) -> WriterProperties {
     // Aggressive compression, better density. Smaller data pages help RLE/dict.
     WriterProperties::builder()
         .set_compression(Compression::ZSTD(
-            ZstdLevel::try_new(level).unwrap_or(ZstdLevel::default()),
+            ZstdLevel::try_new(level).unwrap_or_default(),
         ))
         .set_dictionary_enabled(true)
         .set_data_page_size_limit(128 * 1024) // 128KB pages
@@ -331,6 +331,7 @@ pub fn parquet_count_min_max_i64(path: &Path, ts_col: &str) -> anyhow::Result<(i
     let mut min_ts: i64 = i64::MAX;
     let mut max_ts: i64 = i64::MIN;
 
+    #[allow(clippy::while_let_on_iterator)]
     while let Some(batch) = reader.next() {
         let batch = batch?;
         count += batch.num_rows() as i64;
@@ -359,7 +360,7 @@ pub fn parquet_count_min_max_i64(path: &Path, ts_col: &str) -> anyhow::Result<(i
         Ok((count, min_ts, max_ts))
     }
 }
-
+#[allow(clippy::type_complexity)]
 pub fn parquet_count_min_max_i64_with_seq(
     path: &Path,
     ts_col: &str,
@@ -378,6 +379,7 @@ pub fn parquet_count_min_max_i64_with_seq(
     let mut min_seq: Option<i64> = None;
     let mut max_seq: Option<i64> = None;
 
+    #[allow(clippy::while_let_on_iterator)]
     while let Some(batch) = reader.next() {
         let batch = batch?;
         count += batch.num_rows() as i64;
@@ -398,18 +400,17 @@ pub fn parquet_count_min_max_i64_with_seq(
                 max_ts = v;
             }
         }
-        if let Some(si) = seq_idx {
-            if si < batch.num_columns() {
-                if let Some(seq_arr) = batch.column(si).as_any().downcast_ref::<Int64Array>() {
-                    for i in 0..seq_arr.len() {
-                        if seq_arr.is_null(i) {
-                            continue;
-                        }
-                        let v = seq_arr.value(i);
-                        min_seq = Some(min_seq.map_or(v, |m| m.min(v)));
-                        max_seq = Some(max_seq.map_or(v, |m| m.max(v)));
-                    }
+        if let Some(si) = seq_idx
+            && si < batch.num_columns()
+            && let Some(seq_arr) = batch.column(si).as_any().downcast_ref::<Int64Array>()
+        {
+            for i in 0..seq_arr.len() {
+                if seq_arr.is_null(i) {
+                    continue;
                 }
+                let v = seq_arr.value(i);
+                min_seq = Some(min_seq.map_or(v, |m| m.min(v)));
+                max_seq = Some(max_seq.map_or(v, |m| m.max(v)));
             }
         }
     }

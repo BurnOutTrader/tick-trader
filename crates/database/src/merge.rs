@@ -20,7 +20,7 @@ impl<'a, T: TimeKey> Iterator for KMergeIter<'a, T> {
     type Item = &'a T;
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next()
+        self.inner.next_time_asc()
     }
 }
 
@@ -45,7 +45,7 @@ pub trait TimeKey {
 }
 
 /// Make references usable in the heap: `&T` inherits `TimeKey` from `T`.
-impl<'a, T: TimeKey + ?Sized> TimeKey for &'a T {
+impl<T: TimeKey + ?Sized> TimeKey for &T {
     #[inline]
     fn time_ns(&self) -> i128 {
         (**self).time_ns()
@@ -152,7 +152,7 @@ impl<'a, T: TimeKey> KMerge<'a, T> {
     }
 
     /// Returns the next item in global time order (ascending).
-    pub fn next(&mut self) -> Option<&'a T> {
+    pub fn next_time_asc(&mut self) -> Option<&'a T> {
         let Reverse(MergeNode { src, idx, item }) = self.heap.pop()?;
         let next_idx = idx + 1;
         if let Some(next_item) = self.sources[src].get(next_idx) {
@@ -168,7 +168,7 @@ impl<'a, T: TimeKey> KMerge<'a, T> {
     /// Convenience: turn into an iterator.
     #[inline]
     #[allow(unused)]
-    pub fn into_iter(self) -> KMergeIter<'a, T> {
+    pub fn into_iterator(self) -> KMergeIter<'a, T> {
         KMergeIter { inner: self }
     }
 }

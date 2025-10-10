@@ -406,7 +406,7 @@ mod tests {
         let got2_timeout = timeout(Duration::from_millis(200), async { rx2.recv().await }).await;
         assert!(got1, "client1 should receive after subscribing locally");
         assert!(
-            matches!(got2_timeout, Err(_)),
+            got2_timeout.is_err(),
             "client2 should not receive within timeout"
         );
     }

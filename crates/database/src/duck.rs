@@ -38,8 +38,7 @@ fn topic_to_resolution(topic: Topic) -> Option<Resolution> {
 
 fn resolution_key(res: Option<Resolution>) -> String {
     // Use empty string for non-candle datasets to match ensure_dataset_row inserts
-    res.map(|r| r.to_os_string())
-        .unwrap_or_default()
+    res.map(|r| r.to_os_string()).unwrap_or_default()
 }
 
 /// Create or reuse a DuckDB connection (file-backed or in-memory).
@@ -596,7 +595,7 @@ pub fn quarantine_unreadable_partitions(conn: &Connection) -> anyhow::Result<usi
         let tx = conn.unchecked_transaction()?; // faster, we’re just deleting rows
         for p in bad {
             let n = tx.execute("DELETE FROM partitions WHERE path = ?", duckdb::params![p])?;
-            removed += n as usize;
+            removed += n;
         }
         tx.commit()?;
 

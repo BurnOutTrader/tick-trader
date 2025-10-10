@@ -31,6 +31,7 @@ use tt_types::securities::symbols::{Instrument, MarketType};
 // TICKS
 // ------------------------------
 
+#[allow(clippy::too_many_arguments)]
 /// Persist a single month's worth of tick rows to Parquet using ZSTD compression, merging with
 /// any existing monthly file, and upserting/merging the corresponding partition row in the catalog.
 pub fn persist_ticks_partition_zstd(
@@ -144,7 +145,7 @@ pub fn persist_ticks_partition_zstd(
 // ------------------------------
 // CANDLES (use time_end for max)
 // ------------------------------
-
+#[allow(clippy::too_many_arguments)]
 pub fn persist_candles_partition_zstd(
     conn: &duckdb::Connection,
     provider: &ProviderKind,
@@ -207,7 +208,7 @@ pub fn persist_candles_partition_zstd(
         let rows = rows_vec.len() as i64;
         let min_ns = rows_vec.iter().map(|r| r.time_start_ns).min().unwrap_or(0);
         let max_ns = rows_vec.iter().map(|r| r.time_end_ns).max().unwrap_or(0);
-        (rows as i64, min_ns, max_ns)
+        (rows, min_ns, max_ns)
     } else {
         // Avoid DuckDB parquet read for stats; use Rust parquet reader
         let (rows, min_start, _max_start) =
@@ -241,7 +242,7 @@ pub fn persist_candles_partition_zstd(
 // ------------------------------
 // BBO
 // ------------------------------
-
+#[allow(clippy::too_many_arguments)]
 pub fn persist_bbo_partition_zstd(
     conn: &duckdb::Connection,
     provider: &ProviderKind,

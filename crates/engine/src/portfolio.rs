@@ -543,7 +543,7 @@ mod tests {
         // Seed a closed trade today with PnL 7
         let tr = Trade {
             id: EngineUuid::new(),
-            provider: provider.clone(),
+            provider: provider,
             account_name: account.clone(),
             instrument: instr,
             creation_time: Utc::now(),
