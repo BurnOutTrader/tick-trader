@@ -1,5 +1,5 @@
 use crate::accounts::account::AccountName;
-use crate::accounts::events::{ProviderOrderId, Side};
+use crate::accounts::events::Side;
 use crate::data::core::{Bbo, Candle, Tick};
 use crate::data::mbp10::Mbp10;
 use crate::engine_id::EngineUuid;

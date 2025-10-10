@@ -397,6 +397,57 @@ impl PortfolioManager {
         }
         batch
     }
+
+    /// Record a batch of closed trades (appended; de-duplication by id is out of scope here).
+    pub fn apply_closed_trades(&self, trades: Vec<Trade>) {
+        let mut ct = self.closed_trades.write().expect("poisoned");
+        ct.extend(trades.into_iter());
+    }
+
+    /// Compute total open PnL for a specific provider+account, summing across its instruments.
+    /// Returns Decimal::ZERO if we have no tracked positions for this account.
+    pub fn account_open_pnl_sum(
+        &self,
+        provider_kind: &ProviderKind,
+        name: &AccountName,
+    ) -> Decimal {
+        if let Some(map) = self
+            .positions_by_account
+            .get(&(provider_kind.clone(), name.clone()))
+        {
+            let mut sum = Decimal::ZERO;
+            for p in map.iter() {
+                sum += p.value().open_pnl;
+            }
+            sum
+        } else {
+            Decimal::ZERO
+        }
+    }
+
+    /// Compute day realized PnL for the given provider+account based on closed trades with
+    /// creation_time on the same UTC date as `now`. Voided trades are ignored.
+    pub fn account_day_realized_pnl_utc(
+        &self,
+        provider_kind: &ProviderKind,
+        name: &AccountName,
+        now: DateTime<Utc>,
+    ) -> Decimal {
+        let day = now.date_naive();
+        let ct = self.closed_trades.read().expect("poisoned");
+        let mut sum = Decimal::ZERO;
+        for t in ct.iter() {
+            if &t.provider == provider_kind
+                && &t.account_name == name
+                && !t.voided
+                && t.creation_time.date_naive() == day
+            {
+                // Sum reported PnL; fees handling is left to provider semantics
+                sum += t.profit_and_loss;
+            }
+        }
+        sum
+    }
 }
 
 #[cfg(test)]
@@ -456,5 +507,50 @@ mod tests {
         assert!(pm.is_flat(&flat.instrument));
         assert!(!pm.is_long(&flat.instrument));
         assert!(!pm.is_short(&flat.instrument));
+    }
+
+    #[test]
+    fn account_open_pnl_and_day_realized() {
+        let pm = PortfolioManager::new(Arc::new(DashMap::new()));
+        let provider = ProviderKind::ProjectX(ProjectXTenant::Topstep);
+        let account = AccountName::new("TEST-ACCT".to_string());
+        // Seed a per-account position with open_pnl
+        let instr = Instrument::validate_len("ES.Z25").unwrap();
+        let pd = PositionDelta {
+            instrument: instr.clone(),
+            provider_kind: provider.clone(),
+            net_qty: Decimal::from(2),
+            average_price: Decimal::from(100),
+            open_pnl: Decimal::from(5),
+            time: Utc::now(),
+            side: PositionSide::Long,
+        };
+        pm.apply_positions_batch_for_account(
+            provider.clone(),
+            account.clone(),
+            PositionsBatch { topic: tt_types::keys::Topic::Positions, seq: 1, positions: vec![pd] },
+        );
+        assert_eq!(pm.account_open_pnl_sum(&provider, &account), Decimal::from(5));
+
+        // Seed a closed trade today with PnL 7
+        let tr = Trade {
+            id: EngineUuid::new(),
+            provider: provider.clone(),
+            account_name: account.clone(),
+            instrument: instr,
+            creation_time: Utc::now(),
+            price: Decimal::from(0),
+            profit_and_loss: Decimal::from(7),
+            fees: Decimal::ZERO,
+            side: tt_types::accounts::events::Side::Buy,
+            size: Decimal::from(1),
+            voided: false,
+            order_id: "x".into(),
+        };
+        pm.apply_closed_trades(vec![tr]);
+        assert_eq!(
+            pm.account_day_realized_pnl_utc(&provider, &account, Utc::now()),
+            Decimal::from(7)
+        );
     }
 }
