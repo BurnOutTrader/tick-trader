@@ -1,3 +1,4 @@
+use tracing::trace;
 use crate::models::{
     BarRec, DepthDeltaRec, EngineConfig, InterestEntry, StreamKey, StreamMetrics, SubState, TickRec,
 };
@@ -1153,6 +1154,7 @@ impl EngineRuntime {
                             // Use mid-price as mark
                             let mid = (q.bid + q.ask) / rust_decimal::Decimal::from(2);
                             pm.update_apply_last_price(pk.clone(), &q.instrument, mid);
+                            trace!(instrument = %q.instrument, provider = ?provider_kind, "strategy.on_quote");
                             strategy_for_task.on_quote(&q, provider_kind.clone());
                         }
                     }

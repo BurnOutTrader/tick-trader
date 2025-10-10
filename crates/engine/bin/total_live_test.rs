@@ -11,6 +11,7 @@ use tt_types::accounts::events::AccountDelta;
 use tt_types::data::core::{Bbo, Candle, Tick};
 use tt_types::data::mbp10::Mbp10;
 use tt_types::keys::{AccountKey, SymbolKey};
+use tt_types::accounts::account::AccountName;
 use tt_types::providers::{ProjectXTenant, ProviderKind};
 use tt_types::securities::symbols::Instrument;
 use tt_types::wire::{OrderType, OrdersBatch, PositionsBatch, Trade};
@@ -19,26 +20,116 @@ pub struct TotalLiveTestStrategy {
     _symbol: Instrument,
     data_provider: ProviderKind,
     execution_provider: ProviderKind,
+    account_name: AccountName,
     subscribed: Vec<DataTopic>,
     last_order_type: OrderType,
     engine: Option<EngineHandle>,
 }
-
+//todo, we should implement a special error type for strategies and let the engine, handle depending on severity.
 impl Strategy for TotalLiveTestStrategy {
     fn on_start(&mut self, h: EngineHandle) {
-        info!("strategy start");
-        h.subscribe_now(
-            DataTopic::MBP10,
-            SymbolKey::new(
-                Instrument::from_str("MNQ.Z25").unwrap(),
-                ProviderKind::ProjectX(ProjectXTenant::Topstep),
-            ),
-        );
-        self.engine = Some(h);
+        info!("on_start: strategy start");
+        let instrument = Instrument::from_str("MNQ.Z25").unwrap();
+        let data_key = SymbolKey::new(instrument.clone(), self.data_provider);
+        h.subscribe_now(DataTopic::MBP10, data_key);
+        // store handle
+        self.engine = Some(h.clone());
+
+        // Spawn a small workflow to exercise place -> replace -> cancel
+        let account = self.account_name.clone();
+        let provider = self.execution_provider;
+        let exec_key = SymbolKey::new(instrument.clone(), provider);
+        tokio::spawn(async move {
+            // small delay to allow account subscriptions to come online
+            sleep(Duration::from_millis(500)).await;
+            // 1) Place a small JoinBid order
+            info!("test flow: placing JoinBid BUY qty=1");
+            let order_id_res = h.place_order(
+                account.clone(),
+                exec_key.clone(),
+                tt_types::accounts::events::Side::Buy,
+                1,
+                OrderType::JoinBid,
+                None,
+                None,
+                None,
+                Some("total_live_test".to_string()),
+                None,
+                None,
+            );
+            if let Ok(order_id) = order_id_res {
+                info!(?order_id, "JoinBid placed; waiting to replace");
+                // Replace: bump size
+                sleep(Duration::from_secs(2)).await;
+                info!(?order_id, "replacing order: new_qty=2");
+                let _ = h.replace_order(
+                    provider,
+                    account.clone(),
+                    tt_types::wire::ReplaceOrder {
+                        account_name: account.clone(),
+                        provider_order_id: String::new(),
+                        new_qty: Some(2),
+                        new_limit_price: None,
+                        new_stop_price: None,
+                        new_trail_price: None,
+                    },
+                    order_id,
+                );
+                // Cancel
+                sleep(Duration::from_secs(2)).await;
+                info!(?order_id, "cancelling order");
+                let _ = h.cancel_order(provider, account.clone(), order_id);
+            } else {
+                info!("failed to place JoinBid order");
+            }
+
+            // 2) Place a small JoinAsk SELL order and then cancel it
+            sleep(Duration::from_secs(2)).await;
+            info!("test flow: placing JoinAsk SELL qty=1");
+            let jask_res = h.place_order(
+                account.clone(),
+                exec_key.clone(),
+                tt_types::accounts::events::Side::Sell,
+                1,
+                OrderType::JoinAsk,
+                None,
+                None,
+                None,
+                Some("total_live_test".to_string()),
+                None,
+                None,
+            );
+            if let Ok(order_id) = jask_res {
+                info!(?order_id, "JoinAsk placed; waiting then cancel");
+                sleep(Duration::from_secs(2)).await;
+                info!(?order_id, "cancelling JoinAsk order");
+                let _ = h.cancel_order(provider, account.clone(), order_id);
+            } else {
+                info!("failed to place JoinAsk order");
+            }
+
+            // 3) Place a MARKET BUY order (fire-and-forget)
+            sleep(Duration::from_secs(2)).await;
+            info!("test flow: placing MARKET BUY qty=1");
+            let _ = h.place_order(
+                account.clone(),
+                exec_key.clone(),
+                tt_types::accounts::events::Side::Buy,
+                1,
+                OrderType::Market,
+                None,
+                None,
+                None,
+                Some("total_live_test".to_string()),
+                None,
+                None,
+            );
+            info!("submitted MARKET BUY");
+        });
     }
 
     fn on_stop(&mut self) {
-        info!("live strategy passed all tests");
+        info!("on_stop: live strategy passed all tests");
     }
 
     fn on_tick(&mut self, t: &Tick, provider_kind: ProviderKind) {
@@ -67,20 +158,28 @@ impl Strategy for TotalLiveTestStrategy {
         }
     }
 
-    fn on_orders_batch(&mut self, _b: &OrdersBatch) {
-        // test TODOs can remain; just validating callback wiring
+    fn on_orders_batch(&mut self, b: &OrdersBatch) {
+        for order in b.orders.iter() {
+            println!("{:?}", order);
+        }
     }
 
-    fn on_positions_batch(&mut self, _b: &PositionsBatch) {
-        // test TODOs can remain; just validating callback wiring
+    fn on_positions_batch(&mut self, b: &PositionsBatch) {
+       for position in b.positions.iter() {
+           println!("{:?}", position);
+       }
     }
 
-    fn on_account_delta(&mut self, _accounts: &[AccountDelta]) {
-        // test TODOs can remain; just validating callback wiring
+    fn on_account_delta(&mut self, accounts: &[AccountDelta]) {
+        for account in accounts {
+            println!("{:?}", account);
+        }
     }
 
-    fn on_trades_closed(&mut self, _trades: Vec<Trade>) {
-        // test TODOs can remain; just validating callback wiring
+    fn on_trades_closed(&mut self, trades: Vec<Trade>) {
+        for trade in trades {
+            println!("{:?}", trade);
+        }
     }
 
     fn on_subscribe(&mut self, _instrument: Instrument, data_topic: DataTopic, success: bool) {
@@ -94,23 +193,29 @@ impl Strategy for TotalLiveTestStrategy {
     }
 
     fn accounts(&self) -> Vec<AccountKey> {
-        Vec::new()
+        vec![AccountKey::new(self.execution_provider, self.account_name.clone())]
     }
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    use tracing_subscriber::EnvFilter;
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info,tt_bus=info,tt_engine=info,projectx.ws=info"));
     tracing_subscriber::fmt()
-        .with_max_level(LevelFilter::INFO)
+        .with_env_filter(filter)
+        .with_target(true)
         .init();
 
     let addr = std::env::var("TT_BUS_ADDR").unwrap_or_else(|_| "/tmp/tick-trader.sock".to_string());
     let bus = ClientMessageBus::connect(&addr).await?;
     let mut engine = EngineRuntime::new(bus.clone());
+    let account_name = AccountName::from_str("PRAC-V2-64413-98419885").unwrap();
     let strategy = TotalLiveTestStrategy {
         _symbol: Instrument::from_str("MNQ.Z25").unwrap(),
         data_provider: ProviderKind::ProjectX(ProjectXTenant::Topstep),
         execution_provider: ProviderKind::ProjectX(ProjectXTenant::Topstep),
+        account_name: account_name.clone(),
         subscribed: Vec::new(),
         last_order_type: OrderType::Market,
         engine: None,
