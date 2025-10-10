@@ -104,7 +104,7 @@ async fn main() -> anyhow::Result<()> {
     let addr = std::env::var("TT_BUS_ADDR").unwrap_or_else(|_| "/tmp/tick-trader.sock".to_string());
     let bus = ClientMessageBus::connect(&addr).await?;
 
-    let mut engine = EngineRuntime::new(bus.clone());
+    let mut engine = EngineRuntime::new(bus.clone(), Some(500_000));
     let strategy = DataTestStrategy::default();
     let _handle = engine.start(strategy).await?;
 

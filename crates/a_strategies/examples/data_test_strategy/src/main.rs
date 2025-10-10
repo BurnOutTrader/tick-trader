@@ -21,7 +21,7 @@ struct DataTestStrategy {
 
 impl Strategy for DataTestStrategy {
     fn on_start(&mut self, h: EngineHandle) {
-        tracing::info!("strategy start");
+        info!("strategy start");
         // Non-blocking subscribe via handle command queue, you can do this at run time from anywhere to subscribe or unsubscribe a custom universe
         h.subscribe_now(
             DataTopic::MBP10,
@@ -110,7 +110,7 @@ async fn main() -> anyhow::Result<()> {
     let addr = std::env::var("TT_BUS_ADDR").unwrap_or_else(|_| "/tmp/tick-trader.sock".to_string());
     let bus = ClientMessageBus::connect(&addr).await?;
 
-    let mut engine = EngineRuntime::new(bus.clone());
+    let mut engine = EngineRuntime::new(bus.clone(), Some(100_000));
     let strategy = DataTestStrategy::default();
     let _handle = engine.start(strategy).await?;
 

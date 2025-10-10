@@ -273,6 +273,7 @@ pub struct EngineRuntime {
     cmd_q: Arc<ArrayQueue<Command>>,
     // Map our EngineUuid -> provider's order id string (populated from order updates)
     provider_order_ids: Arc<DashMap<EngineUuid, String>>,
+    slow_spin_ns: Option<u64>,
 }
 
 // Shared view used by EngineHandle
@@ -1046,7 +1047,7 @@ impl EngineRuntime {
         true
     }
 
-    pub fn new(bus: Arc<ClientMessageBus>) -> Self {
+    pub fn new(bus: Arc<ClientMessageBus>, slow_spin: Option<u64>) -> Self {
         let instruments = Arc::new(DashMap::new());
         Self {
             bus,
@@ -1066,6 +1067,7 @@ impl EngineRuntime {
             portfolio_manager: Arc::new(PortfolioManager::new(instruments)),
             cmd_q: Arc::new(ArrayQueue::new(4096)),
             provider_order_ids: Arc::new(DashMap::new()),
+            slow_spin_ns: slow_spin,
         }
     }
 
@@ -1119,6 +1121,7 @@ impl EngineRuntime {
         }
         // Move strategy into the spawned task after on_start and accounts have been called
         let mut strategy_for_task = strategy;
+        let slow_spin_ns = self.slow_spin_ns;
         let handle_task = tokio::spawn(async move {
             let mut rx = rx;
             // Initial drain to process any commands enqueued during on_start (e.g., subscribe_now)
@@ -1324,6 +1327,7 @@ impl EngineRuntime {
                         if shm_tasks.get(&(topic, key.clone())).is_none() {
                             let tx_shm = tx_internal.clone();
                             let value = key.clone();
+
                             let handle: JoinHandle<()> = tokio::spawn(async move {
                                 let mut last_seq: u32 = 0;
                                 loop {
@@ -1368,9 +1372,10 @@ impl EngineRuntime {
                                                 );
                                                 break;
                                             }
-                                        } else {
+                                        } else if let Some(slow_down_ns) = slow_spin_ns {
                                             // Avoid busy-spin when no new SHM data
-                                            tokio::time::sleep(Duration::from_nanos(100)).await;
+                                            tokio::time::sleep(Duration::from_nanos(slow_down_ns))
+                                                .await;
                                         }
                                     }
                                 }
