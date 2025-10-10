@@ -111,36 +111,35 @@ impl TicksToTickBarsConsolidator {
         }
         self.count += 1;
 
-        if self.count >= self.ticks_per_bar {
-            if let (Some(start), Some(oo), Some(hh), Some(ll), Some(cc)) =
+        if self.count >= self.ticks_per_bar
+            && let (Some(start), Some(oo), Some(hh), Some(ll), Some(cc)) =
                 (self.start_ts, self.o, self.h, self.l, self.c)
-            {
-                let end_incl = tk.time - Duration::nanoseconds(1);
-                let out = TickBar {
-                    symbol: self.out_symbol.clone(),
-                    instrument: self.instrument.clone(),
-                    time_start: start,
-                    time_end: end_incl,
-                    open: oo,
-                    high: hh,
-                    low: ll,
-                    close: cc,
-                    volume: self.vol,
-                    ask_volume: self.ask_vol,
-                    bid_volume: self.bid_vol,
-                };
-                // reset state
-                self.count = 0;
-                self.start_ts = None;
-                self.o = None;
-                self.h = None;
-                self.l = None;
-                self.c = None;
-                self.vol = Decimal::ZERO;
-                self.bid_vol = Decimal::ZERO;
-                self.ask_vol = Decimal::ZERO;
-                return Some(out);
-            }
+        {
+            let end_incl = tk.time - Duration::nanoseconds(1);
+            let out = TickBar {
+                symbol: self.out_symbol.clone(),
+                instrument: self.instrument.clone(),
+                time_start: start,
+                time_end: end_incl,
+                open: oo,
+                high: hh,
+                low: ll,
+                close: cc,
+                volume: self.vol,
+                ask_volume: self.ask_vol,
+                bid_volume: self.bid_vol,
+            };
+            // reset state
+            self.count = 0;
+            self.start_ts = None;
+            self.o = None;
+            self.h = None;
+            self.l = None;
+            self.c = None;
+            self.vol = Decimal::ZERO;
+            self.bid_vol = Decimal::ZERO;
+            self.ask_vol = Decimal::ZERO;
+            return Some(out);
         }
         None
     }
@@ -263,7 +262,7 @@ impl TicksToCandlesConsolidator {
                 volume: self.vol,
                 ask_volume: self.ask_vol,
                 bid_volume: self.bid_vol,
-                resolution: self.dst.clone(),
+                resolution: self.dst,
             };
             // reset
             self.o = None;
@@ -384,7 +383,7 @@ impl BboToCandlesConsolidator {
 
     fn init_win(&self, t: DateTime<Utc>) -> Win {
         TicksToCandlesConsolidator {
-            dst: self.dst.clone(),
+            dst: self.dst,
             out_symbol: String::new(),
             hours: self.hours.clone(),
             instrument: self.instrument.clone(),
@@ -404,7 +403,7 @@ impl BboToCandlesConsolidator {
     }
     fn advance(&self, t_last: DateTime<Utc>, w: &Win) -> Win {
         TicksToCandlesConsolidator {
-            dst: self.dst.clone(),
+            dst: self.dst,
             out_symbol: String::new(),
             hours: self.hours.clone(),
             instrument: self.instrument.clone(),
@@ -434,7 +433,7 @@ impl BboToCandlesConsolidator {
                 volume: self.v,
                 ask_volume: dec!(0),
                 bid_volume: dec!(0),
-                resolution: self.dst.clone(),
+                resolution: self.dst,
             };
             self.o = None;
             self.h = None;
@@ -622,7 +621,7 @@ impl CandlesToCandlesConsolidator {
                 volume: self.vol,
                 ask_volume: self.ask_vol,
                 bid_volume: self.bid_vol,
-                resolution: self.dst.clone(),
+                resolution: self.dst,
             };
             self.b_start = None;
             self.b_end = None;

@@ -732,10 +732,10 @@ impl EngineRuntime {
         // On first subscribe for this provider, start vendor securities refresh (hourly)
         self.ensure_vendor_securities_watch(key.provider).await;
         // Forward to server
-        let _ = self
+        self
             .bus
             .handle_request(
-                &self.sub_id.as_ref().expect("engine started"),
+                self.sub_id.as_ref().expect("engine started"),
                 Request::SubscribeKey(tt_types::wire::SubscribeKey {
                     topic,
                     key,
@@ -747,10 +747,10 @@ impl EngineRuntime {
         Ok(())
     }
     pub async fn unsubscribe_symbol(&self, topic: Topic, key: SymbolKey) -> anyhow::Result<()> {
-        let _ = self
+        self
             .bus
             .handle_request(
-                &self.sub_id.as_ref().expect("engine started"),
+                self.sub_id.as_ref().expect("engine started"),
                 Request::UnsubscribeKey(tt_types::wire::UnsubscribeKey { topic, key }),
             )
             .await?;
@@ -762,10 +762,10 @@ impl EngineRuntime {
         // Ensure vendor securities refresh is active for this provider
         let topic = data_topic.to_topic_or_err()?;
         self.ensure_vendor_securities_watch(key.provider).await;
-        let _ = self
+        self
             .bus
             .handle_request(
-                &self.sub_id.as_ref().expect("engine started"),
+                self.sub_id.as_ref().expect("engine started"),
                 Request::SubscribeKey(tt_types::wire::SubscribeKey {
                     topic,
                     key,
@@ -791,10 +791,10 @@ impl EngineRuntime {
         &self,
         spec: tt_types::wire::PlaceOrder,
     ) -> anyhow::Result<()> {
-        let _ = self
+        self
             .bus
             .handle_request(
-                &self.sub_id.as_ref().expect("engine started"),
+                self.sub_id.as_ref().expect("engine started"),
                 tt_types::wire::Request::PlaceOrder(spec),
             )
             .await?;
@@ -802,10 +802,10 @@ impl EngineRuntime {
     }
 
     pub async fn cancel_order(&self, spec: tt_types::wire::CancelOrder) -> anyhow::Result<()> {
-        let _ = self
+        self
             .bus
             .handle_request(
-                &self.sub_id.as_ref().expect("engine started"),
+                self.sub_id.as_ref().expect("engine started"),
                 tt_types::wire::Request::CancelOrder(spec),
             )
             .await?;
@@ -813,10 +813,10 @@ impl EngineRuntime {
     }
 
     pub async fn replace_order(&self, spec: tt_types::wire::ReplaceOrder) -> anyhow::Result<()> {
-        let _ = self
+        self
             .bus
             .handle_request(
-                &self.sub_id.as_ref().expect("engine started"),
+                self.sub_id.as_ref().expect("engine started"),
                 tt_types::wire::Request::ReplaceOrder(spec),
             )
             .await?;

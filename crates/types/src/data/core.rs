@@ -78,7 +78,7 @@ pub struct Candle {
 impl Bytes<Self> for Candle {
     fn from_bytes(archived: &[u8]) -> anyhow::Result<Candle> {
         // Ensure alignment for rkyv by copying into an AlignedVec first
-        match rkyv::from_bytes::<Candle>(&archived) {
+        match rkyv::from_bytes::<Candle>(archived) {
             Ok(response) => Ok(response),
             Err(e) => Err(anyhow::Error::msg(e.to_string())),
         }
@@ -190,7 +190,7 @@ pub struct Bbo {
 
 impl Bytes<Self> for Bbo {
     fn from_bytes(archived: &[u8]) -> anyhow::Result<Bbo> {
-        match rkyv::from_bytes::<Bbo>(&archived) {
+        match rkyv::from_bytes::<Bbo>(archived) {
             Ok(response) => Ok(response),
             Err(e) => Err(anyhow::Error::msg(e.to_string())),
         }

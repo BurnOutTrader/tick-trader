@@ -79,10 +79,10 @@ impl AccountActor {
         provider: &Option<ProviderOrderId>,
         client: &EngineUuid,
     ) -> Option<&mut Order> {
-        if let Some(p) = provider {
-            if let Some(o) = self.orders_by_provider.get_mut(p) {
-                return Some(o);
-            }
+        if let Some(p) = provider
+            && let Some(o) = self.orders_by_provider.get_mut(p)
+        {
+            return Some(o);
         }
         if let Some(o) = self.orders_by_client.get_mut(client) {
             return Some(o);
@@ -102,56 +102,56 @@ impl AccountActor {
                 if ord.is_none() {
                     let mut o = Order::new(instrument.clone(), side, qty);
                     o.provider_order_id = oe.provider_order_id.clone();
-                    o.client_order_id = oe.order_id.clone();
+                    o.client_order_id = oe.order_id;
                     o.last_provider_seq = oe.provider_seq;
                     o.state = OrderState::Acknowledged;
                     self.insert_order(o);
-                } else if let Some(o) = ord.as_mut() {
-                    if o.can_apply(oe.provider_seq, OrderState::Acknowledged) {
-                        o.last_provider_seq = oe.provider_seq;
-                        o.state = OrderState::Acknowledged;
-                        if let Some(l) = oe.leaves_qty {
-                            o.leaves = l;
-                        }
+                } else if let Some(o) = ord.as_mut()
+                    && o.can_apply(oe.provider_seq, OrderState::Acknowledged)
+                {
+                    o.last_provider_seq = oe.provider_seq;
+                    o.state = OrderState::Acknowledged;
+                    if let Some(l) = oe.leaves_qty {
+                        o.leaves = l;
                     }
                 }
             }
             OrderEventKind::Replaced { new_qty } => {
-                if let Some(o) = self.resolve_order_mut(&oe.provider_order_id, &oe.order_id) {
-                    if o.can_apply(oe.provider_seq, o.state) {
-                        o.version += 1;
-                        if let Some(q) = new_qty {
-                            o.qty = q;
-                            o.leaves = q - o.cum_qty;
-                        }
+                if let Some(o) = self.resolve_order_mut(&oe.provider_order_id, &oe.order_id)
+                    && o.can_apply(oe.provider_seq, o.state)
+                {
+                    o.version += 1;
+                    if let Some(q) = new_qty {
+                        o.qty = q;
+                        o.leaves = q - o.cum_qty;
                     }
                 }
             }
             OrderEventKind::Canceled => {
-                if let Some(o) = self.resolve_order_mut(&oe.provider_order_id, &oe.order_id) {
-                    if o.can_apply(oe.provider_seq, OrderState::Canceled) {
-                        o.last_provider_seq = oe.provider_seq;
-                        o.state = OrderState::Canceled;
-                        o.leaves = 0;
-                    }
+                if let Some(o) = self.resolve_order_mut(&oe.provider_order_id, &oe.order_id)
+                    && o.can_apply(oe.provider_seq, OrderState::Canceled)
+                {
+                    o.last_provider_seq = oe.provider_seq;
+                    o.state = OrderState::Canceled;
+                    o.leaves = 0;
                 }
             }
             OrderEventKind::Rejected { .. } => {
-                if let Some(o) = self.resolve_order_mut(&oe.provider_order_id, &oe.order_id) {
-                    if o.can_apply(oe.provider_seq, OrderState::Rejected) {
-                        o.last_provider_seq = oe.provider_seq;
-                        o.state = OrderState::Rejected;
-                    }
+                if let Some(o) = self.resolve_order_mut(&oe.provider_order_id, &oe.order_id)
+                    && o.can_apply(oe.provider_seq, OrderState::Rejected)
+                {
+                    o.last_provider_seq = oe.provider_seq;
+                    o.state = OrderState::Rejected;
                 }
             }
             OrderEventKind::Expired => {
-                if let Some(o) = self.resolve_order_mut(&oe.provider_order_id, &oe.order_id) {
+                if let Some(o) = self.resolve_order_mut(&oe.provider_order_id, &oe.order_id)
+                    && o.can_apply(oe.provider_seq, OrderState::Canceled)
+                {
                     // treat as cancel terminal
-                    if o.can_apply(oe.provider_seq, OrderState::Canceled) {
-                        o.last_provider_seq = oe.provider_seq;
-                        o.state = OrderState::Canceled;
-                        o.leaves = 0;
-                    }
+                    o.last_provider_seq = oe.provider_seq;
+                    o.state = OrderState::Canceled;
+                    o.leaves = 0;
                 }
             }
         }
@@ -161,7 +161,8 @@ impl AccountActor {
         if let Some(p) = &o.provider_order_id {
             self.orders_by_provider.insert(p.clone(), o.clone());
         }
-        self.orders_by_client.insert(o.client_order_id.clone(), o);
+        // EngineUuid is Copy so no need to clone
+        self.orders_by_client.insert(o.client_order_id, o);
     }
 
     fn apply_exec(&mut self, exe: ExecutionEvent) {
@@ -169,7 +170,7 @@ impl AccountActor {
         if self.exec_by_id.contains(&exe.exec_id) {
             return;
         }
-        self.exec_by_id.insert(exe.exec_id.clone());
+        self.exec_by_id.insert(exe.exec_id);
         // Update order
         if let Some(o) = self.resolve_order_mut(&exe.provider_order_id, &exe.order_id) {
             let new_cum = o.cum_qty + exe.qty.abs();
@@ -269,7 +270,7 @@ mod tests {
         actor.apply(AccountEvent::Order(OrderEvent {
             kind: OrderEventKind::Replaced { new_qty: Some(6) },
             provider_order_id: Some(prov.clone()),
-            order_id: cli.clone(),
+            order_id: cli,
             provider_seq: Some(2),
             leaves_qty: None,
             ts_ns: Utc::now(),
@@ -281,7 +282,7 @@ mod tests {
         actor.apply(AccountEvent::Order(OrderEvent {
             kind: OrderEventKind::Canceled,
             provider_order_id: Some(prov.clone()),
-            order_id: cli.clone(),
+            order_id: cli,
             provider_seq: Some(3),
             leaves_qty: None,
             ts_ns: Utc::now(),
