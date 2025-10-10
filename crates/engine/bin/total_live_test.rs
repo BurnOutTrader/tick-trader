@@ -11,6 +11,7 @@ use tt_types::accounts::account::AccountName;
 use tt_types::accounts::events::AccountDelta;
 use tt_types::data::core::{Bbo, Candle, Tick};
 use tt_types::data::mbp10::Mbp10;
+use tt_types::engine_id::EngineUuid;
 use tt_types::keys::{AccountKey, SymbolKey};
 use tt_types::providers::{ProjectXTenant, ProviderKind};
 use tt_types::securities::symbols::Instrument;
@@ -25,10 +26,13 @@ pub struct TotalLiveTestStrategy {
     last_order_type: OrderType,
     engine: Option<EngineHandle>,
     symbol_key: SymbolKey,
+    count: i32,
+    order_id: EngineUuid
 }
 //todo, we should implement a special error type for strategies and let the engine, handle depending on severity.
 impl Strategy for TotalLiveTestStrategy {
     fn on_start(&mut self, h: EngineHandle) {
+        self.count += 1;
         info!("on_start: strategy start");
         let instrument = Instrument::from_str("MNQ.Z25").unwrap();
 
@@ -40,12 +44,12 @@ impl Strategy for TotalLiveTestStrategy {
         let account = self.account_name.clone();
         let provider = self.execution_provider;
         let exec_key = SymbolKey::new(instrument.clone(), provider);
-        tokio::spawn(async move {
+
+        if self.count == 1 {
             // small delay to allow account subscriptions to come online
-            sleep(Duration::from_millis(500)).await;
             // 1) Place a small JoinBid order
             info!("test flow: placing JoinBid BUY qty=1");
-            let order_id_res = h.place_order(
+            self.order_id = h.place_order(
                 account.clone(),
                 exec_key.clone(),
                 tt_types::accounts::events::Side::Buy,
@@ -57,60 +61,61 @@ impl Strategy for TotalLiveTestStrategy {
                 Some("total_live_test".to_string()),
                 None,
                 None,
-            );
-            if let Ok(order_id) = order_id_res {
-                info!(?order_id, "JoinBid placed; waiting to replace");
-                // Replace: bump size
-                sleep(Duration::from_secs(2)).await;
-                info!(?order_id, "replacing order: new_qty=2");
-                let _ = h.replace_order(
-                    provider,
-                    account.clone(),
-                    tt_types::wire::ReplaceOrder {
-                        account_name: account.clone(),
-                        provider_order_id: String::new(),
-                        new_qty: Some(2),
-                        new_limit_price: None,
-                        new_stop_price: None,
-                        new_trail_price: None,
-                    },
-                    order_id,
-                );
-                // Cancel
-                sleep(Duration::from_secs(2)).await;
-                info!(?order_id, "cancelling order");
-                let _ = h.cancel_order(provider, account.clone(), order_id);
-            } else {
-                info!("failed to place JoinBid order");
-            }
-
-            // 2) Place a small JoinAsk SELL order and then cancel it
-            sleep(Duration::from_secs(2)).await;
-            info!("test flow: placing JoinAsk SELL qty=1");
-            let jask_res = h.place_order(
+            ).unwrap();
+        }
+        if self.count == 30 {
+            info!(?self.order_id, "JoinBid placed; waiting to replace");
+            // Replace: bump size
+            info!(?self.order_id, "replacing order: new_qty=2");
+            let _ = h.replace_order(
+                provider,
                 account.clone(),
-                exec_key.clone(),
-                tt_types::accounts::events::Side::Sell,
-                1,
-                OrderType::JoinAsk,
-                None,
-                None,
-                None,
-                Some("total_live_test".to_string()),
-                None,
-                None,
-            );
-            if let Ok(order_id) = jask_res {
-                info!(?order_id, "JoinAsk placed; waiting then cancel");
-                sleep(Duration::from_secs(2)).await;
-                info!(?order_id, "cancelling JoinAsk order");
-                let _ = h.cancel_order(provider, account.clone(), order_id);
-            } else {
-                info!("failed to place JoinAsk order");
-            }
+                tt_types::wire::ReplaceOrder {
+                    account_name: account.clone(),
+                    provider_order_id: String::new(),
+                    new_qty: Some(2),
+                    new_limit_price: None,
+                    new_stop_price: None,
+                    new_trail_price: None,
+                },
+                self.order_id.clone(),
+            ).unwrap();
+        } else {
+            info!("failed to place JoinBid order");
+        }
 
+        if self.count == 38 {
+            // Cancel
+            info!( "cancelling order: {}", self.order_id,);
+            let _ = h.cancel_order(provider, account.clone(), self.order_id);
+            // 2) Place a small JoinAsk SELL order and then cancel it
+            if self.count == 25 {
+                info!("test flow: placing JoinAsk SELL qty=1");
+                self.order_id = h.place_order(
+                    account.clone(),
+                    exec_key.clone(),
+                    tt_types::accounts::events::Side::Sell,
+                    1,
+                    OrderType::JoinAsk,
+                    None,
+                    None,
+                    None,
+                    Some("total_live_test".to_string()),
+                    None,
+                    None,
+                ).unwrap();
+            }
+        }
+
+        if self.count == 50 {
+            info!(?self.order_id, "JoinAsk placed; waiting then cancel");
+            info!(?self.order_id, "cancelling JoinAsk order");
+            let _ = h.cancel_order(provider, account.clone(), self.order_id.clone()).unwrap();
+        }
+
+
+        if self.count == 75 {
             // 3) Place a MARKET BUY order (fire-and-forget)
-            sleep(Duration::from_secs(2)).await;
             info!("test flow: placing MARKET BUY qty=1");
             let _ = h.place_order(
                 account.clone(),
@@ -126,7 +131,7 @@ impl Strategy for TotalLiveTestStrategy {
                 None,
             );
             info!("submitted MARKET BUY");
-        });
+        }
     }
 
     fn on_stop(&mut self) {
@@ -227,6 +232,8 @@ async fn main() -> anyhow::Result<()> {
             Instrument::from_str("MNQ.Z25").unwrap(),
             ProviderKind::ProjectX(ProjectXTenant::Topstep),
         ),
+        count: 0,
+        order_id: EngineUuid::new(),
     };
     let _handle = engine.start(strategy).await?;
 
