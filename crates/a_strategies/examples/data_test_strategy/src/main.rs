@@ -57,11 +57,15 @@ impl Strategy for DataTestStrategy {
     }
 
     fn on_orders_batch(&mut self, b: &wire::OrdersBatch) {
-        println!("{:?}", b);
+        for order in b.orders.iter() {
+            println!("{:?}", order)
+        }
     }
 
     fn on_positions_batch(&mut self, b: &wire::PositionsBatch) {
-        println!("{:?}", b);
+        for p in b.positions.iter() {
+            println!("{:?}", p);
+        }
     }
 
     fn on_account_delta(&mut self, accounts: &[AccountDelta]) {
@@ -71,7 +75,9 @@ impl Strategy for DataTestStrategy {
     }
 
     fn on_trades_closed(&mut self, _trades: Vec<Trade>) {
-        // implement when needed
+        for trade in _trades {
+            println!("{:?}", trade);
+        }
     }
 
     fn on_subscribe(&mut self, instrument: Instrument, data_topic: DataTopic, success: bool) {
