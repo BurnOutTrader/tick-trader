@@ -2,9 +2,7 @@ use rust_decimal::Decimal;
 use rust_decimal::prelude::Zero;
 use std::collections::BTreeMap;
 use std::str::FromStr;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::Mutex;
 use tokio::time::sleep;
 use tracing::info;
 use tracing::level_filters::LevelFilter;
@@ -215,7 +213,7 @@ impl OrderBookStrategy {
         true
     }
 
-    async fn cancel_all_for_instrument(&mut self) -> bool {
+    fn cancel_all_for_instrument(&mut self) -> bool {
         if let (Some(h), Some(cfg)) = (&self.engine, &self.cfg) {
             // Rate-limit cancels aggressively
             if let Some(prev) = self.last_cancel_at {
@@ -223,16 +221,14 @@ impl OrderBookStrategy {
                     return false;
                 }
             }
-            let open = h.orders_for_instrument(&cfg.instrument).await;
+            let open = h.open_orders_for_instrument(&cfg.instrument);
             let mut did_cancel = false;
             for ou in open {
                 if let Some(poid) = ou.provider_order_id {
-                    let _ = h
-                        .cancel_order(wire::CancelOrder {
-                            account_name: cfg.account_name.clone(),
-                            provider_order_id: poid.0,
-                        })
-                        .await;
+                    let _ = h.cancel_now(wire::CancelOrder {
+                        account_name: cfg.account_name.clone(),
+                        provider_order_id: poid.0,
+                    });
                     did_cancel = true;
                 }
             }
@@ -245,17 +241,15 @@ impl OrderBookStrategy {
     }
 
     // Force-cancel open orders for the instrument, ignoring cancel throttle.
-    async fn cancel_all_for_instrument_force(&mut self) {
+    fn cancel_all_for_instrument_force(&mut self) {
         if let (Some(h), Some(cfg)) = (&self.engine, &self.cfg) {
-            let open = h.orders_for_instrument(&cfg.instrument).await;
+            let open = h.open_orders_for_instrument(&cfg.instrument);
             for ou in open {
                 if let Some(poid) = ou.provider_order_id {
-                    let _ = h
-                        .cancel_order(wire::CancelOrder {
-                            account_name: cfg.account_name.clone(),
-                            provider_order_id: poid.0,
-                        })
-                        .await;
+                    let _ = h.cancel_now(wire::CancelOrder {
+                        account_name: cfg.account_name.clone(),
+                        provider_order_id: poid.0,
+                    });
                 }
             }
             self.last_cancel_at = Some(Instant::now());
@@ -290,7 +284,7 @@ impl OrderBookStrategy {
     }
 
     // Periodically check and clean only truly stale (far-from-market) working orders
-    async fn cleanup_stale_orders(&mut self) {
+    fn cleanup_stale_orders(&mut self) {
         if self.engine.is_none() || self.cfg.is_none() {
             return;
         }
@@ -302,7 +296,7 @@ impl OrderBookStrategy {
         }
         let h = self.engine.as_ref().unwrap().clone();
         let cfg = self.cfg.as_ref().unwrap();
-        let open = h.orders_for_instrument(&cfg.instrument).await;
+        let open = h.open_orders_for_instrument(&cfg.instrument);
         if open.is_empty() {
             self.last_refresh_at = Some(now);
             return;
@@ -312,7 +306,7 @@ impl OrderBookStrategy {
             (self.book.best_bid(), self.book.best_ask())
         {
             if ba_px > bb_px && self.bbo_moved_far(bb_px, ba_px) {
-                self.cancel_all_for_instrument_force().await;
+                self.cancel_all_for_instrument_force();
             }
         } else {
             // Without BBO context, be conservative: do nothing except tick the refresh timer.
@@ -320,7 +314,7 @@ impl OrderBookStrategy {
         self.last_refresh_at = Some(now);
     }
 
-    async fn ensure_quotes(&mut self) {
+    fn ensure_quotes(&mut self) {
         if self.engine.is_none() || self.cfg.is_none() {
             return;
         }
@@ -442,10 +436,10 @@ impl OrderBookStrategy {
         self.last_bbo = Some((bb_px, ba_px));
 
         // Clear existing working orders to avoid stale or wrong-side resting orders (rate-limited)
-        let did_cancel = self.cancel_all_for_instrument().await;
+        let did_cancel = self.cancel_all_for_instrument();
         if !did_cancel {
             // If we couldn't cancel due to throttle and we still have open orders, avoid stacking new ones.
-            let open = h.orders_for_instrument(&instrument_clone).await;
+            let open = h.open_orders_for_instrument(&instrument_clone);
             if !open.is_empty() {
                 return;
             }
@@ -494,7 +488,7 @@ impl OrderBookStrategy {
                     stop_loss: None,
                     take_profit: None,
                 };
-                let _ = h.place_order(order).await;*/
+                let _ = h.place_order(order);*/
             }
             if want_ask {
                 /*self.sell_count += 1;
@@ -512,19 +506,17 @@ impl OrderBookStrategy {
                     stop_loss: None,
                     take_profit: None,
                 };
-                let _ = h.place_order(order).await;*/
+                let _ = h.place_order(order);*/
             }
         }
     }
 }
 
-#[async_trait::async_trait]
 impl Strategy for OrderBookStrategy {
-    async fn on_start(&mut self, h: EngineHandle) {
+    fn on_start(&mut self, h: EngineHandle) {
         info!("strategy start");
         self.engine = Some(h.clone());
 
-        // If cfg is not yet set (should be set by main), build a default for MNQ.Z25 on Topstep
         if self.cfg.is_none() {
             let instrument = Instrument::from_str("MNQ.Z25").unwrap();
             let provider = ProviderKind::ProjectX(ProjectXTenant::Topstep);
@@ -539,25 +531,26 @@ impl Strategy for OrderBookStrategy {
         }
 
         let cfg = self.cfg.as_ref().unwrap();
-        h.subscribe_key(DataTopic::MBP10, cfg.key.clone())
-            .await
-            .unwrap();
-        h.subscribe_key(DataTopic::Ticks, cfg.key.clone())
-            .await
-            .unwrap();
+        // Non-blocking subscriptions via command queue
+        let _ = h.subscribe_now(DataTopic::MBP10, cfg.key.clone());
+        let _ = h.subscribe_now(DataTopic::Ticks, cfg.key.clone());
     }
-    async fn on_stop(&mut self) {
+
+    fn on_stop(&mut self) {
         info!("strategy stop");
     }
-    async fn on_tick(&mut self, t: tt_types::data::core::Tick, _provider_kind: ProviderKind) {
+
+    fn on_tick(&mut self, t: &tt_types::data::core::Tick, _provider_kind: ProviderKind) {
         println!("{:?}", t)
     }
-    async fn on_quote(&mut self, q: tt_types::data::core::Bbo, _provider_kind: ProviderKind) {
+
+    fn on_quote(&mut self, q: &tt_types::data::core::Bbo, _provider_kind: ProviderKind) {
         println!("{:?}", q);
     }
-    async fn on_bar(&mut self, _b: tt_types::data::core::Candle, _provider_kind: ProviderKind) {}
 
-    async fn on_mbp10(&mut self, d: Mbp10, _provider_kind: ProviderKind) {
+    fn on_bar(&mut self, _b: &tt_types::data::core::Candle, _provider_kind: ProviderKind) {}
+
+    fn on_mbp10(&mut self, d: &Mbp10, _provider_kind: ProviderKind) {
         let ob = &mut self.book;
         if let Some(ref book) = d.book {
             ob.seed_from_snapshot(book);
@@ -570,11 +563,6 @@ impl Strategy for OrderBookStrategy {
             MbpAction::Trade | MbpAction::Fill => ob.note_trade(d.price, d.size),
             MbpAction::None => {}
         }
-        /* println!(
-            "MBP10 evt: action={:?} side={:?} px={} sz={} flags={:?} ts_event={} ts_recv={}",
-            d.action, d.side, d.price, d.size, d.flags, d.ts_event, d.ts_recv
-        );*/
-        //ob.print_top_n(5);
 
         // Update trend (EMA of midprice delta)
         if let (Some((bb_px, _)), Some((ba_px, _))) = (self.book.best_bid(), self.book.best_ask()) {
@@ -583,38 +571,37 @@ impl Strategy for OrderBookStrategy {
                 if let Some(prev) = self.trend_last_mid {
                     let delta = mid - prev;
                     let alpha = self.trend_alpha;
-                    // EMA of delta
                     self.trend_mom = alpha * delta + (Decimal::new(1, 0) - alpha) * self.trend_mom;
                 }
                 self.trend_last_mid = Some(mid);
             }
         }
 
-        // Opportunistically clean up stale and then (throttled) manage our quotes
-        self.cleanup_stale_orders().await;
-        self.ensure_quotes().await;
+        // Opportunistic maintenance
+        self.cleanup_stale_orders();
+        self.ensure_quotes();
     }
 
-    async fn on_orders_batch(&mut self, b: wire::OrdersBatch) {
-        // For visibility; could also reconcile here if desired
-        for _order in b.orders {
-            //println!("{:?}", order);
+    fn on_orders_batch(&mut self, b: &wire::OrdersBatch) {
+        for _order in &b.orders {
+            // println!("{:?}", order);
         }
     }
-    async fn on_positions_batch(&mut self, b: wire::PositionsBatch) {
+
+    fn on_positions_batch(&mut self, b: &wire::PositionsBatch) {
         if let Some(cfg) = &self.cfg {
             if let Some(p) = b.positions.iter().find(|p| p.instrument == cfg.instrument) {
                 self.net_pos = p.net_qty;
             }
         }
-        for pos in b.positions {
+        for pos in &b.positions {
             println!("{:?}", pos)
         }
     }
-    async fn on_account_delta(&mut self, accounts: Vec<AccountDelta>) {
+
+    fn on_account_delta(&mut self, accounts: &[AccountDelta]) {
         for account_delta in accounts {
             println!("{:?}", account_delta);
-
             if account_delta.can_trade == false {
                 if account_delta.name == self.account_name {
                     self.can_trade = false
@@ -625,13 +612,13 @@ impl Strategy for OrderBookStrategy {
         }
     }
 
-    async fn on_trades_closed(&mut self, trades: Vec<Trade>) {
+    fn on_trades_closed(&mut self, trades: Vec<Trade>) {
         for trade in trades {
             println!("{:?}", trade);
         }
     }
 
-    async fn on_subscribe(&mut self, instrument: Instrument, data_topic: DataTopic, success: bool) {
+    fn on_subscribe(&mut self, instrument: Instrument, data_topic: DataTopic, success: bool) {
         println!(
             "Subscribed to {} on topic {:?}: Success: {}",
             instrument, data_topic, success
@@ -643,9 +630,11 @@ impl Strategy for OrderBookStrategy {
             );
         }
     }
-    async fn on_unsubscribe(&mut self, _instrument: Instrument, data_topic: DataTopic) {
+
+    fn on_unsubscribe(&mut self, _instrument: Instrument, data_topic: DataTopic) {
         println!("{:?}", data_topic);
     }
+
     fn accounts(&self) -> Vec<AccountKey> {
         if let Some(cfg) = &self.cfg {
             vec![AccountKey::new(cfg.provider, cfg.account_name.clone())]
@@ -666,17 +655,13 @@ async fn main() -> anyhow::Result<()> {
 
     let mut engine = EngineRuntime::new(bus.clone());
 
-    // Provider and instrument
     let provider = ProviderKind::ProjectX(ProjectXTenant::Topstep);
     let instrument = Instrument::from_str("MNQ.Z25").unwrap();
     let key = SymbolKey::new(instrument.clone(), provider);
 
-    // Target account name we will use for placing orders
-    let account_name =
-        tt_types::accounts::account::AccountName::from_str("PRAC-V2-64413-98419885").unwrap();
-    engine.initialize_account_names(provider, vec![]).await?;
-    // Create strategy with placeholder account_id and known account_name; we'll set id after engine start
-    let strategy = Arc::new(Mutex::new(OrderBookStrategy::new(
+    let account_name = AccountName::from_str("PRAC-V2-64413-98419885").unwrap();
+
+    let strategy = OrderBookStrategy::new(
         StrategyConfig {
             key: key.clone(),
             instrument: instrument.clone(),
@@ -685,17 +670,10 @@ async fn main() -> anyhow::Result<()> {
             max_pos_abs: Decimal::from(150),
         },
         account_name.clone(),
-    )));
+    );
 
-    // Start engine to obtain a sub_id and begin processing responses
-    let _handle = engine.start(strategy.clone()).await?;
+    let _handle = engine.start(strategy).await?;
 
-    // Initialize account interest so we receive orders/positions/account deltas
-    engine
-        .initialize_account_names(provider, vec![account_name])
-        .await?;
-
-    // Run for a while; adjust as needed
     sleep(Duration::from_secs(10000)).await;
 
     let _ = engine.stop().await?;
