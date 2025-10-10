@@ -7,7 +7,7 @@ pub mod keys;
 pub mod providers;
 pub mod reality_models;
 pub mod rkyv_types;
+pub mod rolling_window;
 pub mod securities;
 pub mod server_side;
 pub mod wire;
-pub mod rolling_window;
