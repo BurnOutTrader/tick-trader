@@ -705,6 +705,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2a2330da5de22e8a3cb63252ce2abb30116bf5265e89c0e01bc17015ce30a476"
 
 [[package]]
+name = "data_test_strategy"
+version = "0.1.0"
+dependencies = [
+ "ahash 0.8.12",
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "crossbeam",
+ "dashmap",
+ "dotenvy",
+ "duckdb",
+ "rust_decimal",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "tt-bus",
+ "tt-database",
+ "tt-engine",
+ "tt-shm",
+ "tt-types",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1788,30 +1811,6 @@ dependencies = [
  "libc",
  "pkg-config",
  "vcpkg",
-]
-
-[[package]]
-name = "orderbook_scalper"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "bytes",
- "chrono",
- "dashmap",
- "dotenvy",
- "duckdb",
- "futures-util",
- "rust_decimal",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
- "tt-bus",
- "tt-database",
- "tt-engine",
- "tt-shm",
- "tt-types",
 ]
 
 [[package]]
