@@ -16,7 +16,7 @@ impl<T: std::clone::Clone> RollingWindow<T> {
         self.history.clear()
     }
 
-    pub fn is_empty(&self) -> bool   {
+    pub fn is_empty(&self) -> bool {
         self.history.is_empty()
     }
 
