@@ -61,7 +61,7 @@ TT_BUS_ADDR=/tmp/tick-trader.sock
 cargo run -p tt-engine --bin tt-engine-test_strategy
 ```
 
-It connects over UDS, performs topic-level Subscribe for hot and account topics, and then requests a key-based market data stream.
+It connects over UDS for control and lossless streams. Hot market data (Ticks/Quotes/MBP10) is delivered via SHM snapshots once announced; the engine automatically starts per-(topic,key) SHM readers. If SHM is not available for a stream, the engine falls back to UDS delivery.
 
 
 ## 📚 Documentation index
@@ -140,13 +140,19 @@ let _ = req_tx.send(Request::SubscribeKey(SubscribeKey { topic: Topic::Depth, ke
 
 ## 📬 Data delivery to strategies
 
-- EngineRuntime sends Responses to your Strategy implementation via callbacks:
-  - on_tick, on_quote, on_depth (OrderBook), on_bar
+- EngineRuntime delivers data to your Strategy via callbacks:
+  - on_tick, on_quote, on_mbp10 (Depth/OrderBook), on_bar
   - on_orders_batch, on_positions_batch, on_account_delta_batch
   - on_subscribe/on_unsubscribe for control acknowledgments
-- Ensure your Strategy’s desired_topics returns the coarse topics you want; the engine handles the initial topic-level Subscribe automatically (no FlowCredit needed).
-
-
+- SHM-first for hot feeds:
+  - Hot market data (Ticks, Quotes, MBP10) is produced into per-(topic,key) SHM snapshots by the provider adapter.
+  - The Router emits Response::AnnounceShm for each (topic,key) once available.
+  - The engine, upon AnnounceShm, spawns a lightweight polling task that reads snapshots from SHM and invokes your callbacks. No duplicate UDS messages are sent for these topics while SHM is active.
+- UDS is still used for:
+  - Control-plane (subscribe/unsubscribe acks, pings, discovery), orders/positions/account events (lossless), bars/candles, and any topic not backed by SHM.
+- Fallback behavior:
+  - If SHM is not announced for a subscribed hot stream, the engine continues to receive the corresponding UDS batches and dispatches callbacks as before.
+- Strategy code does not change: you continue to implement the same callbacks; the engine selects the transport.
 
 
 ## 📈 Symbology quick reference

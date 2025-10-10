@@ -42,6 +42,18 @@ impl Strategy for MyStrategy {
 
 ---
 
+## How data arrives (SHM vs UDS)
+
+- You do not need to choose between SHM and UDS in your strategy. The engine selects the transport.
+- Hot feeds (Ticks, Quotes, MBP10):
+  - Provider adapters write snapshots to SHM and the Router emits Response::AnnounceShm.
+  - The engine starts a per-(topic,key) SHM reader upon AnnounceShm and invokes your callbacks from SHM data.
+  - While SHM is active, the system does not send duplicate UDS batches for these topics.
+- Other topics and control:
+  - Orders/Positions/Account events, bars/candles, discovery, pings, and subscribe acks are carried over UDS.
+- Fallback:
+  - If SHM is not announced for a hot stream, the engine consumes UDS batches for that stream and your callbacks still fire.
+
 ## EngineRuntime helpers (current)
 
 The `EngineRuntime` exposes a set of async helper methods to interact with the server over UDS via the client message bus.

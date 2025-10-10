@@ -39,19 +39,20 @@ Alignment and safety:
 
 | Message               | Fields                                                                   | Purpose/Notes                                                                   |
 |-----------------------|---------------------------------------------------------------------------|----------------------------------------------------------------------------------|
-| `TickBatch`           | `topic`, `seq`, `ticks`                                                   | Hot feed batch                                                                   |
-| `QuoteBatch`          | `topic`, `seq`, `quotes`                                                  | Hot feed batch                                                                   |
-| `OrderBookBatch`      | `topic`, `seq`, `books`                                                   | Depth snapshots/updates                                                          |
-| `BarBatch`            | `topic`, `seq`, `bars`                                                    | OHLC bars                                                                        |
-| `OrdersBatch`         | `topic`, `seq`, `orders`                                                  | Lossless                                                                         |
-| `PositionsBatch`      | `topic`, `seq`, `positions`                                               | Lossless                                                                         |
-| `AccountDeltaBatch`   | `topic`, `seq`, `deltas`                                                  | Lossless                                                                         |
+| `TickBatch`           | `topic`, `seq`, `ticks`                                                   | Hot feed batch (sent over UDS only if SHM is not active for this stream)        |
+| `QuoteBatch`          | `topic`, `seq`, `quotes`                                                  | Hot feed batch (sent over UDS only if SHM is not active for this stream)        |
+| `OrderBookBatch`      | `topic`, `seq`, `books`                                                   | Depth snapshots/updates (UDS only if SHM is not active for this stream)         |
+| `BarBatch`            | `topic`, `seq`, `bars`                                                    | OHLC bars (always UDS)                                                           |
+| `OrdersBatch`         | `topic`, `seq`, `orders`                                                  | Lossless (always UDS)                                                            |
+| `PositionsBatch`      | `topic`, `seq`, `positions`                                               | Lossless (always UDS)                                                            |
+| `AccountDeltaBatch`   | `topic`, `seq`, `deltas`                                                  | Lossless (always UDS)                                                            |
 | `AnnounceShm`         | `topic`, `key`, `name`, `layout_ver`, `size`                              | SHM snapshot announcement (cached for late subscribers)                          |
 | `InstrumentsResponse` | `corr_id`, `instruments`                                                  | Discovery                                                                        |
 | `Pong`                | `ts_ns`                                                                   | Heartbeat                                                                        |
 | `SubscribeResponse`   | `topic`, `instrument`, `success`                                          | Ack for subscribe requests                                                       |
 
 Notes:
+- SHM-first: for hot feeds (Ticks/Quotes/MBP10), providers publish snapshots to SHM and the engine consumes from SHM upon `AnnounceShm`. Duplicate UDS batches for these streams are suppressed while SHM is active. If no SHM is announced, UDS batches are delivered.
 - Sequences are per-topic monotonic counters. Optionally, set `TT_ROUTER_USE_TS_SEQ=1` to use timestamp-based sequences with a monotonic guard.
 - Lossless topics (Orders/Positions/AccountEvt) use tolerant backpressure: Router drops transiently for slow clients and only disconnects after sustained failures.
 
