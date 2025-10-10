@@ -14,7 +14,7 @@
 
 > Note: This project is experimental and under active development. Interfaces may change and breaking updates can occur without notice. Use at your own risk.
 
-Note: The first build will take a while as I am using an integrated duck database as a stand in for an external connection later.
+> Note: The first build will take a while as I am using an integrated duck database as a stand in for an external connection later.
 
 ## Live trading status and near‑term roadmap
 
