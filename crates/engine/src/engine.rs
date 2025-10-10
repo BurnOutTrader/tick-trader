@@ -222,7 +222,7 @@ pub enum DataTopic {
 }
 
 impl DataTopic {
-    pub(crate) fn to_topic_or_err(&self) -> anyhow::Result<Topic> {
+    pub(crate) fn to_topic_or_err(self) -> anyhow::Result<Topic> {
         match self {
             DataTopic::Ticks => Ok(Topic::Ticks),
             DataTopic::Quotes => Ok(Topic::Quotes),
@@ -359,7 +359,8 @@ impl EngineHandle {
         let (tx, rx) = oneshot::channel();
         self.inner.pending.insert(corr_id, tx);
         let req = make(corr_id);
-        let _ = self.inner.bus.handle_request(&self.inner.sub_id, req).await;
+        // forward and ignore the result here; the response path uses corr_id
+        self.inner.bus.handle_request(&self.inner.sub_id, req).await.ok();
         rx
     }
 
@@ -368,8 +369,7 @@ impl EngineHandle {
         let topic = data_topic.to_topic_or_err()?;
         // Ensure vendor watch is running for this provider
         self.ensure_vendor_securities_watch(key.provider).await;
-        let _ = self
-            .inner
+        self.inner
             .bus
             .handle_request(
                 &self.inner.sub_id,
@@ -390,8 +390,7 @@ impl EngineHandle {
         key: SymbolKey,
     ) -> anyhow::Result<()> {
         let topic = data_topic.to_topic_or_err()?;
-        let _ = self
-            .inner
+        self.inner
             .bus
             .handle_request(
                 &self.inner.sub_id,
@@ -657,12 +656,12 @@ impl EngineRuntime {
         let corr_id = self.next_corr_id.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = oneshot::channel();
         self.pending.insert(corr_id, tx);
-        // Forward to server via client bus using our own sub_id
         let req = make(corr_id);
-        let _ = self
+        self
             .bus
-            .handle_request(&self.sub_id.as_ref().expect("engine started"), req)
-            .await;
+            .handle_request(self.sub_id.as_ref().expect("engine started"), req)
+            .await
+            .ok();
         rx
     }
 
@@ -733,24 +732,18 @@ impl EngineRuntime {
         self.ensure_vendor_securities_watch(key.provider).await;
         // Forward to server
         self.bus
-            .handle_request(
-                self.sub_id.as_ref().expect("engine started"),
-                Request::SubscribeKey(tt_types::wire::SubscribeKey {
-                    topic,
-                    key,
-                    latest_only: false,
-                    from_seq: 0,
-                }),
-            )
+            .handle_request(self.sub_id.as_ref().expect("engine started"), Request::SubscribeKey(tt_types::wire::SubscribeKey {
+                topic,
+                key,
+                latest_only: false,
+                from_seq: 0,
+            }))
             .await?;
         Ok(())
     }
     pub async fn unsubscribe_symbol(&self, topic: Topic, key: SymbolKey) -> anyhow::Result<()> {
         self.bus
-            .handle_request(
-                self.sub_id.as_ref().expect("engine started"),
-                Request::UnsubscribeKey(tt_types::wire::UnsubscribeKey { topic, key }),
-            )
+            .handle_request(self.sub_id.as_ref().expect("engine started"), Request::UnsubscribeKey(tt_types::wire::UnsubscribeKey { topic, key }))
             .await?;
         Ok(())
     }
@@ -761,15 +754,12 @@ impl EngineRuntime {
         let topic = data_topic.to_topic_or_err()?;
         self.ensure_vendor_securities_watch(key.provider).await;
         self.bus
-            .handle_request(
-                self.sub_id.as_ref().expect("engine started"),
-                Request::SubscribeKey(tt_types::wire::SubscribeKey {
-                    topic,
-                    key,
-                    latest_only: false,
-                    from_seq: 0,
-                }),
-            )
+            .handle_request(self.sub_id.as_ref().expect("engine started"), Request::SubscribeKey(tt_types::wire::SubscribeKey {
+                topic,
+                key,
+                latest_only: false,
+                from_seq: 0,
+            }))
             .await?;
         Ok(())
     }
@@ -789,30 +779,21 @@ impl EngineRuntime {
         spec: tt_types::wire::PlaceOrder,
     ) -> anyhow::Result<()> {
         self.bus
-            .handle_request(
-                self.sub_id.as_ref().expect("engine started"),
-                tt_types::wire::Request::PlaceOrder(spec),
-            )
+            .handle_request(self.sub_id.as_ref().expect("engine started"), tt_types::wire::Request::PlaceOrder(spec))
             .await?;
         Ok(())
     }
 
     pub async fn cancel_order(&self, spec: tt_types::wire::CancelOrder) -> anyhow::Result<()> {
         self.bus
-            .handle_request(
-                self.sub_id.as_ref().expect("engine started"),
-                tt_types::wire::Request::CancelOrder(spec),
-            )
+            .handle_request(self.sub_id.as_ref().expect("engine started"), tt_types::wire::Request::CancelOrder(spec))
             .await?;
         Ok(())
     }
 
     pub async fn replace_order(&self, spec: tt_types::wire::ReplaceOrder) -> anyhow::Result<()> {
         self.bus
-            .handle_request(
-                self.sub_id.as_ref().expect("engine started"),
-                tt_types::wire::Request::ReplaceOrder(spec),
-            )
+            .handle_request(self.sub_id.as_ref().expect("engine started"), tt_types::wire::Request::ReplaceOrder(spec))
             .await?;
         Ok(())
     }
@@ -855,10 +836,7 @@ impl EngineRuntime {
     ) -> anyhow::Result<()> {
         let _ = self
             .bus
-            .handle_request(
-                &self.sub_id.as_ref().expect("engine started"),
-                tt_types::wire::Request::SubscribeAccount(tt_types::wire::SubscribeAccount { key }),
-            )
+            .handle_request(self.sub_id.as_ref().expect("engine started"), tt_types::wire::Request::SubscribeAccount(tt_types::wire::SubscribeAccount { key }))
             .await?;
         Ok(())
     }
@@ -869,12 +847,7 @@ impl EngineRuntime {
     ) -> anyhow::Result<()> {
         let _ = self
             .bus
-            .handle_request(
-                &self.sub_id.as_ref().expect("engine started"),
-                tt_types::wire::Request::UnsubscribeAccount(tt_types::wire::UnsubscribeAccount {
-                    key,
-                }),
-            )
+            .handle_request(self.sub_id.as_ref().expect("engine started"), tt_types::wire::Request::UnsubscribeAccount(tt_types::wire::UnsubscribeAccount { key }))
             .await?;
         Ok(())
     }
@@ -1009,10 +982,8 @@ impl EngineRuntime {
         instrument: &Instrument,
     ) -> bool {
         let st = self.state.lock().await;
-        if let Some(pb) = &st.last_positions {
-            if let Some(p) = pb.positions.iter().find(|p| &p.instrument == instrument) {
-                return p.side == PositionSide::Long;
-            }
+        if let Some(pb) = &st.last_positions && let Some(p) = pb.positions.iter().find(|p| &p.instrument == instrument) {
+            return p.side == PositionSide::Long;
         }
         false
     }
@@ -1022,10 +993,8 @@ impl EngineRuntime {
         instrument: &Instrument,
     ) -> bool {
         let st = self.state.lock().await;
-        if let Some(pb) = &st.last_positions {
-            if let Some(p) = pb.positions.iter().find(|p| &p.instrument == instrument) {
-                return p.side == PositionSide::Short;
-            }
+        if let Some(pb) = &st.last_positions && let Some(p) = pb.positions.iter().find(|p| &p.instrument == instrument) {
+            return p.side == PositionSide::Short;
         }
         false
     }
@@ -1035,10 +1004,8 @@ impl EngineRuntime {
         instrument: &Instrument,
     ) -> bool {
         let st = self.state.lock().await;
-        if let Some(pb) = &st.last_positions {
-            if let Some(_) = pb.positions.iter().find(|p| &p.instrument == instrument) {
-                return false;
-            }
+        if let Some(pb) = &st.last_positions && pb.positions.iter().find(|p| &p.instrument == instrument).is_some() {
+            return false;
         }
         true
     }
@@ -1156,11 +1123,11 @@ impl EngineRuntime {
                         provider_kind,
                         ..
                     }) => {
-                        let pk = provider_kind.clone();
+                        let pk = provider_kind;
                         for t in ticks {
                             // Update portfolio marks then deliver to strategy
-                            pm.update_apply_last_price(pk.clone(), &t.instrument, t.price);
-                            strategy_for_task.on_tick(&t, provider_kind.clone());
+                            pm.update_apply_last_price(pk, &t.instrument, t.price);
+                            strategy_for_task.on_tick(&t, provider_kind);
                         }
                     }
                     Response::QuoteBatch(QuoteBatch {
@@ -1168,13 +1135,13 @@ impl EngineRuntime {
                         provider_kind,
                         ..
                     }) => {
-                        let pk = provider_kind.clone();
+                        let pk = provider_kind;
                         for q in quotes {
                             // Use mid-price as mark
                             let mid = (q.bid + q.ask) / rust_decimal::Decimal::from(2);
-                            pm.update_apply_last_price(pk.clone(), &q.instrument, mid);
+                            pm.update_apply_last_price(pk, &q.instrument, mid);
                             trace!(instrument = %q.instrument, provider = ?provider_kind, "strategy.on_quote");
-                            strategy_for_task.on_quote(&q, provider_kind.clone());
+                            strategy_for_task.on_quote(&q, provider_kind);
                         }
                     }
                     Response::BarBatch(BarBatch {
@@ -1182,18 +1149,18 @@ impl EngineRuntime {
                         provider_kind,
                         ..
                     }) => {
-                        let pk = provider_kind.clone();
+                        let pk = provider_kind;
                         for b in bars {
                             // Use close as mark
-                            pm.update_apply_last_price(pk.clone(), &b.instrument, b.close);
-                            strategy_for_task.on_bar(&b, provider_kind.clone());
+                            pm.update_apply_last_price(pk, &b.instrument, b.close);
+                            strategy_for_task.on_bar(&b, provider_kind);
                         }
                     }
                     Response::MBP10Batch(ob) => {
                         // Derive a mark from MBP10: prefer mid from level 0 if present, else event.price
                         let ev = &ob.event;
                         let mark = if let Some(book) = &ev.book {
-                            if let (Some(b0), Some(a0)) = (book.bid_px.get(0), book.ask_px.get(0)) {
+                            if let (Some(b0), Some(a0)) = (book.bid_px.first(), book.ask_px.first()) {
                                 (*b0 + *a0) / rust_decimal::Decimal::from(2)
                             } else {
                                 ev.price
@@ -1201,7 +1168,7 @@ impl EngineRuntime {
                         } else {
                             ev.price
                         };
-                        pm.update_apply_last_price(ob.provider_kind.clone(), &ev.instrument, mark);
+                        pm.update_apply_last_price(ob.provider_kind, &ev.instrument, mark);
                         strategy_for_task.on_mbp10(&ob.event, ob.provider_kind);
                     }
                     Response::OrdersBatch(ob) => {
@@ -1238,8 +1205,8 @@ impl EngineRuntime {
                             // Deliver adjusted positions batch to strategy (by-ref, sync)
                             let st = state.lock().await;
                             for p in pb.positions.iter_mut() {
-                                if p.open_pnl == rust_decimal::Decimal::ZERO {
-                                    if let Some(ep) = st.last_positions.as_ref() {
+                                if p.open_pnl == rust_decimal::Decimal::ZERO
+                                    && let Some(ep) = st.last_positions.as_ref() {
                                         for ep in ep.positions.iter() {
                                             if p.provider_kind == ep.provider_kind
                                                 && p.instrument == ep.instrument
@@ -1249,10 +1216,9 @@ impl EngineRuntime {
                                             }
                                         }
                                     }
-                                }
-                            }
-                            strategy_for_task.on_positions_batch(&pb);
-                        }
+                             }
+                             strategy_for_task.on_positions_batch(&pb);
+                         }
                     }
                     Response::AccountDeltaBatch(mut ab) => {
                         {
@@ -1287,42 +1253,21 @@ impl EngineRuntime {
                         pm.apply_closed_trades(t.clone());
                         strategy_for_task.on_trades_closed(t);
                     }
-                    Response::Tick {
-                        tick,
-                        provider_kind,
-                    } => {
-                        pm.update_apply_last_price(
-                            provider_kind.clone(),
-                            &tick.instrument,
-                            tick.price,
-                        );
+                    Response::Tick { tick, provider_kind } => {
+                        pm.update_apply_last_price(provider_kind, &tick.instrument, tick.price);
                         strategy_for_task.on_tick(&tick, provider_kind);
                     }
                     Response::Quote { bbo, provider_kind } => {
                         let mid = (bbo.bid + bbo.ask) / rust_decimal::Decimal::from(2);
-                        pm.update_apply_last_price(provider_kind.clone(), &bbo.instrument, mid);
+                        pm.update_apply_last_price(provider_kind, &bbo.instrument, mid);
                         strategy_for_task.on_quote(&bbo, provider_kind);
                     }
-                    Response::Bar {
-                        candle,
-                        provider_kind,
-                    } => {
-                        pm.update_apply_last_price(
-                            provider_kind.clone(),
-                            &candle.instrument,
-                            candle.close,
-                        );
+                    Response::Bar { candle, provider_kind } => {
+                        pm.update_apply_last_price(provider_kind, &candle.instrument, candle.close);
                         strategy_for_task.on_bar(&candle, provider_kind);
                     }
-                    Response::Mbp10 {
-                        mbp10,
-                        provider_kind,
-                    } => {
-                        pm.update_apply_last_price(
-                            provider_kind.clone(),
-                            &mbp10.instrument,
-                            mbp10.price,
-                        );
+                    Response::Mbp10 { mbp10, provider_kind } => {
+                        pm.update_apply_last_price(provider_kind, &mbp10.instrument, mbp10.price);
                         strategy_for_task.on_mbp10(&mbp10, provider_kind);
                     }
                     Response::AnnounceShm(ann) => {
@@ -1335,8 +1280,8 @@ impl EngineRuntime {
                             let handle: JoinHandle<()> = tokio::spawn(async move {
                                 let mut last_seq: u32 = 0;
                                 loop {
-                                    if let Some(reader) = tt_shm::ensure_reader(topic, &value) {
-                                        if let Some((seq, buf)) = reader.read_with_seq() {
+                                    if let Some(reader) = tt_shm::ensure_reader(topic, &value)
+                                        && let Some((seq, buf)) = reader.read_with_seq() {
                                             if seq != last_seq {
                                                 last_seq = seq;
                                                 let maybe_resp = match topic {
@@ -1360,17 +1305,14 @@ impl EngineRuntime {
                                                         }),
                                                     _ => None,
                                                 };
-                                                if let Some(resp) = maybe_resp {
-                                                    if tx_shm.try_send(resp).is_err() {
-                                                        error!("tx shm task is panicked");
-                                                    }
+                                                if let Some(resp) = maybe_resp && tx_shm.try_send(resp).is_err() {
+                                                    error!("tx shm task is panicked");
                                                 }
-                                            }
-                                        }
+                                             }
+                                         }
                                     }
                                     tokio::time::sleep(Duration::from_millis(5)).await;
-                                }
-                            });
+                             });
                             shm_tasks.insert((topic, key), handle);
                         }
                     }
@@ -1532,21 +1474,22 @@ impl EngineRuntime {
 
     pub async fn stop(&mut self) -> anyhow::Result<()> {
         info!("engine: stopping");
-        let _ = self.bus.handle_request(
-            &self.sub_id.as_ref().expect("engine started"),
-            tt_types::wire::Request::Kick(Kick {
+        // Send Kick to bus; await to ensure delivery attempt before shutdown
+        self.bus
+            .handle_request(self.sub_id.as_ref().expect("engine started"), tt_types::wire::Request::Kick(Kick {
                 reason: Some("Shutting Down".to_string()),
-            }),
-        );
-        if let Some(handle) = self.task.take() {
-            handle.abort();
-        }
-        for task in self.shm_tasks.iter() {
-            task.abort();
-        }
-        self.rx.take();
-        info!("engine: shutdown complete");
-        Ok(())
+            }))
+            .await
+            .ok();
+         if let Some(handle) = self.task.take() {
+             handle.abort();
+         }
+         for task in self.shm_tasks.iter() {
+             task.abort();
+         }
+         self.rx.take();
+         info!("engine: shutdown complete");
+         Ok(())
     }
 
     // Account state getters
