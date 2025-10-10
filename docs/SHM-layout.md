@@ -7,6 +7,12 @@
 
 This document defines the shared memory (SHM) segment format and lifecycle used for hot market data feeds (Ticks, Quotes, Depth/OrderBook).
 
+Policy summary (current):
+- Providers/adapters write hot feed snapshots to SHM per (topic,key).
+- Router emits Response::AnnounceShm for each (topic,key) when available and caches it for late subscribers.
+- Engine prefers SHM for hot feeds: upon AnnounceShm it spawns a polling reader per (topic,key) and does NOT consume duplicate UDS data for those topics while SHM is active.
+- UDS remains for control-plane and lossless/account topics, and as fallback if SHM is not announced.
+
 ## 🏷️ Segment naming
 
 Segments are file-backed objects created under /dev/shm (or /tmp as a fallback) with names:

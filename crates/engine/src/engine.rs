@@ -30,6 +30,10 @@ use tt_types::wire::{
     AccountDeltaBatch, BarBatch, Kick, OrdersBatch, PositionsBatch, QuoteBatch, Request, Response,
     TickBatch, Trade,
 };
+// SHM snapshots
+use tt_shm;
+// Bytes trait for rkyv deserialization of individual items
+use tt_types::wire::Bytes as WireBytes;
 
 #[derive(Default)]
 pub struct Caches {
@@ -1033,6 +1037,7 @@ impl EngineRuntime {
         // Start processing task BEFORE invoking strategy.on_start so correlated responses can be handled during on_start
         let strategy_for_task = strategy.clone();
         let pm = self.portfolio_manager.clone();
+        let shm_tasks = self.shm_tasks.clone();
         let handle_task = tokio::spawn(async move {
             let mut rx = rx;
             while let Some(resp) = rx.recv().await {
@@ -1195,8 +1200,97 @@ impl EngineRuntime {
                         let mut strat = strategy_for_task.lock().await;
                         strat.on_bar(candle, provider_kind).await;
                     }
-                    Response::AnnounceShm(_) => {
-                        //todo, we need to prefer this, run a benchmark, if slower or same, remove shm
+                    Response::AnnounceShm(ann) => {
+                        use tokio::task::JoinHandle;
+                        let topic = ann.topic;
+                        let key = ann.key.clone();
+                        // Start a SHM polling task if not already running for this (topic,key)
+                        if shm_tasks.get(&(topic, key.clone())).is_none() {
+                            let strategy_for_task = strategy_for_task.clone();
+                            let pm = pm.clone();
+                            let key_for_task = key.clone();
+                            let handle: JoinHandle<()> = tokio::spawn(async move {
+                                // Try to open reader; if not yet created by provider, retry with backoff
+                                let mut last_seq: u32 = 0;
+                                loop {
+                                    // Ensure reader exists
+                                    let reader_opt = tt_shm::ensure_reader(topic, &key_for_task);
+                                    if let Some(reader) = reader_opt {
+                                        if let Some((seq, buf)) = reader.read_with_seq() {
+                                            if seq != last_seq {
+                                                last_seq = seq;
+                                                match topic {
+                                                    Topic::Quotes => {
+                                                        if let Ok(bbo) = Bbo::from_bytes(&buf) {
+                                                            let mid = (bbo.bid + bbo.ask)
+                                                                / rust_decimal::Decimal::from(2);
+                                                            pm.update_apply_last_price(
+                                                                key_for_task.provider,
+                                                                &bbo.instrument,
+                                                                mid,
+                                                            );
+                                                            let mut strat =
+                                                                strategy_for_task.lock().await;
+                                                            strat
+                                                                .on_quote(
+                                                                    bbo,
+                                                                    key_for_task.provider,
+                                                                )
+                                                                .await;
+                                                        }
+                                                    }
+                                                    Topic::Ticks => {
+                                                        if let Ok(t) = Tick::from_bytes(&buf) {
+                                                            pm.update_apply_last_price(
+                                                                key.provider,
+                                                                &t.instrument,
+                                                                t.price,
+                                                            );
+                                                            let mut strat =
+                                                                strategy_for_task.lock().await;
+                                                            strat.on_tick(t, key.provider).await;
+                                                        }
+                                                    }
+                                                    Topic::MBP10 => {
+                                                        if let Ok(m) = Mbp10::from_bytes(&buf) {
+                                                            // Derive mark from mbp10 level 0
+                                                            let mark = if let Some(book) = &m.book {
+                                                                if let (Some(b0), Some(a0)) = (
+                                                                    book.bid_px.get(0),
+                                                                    book.ask_px.get(0),
+                                                                ) {
+                                                                    (*b0 + *a0)
+                                                                        / rust_decimal::Decimal::from(2)
+                                                                } else {
+                                                                    m.price
+                                                                }
+                                                            } else {
+                                                                m.price
+                                                            };
+                                                            pm.update_apply_last_price(
+                                                                key_for_task.provider,
+                                                                &m.instrument,
+                                                                mark,
+                                                            );
+                                                            let mut strat =
+                                                                strategy_for_task.lock().await;
+                                                            strat
+                                                                .on_mbp10(m, key_for_task.provider)
+                                                                .await;
+                                                        }
+                                                    }
+                                                    // Bars and other topics are not published via SHM in current adapters; ignore
+                                                    _ => {}
+                                                }
+                                            }
+                                        }
+                                    }
+                                    // Avoid busy-looping
+                                    tokio::time::sleep(Duration::from_millis(5)).await;
+                                }
+                            });
+                            shm_tasks.insert((topic, key), handle);
+                        }
                     }
                     Response::SubscribeResponse {
                         topic,
@@ -1208,6 +1302,23 @@ impl EngineRuntime {
                         strat.on_subscribe(instrument, data_topic, success).await;
                     }
                     Response::UnsubscribeResponse { topic, instrument } => {
+                        // Stop any SHM polling task(s) for this topic/instrument
+                        let to_remove: Vec<(Topic, SymbolKey)> = shm_tasks
+                            .iter()
+                            .filter_map(|e| {
+                                let (t, k) = (e.key().0, e.key().1.clone());
+                                if t == topic && k.instrument == instrument {
+                                    Some((t, k))
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+                        for (tk, kk) in to_remove {
+                            if let Some((_, handle)) = shm_tasks.remove(&(tk, kk)) {
+                                handle.abort();
+                            }
+                        }
                         let data_topic = DataTopic::from(topic);
                         let mut strat = strategy_for_task.lock().await;
                         strat.on_unsubscribe(instrument, data_topic).await;

@@ -694,15 +694,8 @@ impl PxWebSocketClient {
                                             };
                                             let buf = bbo.to_aligned_bytes();
                                             tt_shm::write_snapshot(Topic::Quotes, &key, &buf);
-                                            if let Err(e) = self
-                                                .bus
-                                                .publish_quote(bbo, self.provider_kind)
-                                                .await
-                                            {
-                                                log::warn!("failed to publish quote: {}", e);
-                                            } else {
-                                                published += 1;
-                                            }
+                                            // SHM is active: avoid duplicate UDS publish
+                                            published += 1;
                                         }
                                         if published == 0 {
                                             info!(target: "projectx.ws", "GatewayQuote: parsed but no valid quotes for {}", instrument);
@@ -814,15 +807,8 @@ impl PxWebSocketClient {
                                             // Write Tick snapshot to SHM
                                             let buf = tick.to_aligned_bytes();
                                             tt_shm::write_snapshot(Topic::Ticks, &key, &buf);
-                                            if let Err(e) = self
-                                                .bus
-                                                .publish_tick(tick, self.provider_kind)
-                                                .await
-                                            {
-                                                log::warn!("failed to publish tick: {}", e);
-                                            } else {
-                                                published += 1;
-                                            }
+                                            // SHM is active: avoid duplicate UDS publish
+                                            published += 1;
                                         }
                                         if published == 0 {
                                             info!(target: "projectx.ws", "GatewayTrade: parsed but no valid ticks for {}", instrument);
@@ -1110,19 +1096,8 @@ impl PxWebSocketClient {
                                                 tt_shm::write_snapshot(Topic::MBP10, &key, &buf);
                                             }
 
-                                            if let Err(e) = self
-                                                .bus
-                                                .publish_mbp10_for_key(
-                                                    &key,
-                                                    self.provider_kind,
-                                                    event,
-                                                )
-                                                .await
-                                            {
-                                                log::warn!(target: "projectx.ws", "failed to publish MBP10: {}", e);
-                                            } else {
-                                                published += 1;
-                                            }
+                                            // SHM is active: avoid duplicate UDS publish of MBP10
+                                            published += 1;
                                         }
                                         if published == 0 {
                                             info!(target: "projectx.ws", "GatewayDepth: parsed but no valid updates for instrument");
