@@ -5,7 +5,7 @@ pub mod client;
 #[cfg(feature = "server")]
 pub mod metrics;
 
-pub use router::{Router, SubId, UpstreamManager};
+pub use router::{DbService, Router, SubId, UpstreamManager};
 
 #[cfg(feature = "server")]
 pub use metrics::METRICS;

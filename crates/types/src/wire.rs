@@ -444,6 +444,40 @@ pub struct AccountInfoResponse {
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, PartialEq, Clone, Debug)]
 #[archive(check_bytes)]
+pub struct DbGetLatest {
+    pub provider: ProviderKind,
+    pub instrument: Instrument,
+    pub topic: Topic,
+}
+
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, PartialEq, Clone, Debug)]
+#[archive(check_bytes)]
+pub struct DbGetRange {
+    pub provider: ProviderKind,
+    pub instrument: Instrument,
+    pub topic: Topic,
+    pub start: DateTime<Utc>,
+    pub end: DateTime<Utc>,
+    pub limit: u32,                 // server may clamp
+    pub page_token: Option<String>, // opaque; provided by server
+}
+
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, PartialEq, Clone, Debug)]
+#[archive(check_bytes)]
+pub struct DbGetSymbols {
+    pub provider: ProviderKind,
+    pub pattern: Option<String>,
+}
+
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, PartialEq, Clone, Debug)]
+#[archive(check_bytes)]
+pub struct DbPageInfo {
+    pub next: Option<String>,
+    pub count: u32,
+}
+
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, PartialEq, Clone, Debug)]
+#[archive(check_bytes)]
 pub enum Request {
     // Control from clients to server (coarse)
     Subscribe(Subscribe),
@@ -461,6 +495,10 @@ pub enum Request {
     Kick(Kick),
     InstrumentsRequest(InstrumentsRequest),
     InstrumentsMapRequest(InstrumentsMapRequest),
+    // Database endpoints
+    DbGetLatest(DbGetLatest),
+    DbGetRange(DbGetRange),
+    DbGetSymbols(DbGetSymbols),
     // Execution
     PlaceOrder(PlaceOrder),
     CancelOrder(CancelOrder),
@@ -489,6 +527,8 @@ pub enum Response {
     PositionsBatch(PositionsBatch),
     AccountDeltaBatch(AccountDeltaBatch),
     ClosedTrades(Vec<Trade>),
+    // DB paging info (sent alongside or after data batches)
+    DbPage(DbPageInfo),
     SubscribeResponse {
         topic: Topic,
         instrument: Instrument,

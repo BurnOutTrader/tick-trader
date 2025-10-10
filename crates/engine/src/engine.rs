@@ -1344,6 +1344,9 @@ impl EngineRuntime {
                         pm.apply_closed_trades(t.clone());
                         strategy_for_task.on_trades_closed(t);
                     }
+                    Response::DbPage(_p) => {
+                        // Paging metadata from DB queries; engine ignores for now
+                    }
                     Response::Tick {
                         tick,
                         provider_kind,

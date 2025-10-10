@@ -9,6 +9,8 @@ use std::sync::Arc;
 use tokio::net::UnixListener;
 use tracing::level_filters::LevelFilter;
 use tt_bus::Router;
+mod db_service;
+use db_service::DuckDbService;
 
 #[cfg(target_os = "linux")]
 pub fn bind_uds(path: &str) -> io::Result<UnixListener> {
@@ -142,6 +144,34 @@ async fn main() -> anyhow::Result<()> {
     mgr.update_historical_database(req).await?;*/
 
     router.set_backend(mgr);
+
+    // Initialize DB service with limits/timeouts
+    let max_rows: u32 = std::env::var("TT_DB_MAX_ROWS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(10_000);
+    let timeout_ms: u64 = std::env::var("TT_DB_TIMEOUT_MS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(3_000);
+    let db = DuckDbService::new(max_rows, timeout_ms);
+    router.set_db(db);
+
+    // Spawn snapshot rotator (placeholder). In production, run DuckDB EXPORT and flip /data/current symlink.
+    let snapshot_every_ms: u64 = std::env::var("TT_SNAPSHOT_MS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(60_000);
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(snapshot_every_ms)).await;
+            tracing::debug!(
+                interval_ms = snapshot_every_ms,
+                "snapshot rotator tick (placeholder)"
+            );
+            // TODO: call DuckDB EXPORT and update symlink atomically
+        }
+    });
 
     loop {
         let (sock, _addr) = listener.accept().await?;

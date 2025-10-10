@@ -19,6 +19,7 @@ use tt_types::keys::{AccountKey, SymbolKey, Topic};
 use tt_types::providers::ProviderKind;
 use tt_types::securities::security::FuturesContract;
 use tt_types::wire::Bytes as WireBytes;
+use tt_types::wire::{DbGetLatest, DbGetRange, DbGetSymbols, DbPageInfo};
 use tt_types::wire::{Request, Response, WireMessage};
 
 const LOSSLESS_BP_KICK_THRESHOLD: u32 = 2048;
@@ -85,6 +86,7 @@ pub struct SubscriberMeta {
 
 #[derive(Clone)]
 pub struct Router {
+    db: Arc<std::sync::RwLock<Option<Arc<dyn DbService>>>>,
     subscribers: Arc<DashMap<SubId, mpsc::Sender<Response>>>,
     meta: Arc<DashMap<SubId, SubscriberMeta>>,
     next_id: Arc<AtomicU64>,
@@ -110,6 +112,16 @@ pub struct Router {
     // Account-interest tracking for execution streams
     account_subs: Arc<DashMap<AccountKey, HashSet<SubId>>>,
     accounts_by_client: Arc<DashMap<SubId, HashSet<AccountKey>>>,
+}
+
+#[async_trait::async_trait]
+pub trait DbService: Send + Sync {
+    async fn get_latest(&self, req: DbGetLatest) -> anyhow::Result<Option<Response>>;
+    async fn get_range(
+        &self,
+        req: DbGetRange,
+    ) -> anyhow::Result<(Vec<Response>, Option<DbPageInfo>)>;
+    async fn get_symbols(&self, req: DbGetSymbols) -> anyhow::Result<Response>;
 }
 
 #[async_trait::async_trait]
@@ -162,6 +174,7 @@ impl Router {
             sub_index.push(DashMap::new());
         }
         Self {
+            db: Arc::new(std::sync::RwLock::new(None)),
             subscribers: Arc::new(DashMap::new()),
             meta: Arc::new(DashMap::new()),
             next_id: Arc::new(AtomicU64::new(1)),
@@ -183,6 +196,12 @@ impl Router {
     pub fn set_backend(&self, mgr: Arc<dyn UpstreamManager>) {
         let mut g = self.backend.write().unwrap();
         *g = Some(mgr);
+    }
+
+    // Database service used for UDS DB endpoints
+    pub fn set_db(&self, svc: Arc<dyn DbService>) {
+        let mut g = self.db.write().unwrap();
+        *g = Some(svc);
     }
 
     pub async fn attach_client(&self, sock: UnixStream) -> Result<()> {
@@ -266,6 +285,93 @@ impl Router {
 
     async fn handle_request(&self, id: &SubId, req: Request) -> Result<()> {
         match req {
+            Request::DbGetLatest(r) => {
+                if let Some(db) = self.db.read().unwrap().as_ref().cloned() {
+                    let router = self.clone();
+                    let id2 = id.clone();
+                    tokio::spawn(async move {
+                        match db.get_latest(r).await {
+                            Ok(Some(resp)) => {
+                                let _ = router.send_to(&id2, resp).await;
+                            }
+                            Ok(None) => {}
+                            Err(e) => {
+                                let _ = router
+                                    .send_to(
+                                        &id2,
+                                        Response::VendorData(tt_types::wire::VendorData {
+                                            topic: Topic::Other,
+                                            seq: 0,
+                                            data: format!("db_error: {}", e).into_bytes(),
+                                        }),
+                                    )
+                                    .await;
+                            }
+                        }
+                    });
+                } else {
+                    warn!(sub_id = %id.0, "router.db: no service set");
+                }
+            }
+            Request::DbGetRange(r) => {
+                if let Some(db) = self.db.read().unwrap().as_ref().cloned() {
+                    let router = self.clone();
+                    let id2 = id.clone();
+                    tokio::spawn(async move {
+                        match db.get_range(r).await {
+                            Ok((resps, page)) => {
+                                for resp in resps {
+                                    let _ = router.send_to(&id2, resp).await;
+                                }
+                                if let Some(p) = page {
+                                    let _ = router.send_to(&id2, Response::DbPage(p)).await;
+                                }
+                            }
+                            Err(e) => {
+                                let _ = router
+                                    .send_to(
+                                        &id2,
+                                        Response::VendorData(tt_types::wire::VendorData {
+                                            topic: Topic::Other,
+                                            seq: 0,
+                                            data: format!("db_error: {}", e).into_bytes(),
+                                        }),
+                                    )
+                                    .await;
+                            }
+                        }
+                    });
+                } else {
+                    warn!(sub_id = %id.0, "router.db: no service set");
+                }
+            }
+            Request::DbGetSymbols(r) => {
+                if let Some(db) = self.db.read().unwrap().as_ref().cloned() {
+                    let router = self.clone();
+                    let id2 = id.clone();
+                    tokio::spawn(async move {
+                        match db.get_symbols(r).await {
+                            Ok(resp) => {
+                                let _ = router.send_to(&id2, resp).await;
+                            }
+                            Err(e) => {
+                                let _ = router
+                                    .send_to(
+                                        &id2,
+                                        Response::VendorData(tt_types::wire::VendorData {
+                                            topic: Topic::Other,
+                                            seq: 0,
+                                            data: format!("db_error: {}", e).into_bytes(),
+                                        }),
+                                    )
+                                    .await;
+                            }
+                        }
+                    });
+                } else {
+                    warn!(sub_id = %id.0, "router.db: no service set");
+                }
+            }
             Request::Subscribe(s) => {
                 // Track topic; credits are server-managed (abolished for clients)
                 if let Some(mut meta) = self.meta.get_mut(id) {
