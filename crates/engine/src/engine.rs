@@ -267,6 +267,8 @@ pub struct EngineRuntime {
     portfolio_manager: Arc<PortfolioManager>,
     // Bounded command queue drained by engine loop
     pub(crate) cmd_q: Arc<ArrayQueue<Command>>,
+    // Map our EngineUuid -> provider's order id string (populated from order updates)
+    provider_order_ids: Arc<DashMap<EngineUuid, String>>,
 }
 
 // Shared view used by EngineHandle
@@ -279,6 +281,8 @@ pub(crate) struct EngineRuntimeShared {
     watching_providers: Arc<DashMap<ProviderKind, ()>>,
     state: Arc<Mutex<EngineAccountsState>>,
     portfolio_manager: Arc<PortfolioManager>,
+    // Map our EngineUuid -> provider's order id string (populated from order updates)
+    provider_order_ids: Arc<DashMap<EngineUuid, String>>,
 }
 
 // Non-blocking commands enqueued by the strategy/handle and drained by the engine task
@@ -286,8 +290,8 @@ enum Command {
     Subscribe { topic: Topic, key: SymbolKey },
     Unsubscribe { topic: Topic, key: SymbolKey },
     Place(tt_types::wire::PlaceOrder),
-    Cancel(tt_types::wire::CancelOrder),
-    Replace(tt_types::wire::ReplaceOrder),
+    Cancel(tt_types::wire::CancelOrder, EngineUuid),
+    Replace(tt_types::wire::ReplaceOrder, EngineUuid),
 }
 
 #[derive(Clone)]
@@ -330,6 +334,15 @@ impl EngineHandle {
     #[inline]
     pub fn is_flat(&self, instr: &Instrument) -> bool {
         self.inner.portfolio_manager.is_flat(instr)
+    }
+    #[inline]
+    pub fn open_orders_for_instrument(
+        &self,
+        instr: &Instrument,
+    ) -> Vec<tt_types::accounts::events::OrderUpdate> {
+        self.inner
+            .portfolio_manager
+            .open_orders_for_instrument(instr)
     }
 
     async fn request_with_corr<F>(&self, make: F) -> oneshot::Receiver<Response>
@@ -421,48 +434,41 @@ impl EngineHandle {
         }
     }
 
-    pub async fn cancel_order(&self, spec: tt_types::wire::CancelOrder) -> anyhow::Result<()> {
-        let _ = self
-            .inner
-            .bus
-            .handle_request(
-                &self.inner.sub_id,
-                tt_types::wire::Request::CancelOrder(spec),
-            )
-            .await?;
-        Ok(())
+    // Fire-and-forget: enqueue cancel; engine task performs I/O
+    pub fn cancel_order(&self, _provider_kind: ProviderKind, account_name: AccountName, order_id: EngineUuid) -> anyhow::Result<()> {
+        // Look up provider order ID from map populated by order updates
+        if let Some(pid) = self.inner.provider_order_ids.get(&order_id) {
+            let spec = tt_types::wire::CancelOrder {
+                account_name,
+                provider_order_id: pid.value().clone(),
+            };
+            let _ = self.cmd_q.push(Command::Cancel(spec, order_id));
+            Ok(())
+        } else {
+            Err(anyhow!("provider_order_id not known for engine order {}", order_id))
+        }
     }
-    pub async fn replace_order(&self, spec: tt_types::wire::ReplaceOrder) -> anyhow::Result<()> {
-        let _ = self
-            .inner
-            .bus
-            .handle_request(
-                &self.inner.sub_id,
-                tt_types::wire::Request::ReplaceOrder(spec),
-            )
-            .await?;
-        Ok(())
+    // Fire-and-forget: enqueue replace; engine task performs I/O
+    pub fn replace_order(&self, _provider_kind: ProviderKind, account_name: AccountName, incoming: tt_types::wire::ReplaceOrder, order_id: EngineUuid) -> anyhow::Result<()> {
+        if let Some(pid) = self.inner.provider_order_ids.get(&order_id) {
+            let spec = tt_types::wire::ReplaceOrder {
+                account_name,
+                provider_order_id: pid.value().clone(),
+                new_qty: incoming.new_qty,
+                new_limit_price: incoming.new_limit_price,
+                new_stop_price: incoming.new_stop_price,
+                new_trail_price: incoming.new_trail_price,
+            };
+            let _ = self.cmd_q.push(Command::Replace(spec, order_id));
+            Ok(())
+        } else {
+            Err(anyhow!("provider_order_id not known for engine order {}", order_id))
+        }
     }
-
-    async fn send_order_to_execution_provider(
-        &self,
-        spec: tt_types::wire::PlaceOrder,
-    ) -> anyhow::Result<()> {
-        let _ = self
-            .inner
-            .bus
-            .handle_request(
-                &self.inner.sub_id,
-                tt_types::wire::Request::PlaceOrder(spec),
-            )
-            .await?;
-        Ok(())
-    }
-
-    /// Convenience: construct a `PlaceOrder` from parameters and send it.
+    /// Convenience: construct a `PlaceOrder` from parameters and enqueue it.
     /// This keeps strategies from having to allocate and own a full `PlaceOrder` struct.
     /// Do not use +oId: as part of your order's custom tag, it is reserved for internal order management
-    pub async fn place_order(
+    pub fn place_order(
         &self,
         account_name: tt_types::accounts::account::AccountName,
         key: tt_types::keys::SymbolKey,
@@ -491,11 +497,9 @@ impl EngineHandle {
             stop_loss,
             take_profit,
         };
-
-        match self.send_order_to_execution_provider(spec).await {
-            Ok(_) => Ok(engine_uuid),
-            Err(e) => Err(anyhow!("Failed to send order to execution provider: {}", e)),
-        }
+        // Fire-and-forget: enqueue; engine task will send to execution provider
+        let _ = self.cmd_q.push(Command::Place(spec));
+        Ok(engine_uuid)
     }
 
     // Accounts/positions (cached snapshots)
@@ -760,7 +764,7 @@ impl EngineRuntime {
     }
 
     // Orders API helpers
-    pub async fn place_order(&self, spec: tt_types::wire::PlaceOrder) -> anyhow::Result<()> {
+    pub async fn send_order_for_execution(&self, spec: tt_types::wire::PlaceOrder) -> anyhow::Result<()> {
         let _ = self
             .bus
             .handle_request(
@@ -821,7 +825,7 @@ impl EngineRuntime {
             stop_loss,
             take_profit,
         };
-        self.place_order(spec).await
+        self.send_order_for_execution(spec).await
     }
 
     // Account interest: auto-subscribe all execution streams for an account
@@ -1038,6 +1042,7 @@ impl EngineRuntime {
             shm_tasks: Arc::new(DashMap::new()),
             portfolio_manager: Arc::new(PortfolioManager::new(instruments)),
             cmd_q: Arc::new(ArrayQueue::new(4096)),
+            provider_order_ids: Arc::new(DashMap::new()),
         }
     }
 
@@ -1061,6 +1066,7 @@ impl EngineRuntime {
             watching_providers: self.watching_providers.clone(),
             state: self.state.clone(),
             portfolio_manager: self.portfolio_manager.clone(),
+            provider_order_ids: self.provider_order_ids.clone(),
         };
         let handle = EngineHandle {
             inner: Arc::new(shared),
@@ -1179,8 +1185,20 @@ impl EngineRuntime {
                     }
                     Response::OrdersBatch(ob) => {
                         {
+                            // Update portfolio open orders view
+                            pm.apply_orders_batch(ob.clone());
+                        }
+                        {
                             let mut st = state.lock().await;
                             st.last_orders = Some(ob.clone());
+                        }
+                        {
+                            // Populate provider order ID map from updates
+                            for o in ob.orders.iter() {
+                                if let Some(pid) = &o.provider_order_id {
+                                    handle_inner_for_task.provider_order_ids.insert(o.order_id, pid.0.clone());
+                                }
+                            }
                         }
                         {
                             strategy_for_task.on_orders_batch(&ob);
@@ -1413,10 +1431,10 @@ impl EngineRuntime {
                 Command::Place(spec) => {
                     let _ = bus.handle_request(&sub_id, Request::PlaceOrder(spec)).await;
                 }
-                Command::Cancel(spec) => {
+                Command::Cancel(spec, _) => {
                     let _ = bus.handle_request(&sub_id, Request::CancelOrder(spec)).await;
                 }
-                Command::Replace(spec) => {
+                Command::Replace(spec, _) => {
                     let _ = bus.handle_request(&sub_id, Request::ReplaceOrder(spec)).await;
                 }
             }

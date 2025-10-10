@@ -669,7 +669,7 @@ impl ExecutionProvider for PXClient {
                     stop_loss_bracket,
                     take_profit_bracket,
                 };
-                info!("place order request: {:?}", req);
+                //info!("place order request: {:?}", req);
                 let res = self.http.inner.place_order(&req).await;
                 return match res {
                     Ok(r) => {
