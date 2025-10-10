@@ -104,7 +104,7 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-There are stratey helpers for queries, like portfolio, orders, positions etc, you access these via the engine handle
+There are strategy helpers for queries, like portfolio, orders, positions etc, you access these via the engine handle
 ```rust
 fn on_start(&mut self, _h: EngineHandle) {}
 ```
