@@ -5,7 +5,7 @@ use rust_decimal::prelude::ToPrimitive;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 use tokio::time::{Duration as TokioDuration, timeout};
@@ -50,7 +50,7 @@ pub struct Entry {
 }
 
 struct DownloadManagerInner {
-    inflight: Arc<Mutex<HashMap<DownloadKey, std::sync::Arc<Entry>>>>,
+    inflight: Arc<RwLock<HashMap<DownloadKey, std::sync::Arc<Entry>>>>,
 }
 
 #[derive(Clone)]
@@ -115,7 +115,7 @@ impl DownloadManager {
     pub fn new() -> Self {
         Self {
             inner: std::sync::Arc::new(DownloadManagerInner {
-                inflight: Arc::new(Mutex::new(HashMap::new())),
+                inflight: Arc::new(RwLock::new(HashMap::new())),
             }),
         }
     }
@@ -128,7 +128,7 @@ impl DownloadManager {
         req: HistoricalRequest,
     ) -> anyhow::Result<Option<DownloadTaskHandle>> {
         let key = DownloadKey::new(req.provider_kind, req.instrument.clone(), req.topic);
-        let guard = self.inner.inflight.lock().await;
+        let guard = self.inner.inflight.read().await;
         if let Some(entry) = guard.get(&key) {
             let handle = DownloadTaskHandle {
                 key,
@@ -150,7 +150,7 @@ impl DownloadManager {
         let key = DownloadKey::new(req.provider_kind, req.instrument.clone(), req.topic);
         // fast path: existing
         {
-            let guard = self.inner.inflight.lock().await;
+            let guard = self.inner.inflight.read().await;
             if let Some(e) = guard.get(&key) {
                 return Ok(DownloadTaskHandle {
                     key,
@@ -160,7 +160,7 @@ impl DownloadManager {
         }
         // need to create; do it with insertion lock to avoid races
         let entry_arc = {
-            let mut guard = self.inner.inflight.lock().await;
+            let mut guard = self.inner.inflight.write().await;
             if let Some(e) = guard.get(&key) {
                 e.clone()
             } else {
@@ -199,7 +199,7 @@ impl DownloadManager {
                 }
                 entry2.notify.notify_waiters();
                 // remove from inflight
-                let mut map = dm.inner.inflight.lock().await;
+                let mut map = dm.inner.inflight.write().await;
                 map.remove(&key2);
             });
             // replace the placeholder
