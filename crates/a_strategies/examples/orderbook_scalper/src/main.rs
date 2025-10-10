@@ -175,6 +175,8 @@ struct OrderBookStrategy {
     working_ask: Option<EngineUuid>,
     // Edge: avoid quoting micro spreads
     min_spread_ratio: Decimal,
+    // Debug: force place both sides regardless of edge
+    debug_force_place: bool,
 }
 #[allow(dead_code)]
 impl OrderBookStrategy {
@@ -208,7 +210,48 @@ impl OrderBookStrategy {
             can_trade: true,
             working_bid: None,
             working_ask: None,
-            min_spread_ratio: Decimal::new(5, 3), // 0.005% of mid as minimum spread edge
+            // Default very permissive to ensure activity; tune via env MIN_SPREAD_BPS
+            // 0 means disabled; MIN_SPREAD_BPS env can override at runtime
+            min_spread_ratio: Decimal::ZERO,
+            debug_force_place: false,
+        }
+    }
+
+    fn apply_env_overrides(&mut self) {
+        // MIN_SPREAD_BPS: integer bps; 1 = 0.01%; 0 disables
+        if let Ok(v) = std::env::var("MIN_SPREAD_BPS") {
+            if let Ok(bps) = v.parse::<i64>() {
+                self.min_spread_ratio = Decimal::from(bps) / Decimal::from(10_000i64);
+                println!("CFG: MIN_SPREAD_BPS={} -> ratio {}", bps, self.min_spread_ratio);
+            }
+        }
+        if let Ok(v) = std::env::var("STALE_MULT") {
+            if let Ok(m) = v.parse::<u32>() {
+                self.stale_spread_mult = m;
+                println!("CFG: STALE_MULT={}", m);
+            }
+        }
+        if let Ok(v) = std::env::var("PLACE_COOLDOWN_MS") {
+            if let Ok(ms) = v.parse::<u64>() {
+                self.place_cooldown = Duration::from_millis(ms);
+                println!("CFG: PLACE_COOLDOWN_MS={}", ms);
+            }
+        }
+        if let Ok(v) = std::env::var("CANCEL_THROTTLE_MS") {
+            if let Ok(ms) = v.parse::<u64>() {
+                self.min_cancel_interval = Duration::from_millis(ms);
+                println!("CFG: CANCEL_THROTTLE_MS={}", ms);
+            }
+        }
+        if let Ok(v) = std::env::var("MANAGE_INTERVAL_MS") {
+            if let Ok(ms) = v.parse::<u64>() {
+                self.manage_interval = Duration::from_millis(ms);
+                println!("CFG: MANAGE_INTERVAL_MS={}", ms);
+            }
+        }
+        if let Ok(v) = std::env::var("FORCE_PLACE_BOTH") {
+            self.debug_force_place = v == "1" || v.eq_ignore_ascii_case("true");
+            println!("CFG: FORCE_PLACE_BOTH={}", self.debug_force_place);
         }
     }
 
@@ -216,6 +259,7 @@ impl OrderBookStrategy {
         let now = Instant::now();
         if let Some(prev) = self.last_manage {
             if now.duration_since(prev) < self.manage_interval {
+                println!("SKIP: throttle window ({:?} < {:?})", now.duration_since(prev), self.manage_interval);
                 return false;
             }
         }
@@ -228,12 +272,14 @@ impl OrderBookStrategy {
             // Rate-limit cancels aggressively
             if let Some(prev) = self.last_cancel_at {
                 if prev.elapsed() < self.min_cancel_interval {
+                    println!("CANCEL-ALL: throttled (elapsed {:?} < {:?})", prev.elapsed(), self.min_cancel_interval);
                     return false;
                 }
             }
             let open = h.open_orders_for_instrument(&cfg.instrument);
             let mut did_cancel = false;
             for ou in open {
+                println!("CANCEL-ALL: canceling order_id={} provider={:?}", ou.order_id, ou.provider_kind);
                 {
                     // Use engine order_id with provider to cancel via engine's mapping
                     let _ = h.cancel_order(ou.provider_kind, cfg.account_name.clone(), ou.order_id);
@@ -253,6 +299,7 @@ impl OrderBookStrategy {
         if let (Some(h), Some(cfg)) = (&self.engine, &self.cfg) {
             let open = h.open_orders_for_instrument(&cfg.instrument);
             for ou in open {
+                println!("CANCEL-ALL-FORCE: canceling order_id={} provider={:?}", ou.order_id, ou.provider_kind);
                 // Force-cancel using engine order_id mapping
                 let _ = h.cancel_order(ou.provider_kind, cfg.account_name.clone(), ou.order_id);
             }
@@ -267,11 +314,15 @@ impl OrderBookStrategy {
             if let Some(order_id) = self.working_bid {
                 if !force {
                     if let Some(prev) = self.last_cancel_at {
-                        if prev.elapsed() < self.min_cancel_interval { return; }
+                        if prev.elapsed() < self.min_cancel_interval {
+                            println!("CANCEL bid throttled (elapsed {:?} < {:?})", prev.elapsed(), self.min_cancel_interval);
+                            return;
+                        }
                     }
                 }
                 let h = self.engine.as_ref().unwrap();
                 let cfg = self.cfg.as_ref().unwrap();
+                println!("CANCEL bid order_id={}", order_id);
                 let _ = h.cancel_order(cfg.provider, cfg.account_name.clone(), order_id);
                 self.last_cancel_at = Some(Instant::now());
                 self.working_bid = None;
@@ -280,11 +331,15 @@ impl OrderBookStrategy {
             if let Some(order_id) = self.working_ask {
                 if !force {
                     if let Some(prev) = self.last_cancel_at {
-                        if prev.elapsed() < self.min_cancel_interval { return; }
+                        if prev.elapsed() < self.min_cancel_interval {
+                            println!("CANCEL ask throttled (elapsed {:?} < {:?})", prev.elapsed(), self.min_cancel_interval);
+                            return;
+                        }
                     }
                 }
                 let h = self.engine.as_ref().unwrap();
                 let cfg = self.cfg.as_ref().unwrap();
+                println!("CANCEL ask order_id={}", order_id);
                 let _ = h.cancel_order(cfg.provider, cfg.account_name.clone(), order_id);
                 self.last_cancel_at = Some(Instant::now());
                 self.working_ask = None;
@@ -297,6 +352,7 @@ impl OrderBookStrategy {
         if let Some((abid, aask)) = self.anchor_bbo {
             let spread = ba_px - bb_px;
             if spread <= Decimal::ZERO {
+                println!("STALE-CHECK: invalid spread {} (<=0)", spread);
                 return false;
             }
             let move_bid = (bb_px - abid).abs();
@@ -304,11 +360,13 @@ impl OrderBookStrategy {
             let mv = if move_bid > move_ask { move_bid } else { move_ask };
             let mult = Decimal::from(self.stale_spread_mult as i64);
             if mv >= spread * mult {
+                println!("STALE-CHECK: moved_far mv={} >= spread({})*mult({})", mv, spread, mult);
                 return true;
             }
         }
         if let Some(at) = self.anchor_set_at {
             if at.elapsed() >= self.max_anchor_age {
+                println!("STALE-CHECK: anchor_age {:?} >= {:?}", at.elapsed(), self.max_anchor_age);
                 return true;
             }
         }
@@ -323,12 +381,14 @@ impl OrderBookStrategy {
         let now = Instant::now();
         if let Some(prev) = self.last_refresh_at {
             if now.duration_since(prev) < self.refresh_interval {
+                println!("STALE: skip refresh (elapsed {:?} < {:?})", now.duration_since(prev), self.refresh_interval);
                 return;
             }
         }
         let h = self.engine.as_ref().unwrap().clone();
         let cfg = self.cfg.as_ref().unwrap();
         let open = h.open_orders_for_instrument(&cfg.instrument);
+        println!("STALE: open_orders={} for {}", open.len(), cfg.instrument);
         if open.is_empty() {
             self.last_refresh_at = Some(now);
             return;
@@ -345,12 +405,15 @@ impl OrderBookStrategy {
             }
         } else {
             // Without BBO context, be conservative: do nothing except tick the refresh timer.
+            println!("STALE: no valid BBO to evaluate staleness");
         }
         self.last_refresh_at = Some(now);
     }
 
     fn ensure_quotes(&mut self) {
+        println!("ENSURE_QUOTES: begin");
         if self.engine.is_none() || self.cfg.is_none() {
+            println!("ENSURE_QUOTES: no engine or no cfg");
             return;
         }
         if !self.throttle_ok() {
@@ -363,16 +426,21 @@ impl OrderBookStrategy {
             (Some((bb_px, bb_sz)), Some((ba_px, ba_sz))) if ba_px > bb_px => {
                 ((bb_px, bb_sz), (ba_px, ba_sz))
             }
-            _ => return,
+            other => {
+                println!("ENSURE_QUOTES: missing/invalid BBO = {:?}", other);
+                return;
+            }
         };
 
         // Basic spread edge: require at least X bps of mid
         let mid = (bb_px + ba_px) / Decimal::from(2i64);
         let spread = ba_px - bb_px;
         if mid > Decimal::ZERO {
-            let min_spread = mid * self.min_spread_ratio; // e.g., 0.005% of mid
+            let min_spread = mid * self.min_spread_ratio; // e.g., X bps of mid
+            println!("BBO mid={} bid={} ask={} spread={} min_spread={} ratio={}", mid, bb_px, ba_px, spread, min_spread, self.min_spread_ratio);
             if spread < min_spread {
                 // too tight to have an edge
+                println!("ENSURE_QUOTES: skip due to min_spread gate");
                 return;
             }
         }
@@ -392,6 +460,7 @@ impl OrderBookStrategy {
             let imb = bb_sz / total_sz; // 0..1, >0.5 means bid-heavy (upward pressure)
             let upper = Decimal::new(65, 2); // 0.65
             let lower = Decimal::new(35, 2); // 0.35
+            println!("IMBALANCE: bb_sz={} ba_sz={} imb={}", bb_sz, ba_sz, imb);
             if imb >= upper {
                 // bid heavy → avoid selling into strength unless offloading inventory
                 if self.net_pos <= Decimal::ZERO { want_ask = false; }
@@ -405,6 +474,7 @@ impl OrderBookStrategy {
         let mom_up = self.trend_mom > Decimal::ZERO;
         let mom_down = self.trend_mom < Decimal::ZERO;
         let offer_threshold: Decimal = Decimal::from(100);
+        println!("MOMENTUM: trend_mom={} up={} down={} net_pos={}", self.trend_mom, mom_up, mom_down, self.net_pos);
         if self.net_pos > offer_threshold && mom_up {
             // Long and momentum up: place offers to reduce risk into strength
             want_ask = true;
@@ -426,6 +496,7 @@ impl OrderBookStrategy {
             let edge_down = tilt < -tilt_thresh && mom_down;
             let exit_override = (self.net_pos > offer_threshold && mom_up)
                 || (self.net_pos < -offer_threshold && mom_down);
+            println!("EDGE: micro={} tilt={} tilt_thresh={} up_edge={} down_edge={} exit_override={} desired_pre=({}, {})", micro, tilt, tilt_thresh, edge_up, edge_down, exit_override, want_bid, want_ask);
             if want_bid && !exit_override && !edge_down {
                 // require micro tilt down to add bids
                 want_bid = false;
@@ -442,12 +513,15 @@ impl OrderBookStrategy {
         }
 
         let desired = (want_bid, want_ask);
+        let desired = if self.debug_force_place { (true, true) } else { desired };
+        println!("DESIRED: bid={} ask={} working_bid={:?} working_ask={:?}", desired.0, desired.1, self.working_bid, self.working_ask);
 
         // Skip if desired state and BBO didn't change
         if let Some(prev_desired) = self.last_desired {
             if prev_desired == desired {
                 if let Some(prev_bbo) = self.last_bbo.clone() {
                     if prev_bbo == (bb_px, ba_px) {
+                        println!("ENSURE_QUOTES: no change in desired/BBO; skip");
                         return;
                     }
                 }
@@ -460,6 +534,7 @@ impl OrderBookStrategy {
         let moved_far = self.bbo_moved_far(bb_px, ba_px);
         if moved_far {
             // Cancel both sides forcefully if market moved far
+            println!("ENSURE_QUOTES: market moved far; force-cancel both sides");
             self.cancel_side(true, true);
             self.cancel_side(false, true);
             self.anchor_bbo = Some((bb_px, ba_px));
@@ -469,9 +544,9 @@ impl OrderBookStrategy {
         // Side-specific management: cancel undesired sides, place desired if not working and not in cooldown
         let now = Instant::now();
         // Cancel ask if not desired
-        if !want_ask { self.cancel_side(false, false); }
+        if !desired.1 { self.cancel_side(false, false); }
         // Cancel bid if not desired
-        if !want_bid { self.cancel_side(true, false); }
+        if !desired.0 { self.cancel_side(true, false); }
 
         if self.can_trade {
             // Set anchor at placement time
@@ -485,11 +560,12 @@ impl OrderBookStrategy {
                 provider: self.cfg.clone().unwrap().provider,
             };
             // BID placement
-            if want_bid && self.working_bid.is_none() {
+            if desired.0 && self.working_bid.is_none() {
                 let can_place = match self.last_place_bid_at { Some(t) => now.duration_since(t) >= self.place_cooldown, None => true };
                 if can_place {
                     self.buy_count += 1;
                     self.last_place_bid_at = Some(now);
+                    println!("PLACE BID: JoinBid qty=1 at bbo={} (count={})", bb_px, self.buy_count);
                     if let Ok(order_id) = h.place_order(
                         self.account_name.clone(),
                         key.clone(),
@@ -503,16 +579,20 @@ impl OrderBookStrategy {
                         None,
                         None,
                     ) {
+                        println!("PLACE BID: order_id={}", order_id);
                         self.working_bid = Some(order_id);
                     }
+                } else {
+                    println!("PLACE BID: cooldown; skip");
                 }
             }
             // ASK placement (FIX: JoinAsk)
-            if want_ask && self.working_ask.is_none() {
+            if desired.1 && self.working_ask.is_none() {
                 let can_place = match self.last_place_ask_at { Some(t) => now.duration_since(t) >= self.place_cooldown, None => true };
                 if can_place {
                     self.sell_count += 1;
                     self.last_place_ask_at = Some(now);
+                    println!("PLACE ASK: JoinAsk qty=1 at bbo={} (count={})", ba_px, self.sell_count);
                     if let Ok(order_id) = h.place_order(
                         self.account_name.clone(),
                         key,
@@ -526,10 +606,15 @@ impl OrderBookStrategy {
                         None,
                         None,
                     ) {
+                        println!("PLACE ASK: order_id={}", order_id);
                         self.working_ask = Some(order_id);
                     }
+                } else {
+                    println!("PLACE ASK: cooldown; skip");
                 }
             }
+        } else {
+            println!("ENSURE_QUOTES: can_trade=false; skip placements");
         }
     }
 
@@ -538,12 +623,15 @@ impl OrderBookStrategy {
         use tt_types::accounts::order::OrderState;
         if self.cfg.is_none() { return; }
         let instr = &self.cfg.as_ref().unwrap().instrument;
+        println!("ORDERS_BATCH: {} orders (instrument filter={})", ob.orders.len(), instr);
         // Build a quick set of still-open orders for our instrument
         for ou in ob.orders.iter().filter(|o| &o.instrument == instr) {
+            println!("ORDER: id={} state={:?} leaves={} avg_px={}", ou.order_id, ou.state, ou.leaves, ou.avg_fill_px);
             if let Some(wb) = self.working_bid {
                 if ou.order_id == wb {
                     // Clear tracking when no longer working
                     if matches!(ou.state, OrderState::Canceled | OrderState::Rejected | OrderState::Filled) || ou.leaves == 0 {
+                        println!("TRACK: clearing working_bid due to state/leaves");
                         self.working_bid = None;
                     }
                 }
@@ -551,6 +639,7 @@ impl OrderBookStrategy {
             if let Some(wa) = self.working_ask {
                 if ou.order_id == wa {
                     if matches!(ou.state, OrderState::Canceled | OrderState::Rejected | OrderState::Filled) || ou.leaves == 0 {
+                        println!("TRACK: clearing working_ask due to state/leaves");
                         self.working_ask = None;
                     }
                 }
@@ -559,15 +648,18 @@ impl OrderBookStrategy {
 
         // If we track an id that no longer appears for our instrument at all, drop it.
         let ids: Vec<_> = ob.orders.iter().filter(|o| &o.instrument == instr).map(|o| o.order_id).collect();
-        if let Some(wb) = self.working_bid { if !ids.contains(&wb) { self.working_bid = None; } }
-        if let Some(wa) = self.working_ask { if !ids.contains(&wa) { self.working_ask = None; } }
+        if let Some(wb) = self.working_bid { if !ids.contains(&wb) { println!("TRACK: working_bid {:?} not in snapshot; clear", wb); self.working_bid = None; } }
+        if let Some(wa) = self.working_ask { if !ids.contains(&wa) { println!("TRACK: working_ask {:?} not in snapshot; clear", wa); self.working_ask = None; } }
     }
 }
 
 impl Strategy for OrderBookStrategy {
     fn on_start(&mut self, h: EngineHandle) {
         info!("strategy start");
+        println!("CALLBACK on_start");
         self.engine = Some(h.clone());
+        // Apply env overrides early
+        self.apply_env_overrides();
 
         if self.cfg.is_none() {
             let instrument = Instrument::from_str("MNQ.Z25").unwrap();
@@ -590,20 +682,21 @@ impl Strategy for OrderBookStrategy {
 
     fn on_stop(&mut self) {
         info!("strategy stop");
+        println!("CALLBACK on_stop");
     }
 
     fn on_tick(&mut self, t: &tt_types::data::core::Tick, _provider_kind: ProviderKind) {
-        println!("{:?}", t)
+        println!("CALLBACK on_tick: {:?}", t)
     }
 
     fn on_quote(&mut self, q: &tt_types::data::core::Bbo, _provider_kind: ProviderKind) {
-        println!("{:?}", q);
+        println!("CALLBACK on_quote: {:?}", q);
     }
 
     fn on_bar(&mut self, _b: &tt_types::data::core::Candle, _provider_kind: ProviderKind) {}
 
     fn on_mbp10(&mut self, d: &Mbp10, _provider_kind: ProviderKind) {
-        //info!("{:?}", d);
+        println!("CALLBACK on_mbp10: action={:?} side={:?} price={} size={} book_present={}", d.action, d.side, d.price, d.size, d.book.is_some());
         let ob = &mut self.book;
         if let Some(ref book) = d.book {
             ob.seed_from_snapshot(book);
@@ -636,27 +729,31 @@ impl Strategy for OrderBookStrategy {
     }
 
     fn on_orders_batch(&mut self, b: &wire::OrdersBatch) {
+        println!("CALLBACK on_orders_batch: {} orders", b.orders.len());
         // Sync state of working order ids, then print
         self.sync_working_from_orders(b);
         for order in &b.orders {
-            println!("{:?}", order);
+            println!("ORDER UPDATE: {:?}", order);
         }
     }
 
     fn on_positions_batch(&mut self, b: &wire::PositionsBatch) {
+        println!("CALLBACK on_positions_batch: {} positions", b.positions.len());
         if let Some(cfg) = &self.cfg {
             if let Some(p) = b.positions.iter().find(|p| p.instrument == cfg.instrument) {
                 self.net_pos = p.net_qty;
+                println!("NET POS UPDATE: {} on {}", self.net_pos, cfg.instrument);
             }
         }
         for pos in &b.positions {
-            println!("{:?}", pos)
+            println!("POSITION: {:?}", pos)
         }
     }
 
     fn on_account_delta(&mut self, accounts: &[AccountDelta]) {
+        println!("CALLBACK on_account_delta: {} accounts", accounts.len());
         for account_delta in accounts {
-            println!("{:?}", account_delta);
+            println!("ACCOUNT: {:?}", account_delta);
             if account_delta.can_trade == false {
                 if account_delta.name == self.account_name {
                     self.can_trade = false
@@ -668,8 +765,9 @@ impl Strategy for OrderBookStrategy {
     }
 
     fn on_trades_closed(&mut self, trades: Vec<Trade>) {
+        println!("CALLBACK on_trades_closed: {} trades", trades.len());
         for trade in trades {
-            println!("{:?}", trade);
+            println!("TRADE CLOSED: {:?}", trade);
         }
     }
 
@@ -687,7 +785,7 @@ impl Strategy for OrderBookStrategy {
     }
 
     fn on_unsubscribe(&mut self, _instrument: Instrument, data_topic: DataTopic) {
-        println!("{:?}", data_topic);
+        println!("CALLBACK on_unsubscribe: {:?}", data_topic);
     }
 
     fn accounts(&self) -> Vec<AccountKey> {
@@ -701,8 +799,12 @@ impl Strategy for OrderBookStrategy {
 #[allow(dead_code)]
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    use tracing_subscriber::EnvFilter;
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info,tt_bus=info,tt_engine=info,projectx.ws=info"));
     tracing_subscriber::fmt()
-        .with_max_level(LevelFilter::INFO)
+        .with_env_filter(filter)
+        .with_target(true)
         .init();
 
     let addr = std::env::var("TT_BUS_ADDR").unwrap_or_else(|_| "/tmp/tick-trader.sock".to_string());
@@ -734,3 +836,4 @@ async fn main() -> anyhow::Result<()> {
     let _ = engine.stop().await?;
     Ok(())
 }
+
