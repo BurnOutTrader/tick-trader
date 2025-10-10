@@ -616,7 +616,7 @@ impl ExecutionProvider for PXClient {
     }
 
     async fn place_order(&self, spec: tt_types::wire::PlaceOrder) -> CommandAck {
-        info!("Order Received in ProjectX: {:?}", spec);
+        //info!("Order Received in ProjectX: {:?}", spec);
         let s = spec.clone();
         use crate::http::models::{BracketCfg, PlaceOrderReq};
         // Map typed spec to ProjectX PlaceOrderReq

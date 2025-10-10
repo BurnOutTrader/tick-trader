@@ -1108,7 +1108,7 @@ impl PxWebSocketClient {
                                 }
                             }
                             // User hub events
-                            "Gate" => {
+                            "GatewayUserAccount" => {
                                 // SignalR user event payloads come in the 'arguments' array and may be wrapped as {action, data}.
                                 let args_opt = val.get("arguments").and_then(|a| a.as_array());
                                 if let Some(args) = args_opt {
