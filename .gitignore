@@ -2,3 +2,4 @@
 *.env
 /storage
 /reference_data/*
+/a_strategies/my_strategies
