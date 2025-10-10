@@ -9,34 +9,43 @@ This guide shows how to write strategies on top of the engine, what helper APIs 
 
 ## Strategy trait: lifecycle and callbacks
 
-Implement the `Strategy` trait to receive data and lifecycle events. You pick your topics in `desired_topics`, and the engine subscribes to those coarse topics when it starts.
+Implement the Strategy trait to receive data and lifecycle events. The trait is synchronous: no async/await inside callbacks. The engine is the only task that calls your strategy, in a single-threaded, deterministic loop.
 
 Key callbacks (subset):
-- `desired_topics(&self) -> HashSet<Topic>`: which coarse topics you need (e.g., Ticks, Quotes, Depth, Candles1m).
-- Lifecycle: `on_start`, `on_stop`.
-- Market data: `on_tick(Tick)`, `on_quote(Bbo)`, `on_bar(Candle)`, `on_depth(OrderBook)`.
-- Portfolio: `on_orders_batch(OrdersBatch)`, `on_positions_batch(PositionsBatch)`, `on_account_delta_batch(AccountDeltaBatch)`.
-- Control: `on_subscribe(instrument, topic, success)`, `on_unsubscribe(instrument, topic)`.
+- Lifecycle: on_start(&mut self, EngineHandle), on_stop(&mut self)
+- Market data: on_tick(&mut self, &Tick, ProviderKind), on_quote(&mut self, &Bbo, ProviderKind), on_bar(&mut self, &Candle, ProviderKind), on_mbp10(&mut self, &Mbp10, ProviderKind)
+- Portfolio: on_orders_batch(&mut self, &OrdersBatch), on_positions_batch(&mut self, &PositionsBatch), on_account_delta(&mut self, &[AccountDelta])
+- Control: on_subscribe(&mut self, Instrument, DataTopic, bool), on_unsubscribe(&mut self, Instrument, DataTopic)
 
-Minimal skeleton:
+Minimal skeleton (sync):
 
 ```rust
-use std::collections::HashSet;
-use std::sync::Arc;
-use tt_types::keys::Topic;
-use tt_engine::engine::{EngineRuntime, Strategy};
+use tt_engine::engine::{Strategy, EngineHandle, DataTopic};
+use tt_types::{keys::SymbolKey, providers::{ProviderKind, ProjectXTenant}};
+use std::str::FromStr;
 
-struct MyStrategy;
+#[derive(Default)]
+struct MyStrategy { engine: Option<EngineHandle> }
 
-#[async_trait::async_trait]
 impl Strategy for MyStrategy {
-    fn desired_topics(&self) -> HashSet<Topic> {
-        [Topic::Ticks, Topic::Quotes, Topic::Candles1m].into_iter().collect()
+    fn on_start(&mut self, h: EngineHandle) {
+        self.engine = Some(h.clone());
+        h.subscribe_now(
+            DataTopic::MBP10,
+            SymbolKey::new(
+                tt_types::securities::symbols::Instrument::from_str("MNQ.Z25").unwrap(),
+                ProviderKind::ProjectX(ProjectXTenant::Topstep),
+            ),
+        );
     }
-    async fn on_start(&self) {}
-    async fn on_tick(&self, _t: tt_types::base_data::Tick) {}
-    async fn on_quote(&self, _q: tt_types::base_data::Bbo) {}
-    async fn on_bar(&self, _b: tt_types::base_data::Candle) {}
+
+    fn on_mbp10(&mut self, d: &tt_types::data::mbp10::Mbp10, _pk: ProviderKind) {
+        if let Some(h) = &self.engine {
+            if h.is_flat(&d.instrument) {
+                // decide → h.place_now(order_spec)
+            }
+        }
+    }
 }
 ```
 
@@ -86,34 +95,56 @@ Correlation helper
 - `request_with_corr(|corr_id| -> Request) -> oneshot::Receiver<Response>`: send a correlated Request and await a single Response. This is the basis for custom request/response patterns.
 
 Start/stop
-- `start(strategy: Arc<impl Strategy>)` attaches the engine to the bus, subscribes `desired_topics`, and begins dispatching callbacks.
+- `start(strategy: S)` where S: Strategy — engine owns your strategy by value; it invokes on_start synchronously, then runs the engine loop.
 - `stop()` cancels the task and detaches.
+
+Fire-and-forget vs async helpers
+- From callbacks, use EngineHandle::{subscribe_now, unsubscribe_now, place_now} to enqueue commands instantly.
+- For cold paths (discovery, tooling), async helpers remain: list_instruments().await, subscribe_key().await, etc.
 
 ---
 
 ## Example: subscribe to MNQ ticks and place an order
 
 ```rust
-use std::sync::Arc;
+use std::str::FromStr;
+use std::time::Duration;
+use tracing::level_filters::LevelFilter;
 use tt_bus::ClientMessageBus;
-use tt_engine::engine::{EngineRuntime, Strategy};
-use tt_types::keys::{Topic, SymbolKey};
-use tt_types::providers::ProviderKind;
-use tt_types::securities::symbols::Instrument;
+use tt_engine::engine::{EngineRuntime, Strategy, EngineHandle, DataTopic};
+use tt_types::keys::SymbolKey;
+use tt_types::providers::{ProviderKind, ProjectXTenant};
+
+#[derive(Default)]
+struct MyStrategy { engine: Option<EngineHandle> }
+
+impl Strategy for MyStrategy {
+    fn on_start(&mut self, h: EngineHandle) {
+        // Keep the handle for later and subscribe immediately (non-blocking)
+        self.engine = Some(h.clone());
+        h.subscribe_now(
+            DataTopic::Ticks,
+            SymbolKey::new(
+                tt_types::securities::symbols::Instrument::from_str("MNQ.Z25").unwrap(),
+                ProviderKind::ProjectX(ProjectXTenant::Topstep),
+            ),
+        );
+    }
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let bus = Arc::new(ClientMessageBus::connect("/tmp/tick-trader.sock").await?);
-    let mut rt = EngineRuntime::new(bus);
-    let strat = Arc::new(MyStrategy);
-    rt.start(strat.clone()).await?;
+    tracing_subscriber::fmt().with_max_level(LevelFilter::INFO).init();
 
-    let key = SymbolKey { provider: ProviderKind::ProjectX("Topstep".into()), instrument: Instrument::from_str("MNQZ25").unwrap() };
-    rt.subscribe_key(Topic::Ticks, key.clone()).await?;
+    let addr = std::env::var("TT_BUS_ADDR").unwrap_or_else(|_| "/tmp/tick-trader.sock".to_string());
+    let bus = ClientMessageBus::connect(&addr).await?; // returns Arc<ClientMessageBus>
 
-    // ... later, submit an order (example shape only)
-    // rt.place_order(tt_types::wire::PlaceOrder { /* fields */ }).await?;
+    let mut engine = EngineRuntime::new(bus.clone());
+    let strategy = MyStrategy::default();
+    let _handle = engine.start(strategy).await?;
 
+    tokio::time::sleep(Duration::from_secs(10)).await;
+    engine.stop().await?;
     Ok(())
 }
 ```
