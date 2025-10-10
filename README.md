@@ -26,6 +26,7 @@ The engine can place live orders and is intended strictly for testing and evalua
 
 - Publish a reference “live test” strategy
 - Surface EngineHandle helpers via top‑level exports
+- Move non-strategy functions and objects into features
 - Implement the backtesting engine
 - Support external databases replacing the integrated DuckDB
 - Warm up consolidators from live data plus the historical catalog
