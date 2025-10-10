@@ -96,6 +96,7 @@ pub struct RithmicCredentials {
 }
 
 impl RithmicCredentials {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         user: String,
         server_name: RithmicServer,

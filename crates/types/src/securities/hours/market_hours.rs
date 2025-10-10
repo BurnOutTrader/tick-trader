@@ -815,16 +815,14 @@ pub fn next_session_after_with(
                         Some(cur) => Some(if cand.0 < cur.0 { cand } else { cur }),
                     };
                 }
-            } else {
-                if dd > 0 || ssm_now < r.open_ssm as i64 {
-                    let open_l = mk_local(hours.tz, d, r.open_ssm);
-                    let close_l = mk_local(hours.tz, d + Duration::days(1), r.close_ssm);
-                    let cand = (open_l.with_timezone(&Utc), close_l.with_timezone(&Utc));
-                    best_open = match best_open {
-                        None => Some(cand),
-                        Some(cur) => Some(if cand.0 < cur.0 { cand } else { cur }),
-                    };
-                }
+            } else if dd > 0 || ssm_now < r.open_ssm as i64 {
+                let open_l = mk_local(hours.tz, d, r.open_ssm);
+                let close_l = mk_local(hours.tz, d + Duration::days(1), r.close_ssm);
+                let cand = (open_l.with_timezone(&Utc), close_l.with_timezone(&Utc));
+                best_open = match best_open {
+                    None => Some(cand),
+                    Some(cur) => Some(if cand.0 < cur.0 { cand } else { cur }),
+                };
             }
         }
         if let Some(b) = best_open {

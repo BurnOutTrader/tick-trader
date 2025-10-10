@@ -95,7 +95,7 @@ where
         };
 
         let mut states = self.states.lock().unwrap();
-        let deque = states.entry(key.clone()).or_insert_with(VecDeque::new);
+        let deque = states.entry(key.clone()).or_default();
 
         match Self::time_until_ready_locked(deque, limit) {
             None => {
@@ -115,7 +115,7 @@ where
                     return; // no limit configured
                 };
                 let mut states = self.states.lock().unwrap();
-                let deque = states.entry(key.clone()).or_insert_with(VecDeque::new);
+                let deque = states.entry(key.clone()).or_default();
                 Self::time_until_ready_locked(deque, limit)
             };
             match wait {
@@ -131,7 +131,7 @@ where
         let keys = keys.unwrap_or_default();
         let tasks = keys.iter().map(|key| self.until_key_ready(key));
         futures::stream::iter(tasks)
-            .for_each_concurrent(None, |fut| async move { fut.await })
+            .for_each_concurrent(None, |fut| fut)
             .await;
     }
 }

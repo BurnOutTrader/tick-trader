@@ -52,6 +52,7 @@ pub enum Exchange {
 
 impl Exchange {
     #[inline]
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s.trim().to_ascii_uppercase().as_str() {
             "CME" => Some(Exchange::CME),
@@ -141,6 +142,7 @@ pub enum Currency {
     Other,
 }
 impl Currency {
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "USD" => Some(Currency::USD),
@@ -180,8 +182,8 @@ impl Instrument {
         let out = match digs.len() {
             1 => digs.to_string(),
             2 => {
-                if digs.starts_with('0') {
-                    digs[1..].to_string()
+                if let Some(stripped) = digs.strip_prefix('0') {
+                    stripped.to_string()
                 } else {
                     digs.to_string()
                 }
@@ -316,16 +318,16 @@ impl FromStr for Instrument {
         }
 
         // 3) explicit already-canonical dotted with odd casing/spacing (redundant but safe)
-        if up.contains('.') {
-            if let Ok(inst) = {
+        if up.contains('.')
+            && let Ok(inst) = {
                 let mut it = up.split('.');
                 match (it.next(), it.next(), it.next()) {
                     (Some(root), Some(suff), None) => Self::build_canonical_month(root, suff),
                     _ => Err(anyhow!("unrecognized dotted form: {up}")),
                 }
-            } {
-                return Ok(inst);
             }
+        {
+            return Ok(inst);
         }
 
         Err(anyhow!("could not parse instrument: {s}"))
@@ -334,6 +336,14 @@ impl FromStr for Instrument {
 impl Display for Instrument {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
+    }
+}
+
+impl FromStr for Currency {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Currency::from_str(s).ok_or(())
     }
 }
 

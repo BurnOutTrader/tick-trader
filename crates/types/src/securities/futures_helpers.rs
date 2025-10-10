@@ -61,7 +61,7 @@ pub fn activation_ns_from_code_with_policy(
     instrument: &Instrument,
     policy: ActivationPolicy,
 ) -> Option<u64> {
-    let expiry_month_start = parse_expiry_from_instrument(&instrument)?;
+    let expiry_month_start = parse_expiry_from_instrument(instrument)?;
     let activation_date = match policy {
         ActivationPolicy::MonthsBefore(m) => {
             expiry_month_start.checked_sub_months(Months::new(m))?
@@ -260,9 +260,7 @@ pub fn extract_month_year(instrument: &Instrument) -> Option<(char, u8)> {
     // Preceding char is the month
     let month_ch = s.as_bytes()[i - 1] as char;
     // Validate month
-    if month_from_code(month_ch).is_none() {
-        return None;
-    }
+    month_from_code(month_ch)?;
 
     // Parse year (keep as 1–2 digit code, not a full year)
     let year_slice = &s[i..];

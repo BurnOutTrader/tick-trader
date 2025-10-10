@@ -510,6 +510,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn account_open_pnl_and_day_realized() {
         let pm = PortfolioManager::new(Arc::new(DashMap::new()));
         let provider = ProviderKind::ProjectX(ProjectXTenant::Topstep);

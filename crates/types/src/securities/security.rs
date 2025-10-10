@@ -31,6 +31,7 @@ pub struct FuturesContract {
 }
 
 impl FuturesContract {
+    #[allow(clippy::too_many_arguments)]
     pub fn from_root_with(
         instrument: &Instrument,
         exchange: Exchange,
@@ -46,17 +47,14 @@ impl FuturesContract {
         let (expiry, activation) = match is_continuous {
             true => (NaiveDate::MAX, NaiveDate::MIN),
             false => {
-                let expiry = parse_expiry_from_instrument(&instrument)?;
+                let expiry = parse_expiry_from_instrument(instrument)?;
                 let activation_ns = activation_ns_default(&root, instrument)?;
                 let activation =
                     DateTime::<Utc>::from_timestamp_nanos(activation_ns as i64).date_naive();
                 (expiry, activation)
             }
         };
-        let quote_ccy = match quote_ccy {
-            None => Currency::USD,
-            Some(c) => c,
-        };
+        let quote_ccy = quote_ccy.unwrap_or(Currency::USD);
         Some(Self {
             root,
             provider_contract_name,
@@ -86,7 +84,7 @@ impl FuturesContract {
         let (expiry, activation) = match is_continuous {
             true => (NaiveDate::MAX, NaiveDate::MIN),
             false => {
-                let expiry = parse_expiry_from_instrument(&instrument)?;
+                let expiry = parse_expiry_from_instrument(instrument)?;
                 let activation_ns = activation_ns_default(&root, instrument)?;
                 let activation =
                     DateTime::<Utc>::from_timestamp_nanos(activation_ns as i64).date_naive();

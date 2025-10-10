@@ -83,7 +83,7 @@ impl ExponentialBackoff {
             x ^= x >> 27;
             self.prng_state = x;
             let r = x.wrapping_mul(0x2545F4914F6CDD1D);
-            (r % (self.jitter_ms as u64 + 1)) as u64
+            r % (self.jitter_ms + 1)
         };
 
         base.saturating_add(Duration::from_millis(jitter))
@@ -249,17 +249,17 @@ mod tests {
             true,
         )
         .unwrap();
-        // First call should be zero if immediate_first
+        // The irst call should be zero if immediate_first
         assert_eq!(backoff.next_duration(), Duration::from_millis(0));
-        // Next call should be initial
+        // The next call should be initial
         assert_eq!(backoff.next_duration(), Duration::from_millis(100));
-        // Next call should be doubled
+        // The next call should be doubled
         assert_eq!(backoff.next_duration(), Duration::from_millis(200));
-        // Next call should be doubled again
+        // The next call should be doubled again
         assert_eq!(backoff.next_duration(), Duration::from_millis(400));
-        // Next call should be doubled but clamped to max
+        // The next call should be doubled but clamped to max
         assert_eq!(backoff.next_duration(), Duration::from_millis(800));
-        // Next call should be clamped to max
+        // The next call should be clamped to max
         assert_eq!(backoff.next_duration(), Duration::from_millis(1000));
         assert_eq!(backoff.next_duration(), Duration::from_millis(1000));
     }

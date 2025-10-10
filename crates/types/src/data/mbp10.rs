@@ -219,6 +219,7 @@ impl Bytes<Self> for Mbp10 {
 ///
 /// * `*_ns` fields are UNIX epoch nanoseconds.
 /// * `price_nanos` and price vectors are integer nanos (1e-9) and converted to `Decimal` scale 9.
+#[allow(clippy::too_many_arguments)]
 pub fn make_mbp10(
     instrument: Instrument,
     ts_recv_ns: u64,
@@ -235,14 +236,7 @@ pub fn make_mbp10(
     ts_in_delta: i32,
     sequence: u32,
     // Optional aggregated levels; pass `None` if not present.
-    levels: Option<(
-        Vec<Decimal>, // bid_px nanos
-        Vec<Decimal>, // ask_px nanos
-        Vec<Decimal>, // bid_sz
-        Vec<Decimal>, // ask_sz
-        Vec<Decimal>, // bid_ct
-        Vec<Decimal>, // ask_ct
-    )>,
+    levels: Option<BookLevels>,
 ) -> Option<Mbp10> {
     // Convert epoch nanos to DateTime<Utc> safely.
     fn dt_from_ns(ns: u64) -> Option<DateTime<Utc>> {
@@ -260,14 +254,7 @@ pub fn make_mbp10(
 
     let price = Decimal::from_i128_with_scale(price_nanos as i128, 9);
 
-    let book = levels.map(|(bp, ap, bsz, asz, bct, act)| BookLevels {
-        bid_px: bp,
-        ask_px: ap,
-        bid_sz: bsz,
-        ask_sz: asz,
-        bid_ct: bct,
-        ask_ct: act,
-    });
+    let book = levels;
 
     Some(Mbp10 {
         instrument,

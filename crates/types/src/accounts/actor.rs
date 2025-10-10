@@ -320,7 +320,7 @@ mod tests {
         // Exec 1 @ 100
         let ex1 = EngineUuid::new();
         actor.apply(AccountEvent::Exec(ExecutionEvent {
-            exec_id: ex1.clone(),
+            exec_id: ex1,
             provider_order_id: Some(prov.clone()),
             order_id: EngineUuid::new(),
             side: Side::Buy,
@@ -333,7 +333,7 @@ mod tests {
         }));
         // Duplicate exec should be ignored
         actor.apply(AccountEvent::Exec(ExecutionEvent {
-            exec_id: ex1.clone(),
+            exec_id: ex1,
             provider_order_id: Some(prov.clone()),
             order_id: EngineUuid::new(),
             side: Side::Buy,
@@ -358,7 +358,7 @@ mod tests {
         // Fill the remaining 2 @ 110; realized pnl accumulates when crossing the opposite side later
         let ex2 = EngineUuid::new();
         actor.apply(AccountEvent::Exec(ExecutionEvent {
-            exec_id: ex2.clone(),
+            exec_id: ex2,
             provider_order_id: Some(prov.clone()),
             order_id: EngineUuid::new(),
             side: Side::Buy,
@@ -375,7 +375,7 @@ mod tests {
         // Now sell 3 @ 120 to close and realize PnL: avg cost = (100*1 + 110*2)/3 = 106.666.. -> realized = (120-106.666..)*3 ~= 40
         let ex3 = EngineUuid::new();
         actor.apply(AccountEvent::Exec(ExecutionEvent {
-            exec_id: ex3.clone(),
+            exec_id: ex3,
             provider_order_id: None,
             order_id: EngineUuid::new(),
             side: Side::Sell,

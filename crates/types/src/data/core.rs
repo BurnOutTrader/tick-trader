@@ -231,7 +231,7 @@ mod tests {
     fn resolution_helpers() {
         assert_eq!(Resolution::Seconds(1).as_key(), Some("sec1"));
         assert_eq!(Resolution::Minutes(5).to_os_string(), "min5");
-        assert!(Resolution::Daily.is_intraday() == false);
+        assert!(!Resolution::Daily.is_intraday());
         assert!(Resolution::Seconds(2).is_intraday());
     }
 
