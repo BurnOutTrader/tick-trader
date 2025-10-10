@@ -359,14 +359,14 @@ impl Router {
                     }
                 }
                 info!(sub_id = %id.0, topic = ?u.topic, "router.unsubscribe_key");
-                if last {
-                    if let Some(mgr) = self.backend.read().unwrap().as_ref().cloned() {
-                        let topic = u.topic;
-                        let key = u.key.clone();
-                        tokio::spawn(async move {
-                            let _ = mgr.unsubscribe_md(topic, &key).await;
-                        });
-                    }
+                if last
+                    && let Some(mgr) = self.backend.read().unwrap().as_ref().cloned()
+                {
+                    let topic = u.topic;
+                    let key = u.key.clone();
+                    tokio::spawn(async move {
+                        let _ = mgr.unsubscribe_md(topic, &key).await;
+                    });
                 }
             }
             Request::Ping(p) => {
@@ -451,12 +451,12 @@ impl Router {
                     set.remove(&key);
                     client_empty = set.is_empty();
                 }
-                if client_empty {
-                    if let Some(mut meta) = self.meta.get_mut(id) {
-                        meta.topics.remove(&Topic::Orders);
-                        meta.topics.remove(&Topic::Positions);
-                        meta.topics.remove(&Topic::AccountEvt);
-                    }
+                if client_empty
+                    && let Some(mut meta) = self.meta.get_mut(id)
+                {
+                    meta.topics.remove(&Topic::Orders);
+                    meta.topics.remove(&Topic::Positions);
+                    meta.topics.remove(&Topic::AccountEvt);
                 }
                 // Update global subscribers set for this account
                 let mut last = false;
@@ -482,7 +482,7 @@ impl Router {
             }
             Request::AccountInfoRequest(req_ai) => {
                 if let Some(mgr) = self.backend.read().unwrap().as_ref().cloned() {
-                    let prov = req_ai.provider.clone();
+                    let prov = req_ai.provider;
                     let corr = req_ai.corr_id;
                     let router = self.clone();
                     let id2 = id.clone();
@@ -520,7 +520,7 @@ impl Router {
             Request::InstrumentsRequest(req_inst) => {
                 info!(sub_id = %id.0, provider = ?req_inst.provider, "router.instruments_request");
                 if let Some(mgr) = self.backend.read().unwrap().as_ref().cloned() {
-                    let prov = req_inst.provider.clone();
+                    let prov = req_inst.provider;
                     let patt = req_inst.pattern.clone();
                     let corr = req_inst.corr_id;
                     let router = self.clone();
@@ -563,12 +563,12 @@ impl Router {
             Request::InstrumentsMapRequest(req_map) => {
                 info!(sub_id = %id.0, provider = ?req_map.provider, "router.instruments_map_request");
                 if let Some(mgr) = self.backend.read().unwrap().as_ref().cloned() {
-                    let prov = req_map.provider.clone();
+                    let prov = req_map.provider;
                     let corr = req_map.corr_id;
                     let router = self.clone();
                     let id2 = id.clone();
                     tokio::spawn(async move {
-                        match mgr.get_securities(prov.clone()).await {
+                        match mgr.get_securities(prov).await {
                             Ok(pairs) => {
                                 let resp = tt_types::wire::ContractsResponse {
                                     provider: format!("{:?}", prov),
@@ -652,10 +652,10 @@ impl Router {
             let mut became_empty: Vec<(Topic, SymbolKey)> = Vec::new();
             // Remove sub from all sets
             for mut entry in self.sub_index[shard].iter_mut() {
-                if entry.value_mut().remove(id) {
-                    if entry.value().is_empty() {
-                        became_empty.push(entry.key().clone());
-                    }
+                if entry.value_mut().remove(id)
+                    && entry.value().is_empty()
+                {
+                    became_empty.push(entry.key().clone());
                 }
             }
             // Drop any empty sets to keep maps tidy
@@ -819,22 +819,22 @@ impl Router {
             // for a very short period to avoid dropping the very first updates before the client
             // has fully started draining.
             let mut delivered = false;
-            if let Some(ts) = self.recent_key_subs.get(&(topic, key.clone(), sid.clone())) {
-                if ts.elapsed() <= std::time::Duration::from_millis(self.cfg.warmup_ms) {
-                    // Small timeout to avoid blocking the publisher pipeline
-                    match tokio::time::timeout(
-                        std::time::Duration::from_millis(self.cfg.warmup_send_ms),
-                        tx.send(resp.clone()),
-                    )
-                    .await
-                    {
-                        Ok(Ok(())) => {
-                            sent += 1;
-                            let _ = self.backpressure.remove(&sid);
-                            delivered = true;
-                        }
-                        _ => { /* fall through to try_send */ }
+            if let Some(ts) = self.recent_key_subs.get(&(topic, key.clone(), sid.clone()))
+                && ts.elapsed() <= std::time::Duration::from_millis(self.cfg.warmup_ms)
+            {
+                // Small timeout to avoid blocking the publisher pipeline
+                match tokio::time::timeout(
+                    std::time::Duration::from_millis(self.cfg.warmup_send_ms),
+                    tx.send(resp.clone()),
+                )
+                .await
+                {
+                    Ok(Ok(())) => {
+                        sent += 1;
+                        let _ = self.backpressure.remove(&sid);
+                        delivered = true;
                     }
+                    _ => { /* fall through to try_send */ }
                 }
             }
             if !delivered {
