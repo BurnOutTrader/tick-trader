@@ -1076,7 +1076,7 @@ impl EngineRuntime {
         let state = self.state.clone();
         let pending = self.pending.clone();
         // Build handle and pass to strategy
-        let _ = EngineRuntimeShared {
+        let shared = EngineRuntimeShared {
             bus: self.bus.clone(),
             sub_id: sub_id.clone(),
             next_corr_id: self.next_corr_id.clone(),
