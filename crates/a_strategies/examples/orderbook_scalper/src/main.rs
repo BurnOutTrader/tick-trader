@@ -8,7 +8,6 @@ use tracing::info;
 use tracing::level_filters::LevelFilter;
 use tt_bus::ClientMessageBus;
 use tt_engine::engine::{DataTopic, EngineHandle, EngineRuntime, Strategy};
-use tt_engine::portfolio::OrderKey;
 use tt_types::accounts::account::AccountName;
 use tt_types::accounts::events::AccountDelta;
 use tt_types::data::mbp10::{Action as MbpAction, BookLevels, BookSide as MbpSide, Mbp10};
@@ -17,6 +16,7 @@ use tt_types::providers::{ProjectXTenant, ProviderKind};
 use tt_types::securities::symbols::Instrument;
 use tt_types::wire;
 use tt_types::wire::{OrderType, Trade};
+use tt_types::engine_id::EngineUuid; // NEW: engine-side order id tracking
 
 #[allow(dead_code)]
 #[derive(Default, Debug, Clone)]
@@ -170,6 +170,11 @@ struct OrderBookStrategy {
     last_place_ask_at: Option<Instant>,
     place_cooldown: Duration,
     can_trade: bool,
+    // NEW: track working orders by engine id
+    working_bid: Option<EngineUuid>,
+    working_ask: Option<EngineUuid>,
+    // Edge: avoid quoting micro spreads
+    min_spread_ratio: Decimal,
 }
 #[allow(dead_code)]
 impl OrderBookStrategy {
@@ -201,6 +206,9 @@ impl OrderBookStrategy {
             last_place_ask_at: None,
             place_cooldown: Duration::from_millis(400),
             can_trade: true,
+            working_bid: None,
+            working_ask: None,
+            min_spread_ratio: Decimal::new(5, 3), // 0.005% of mid as minimum spread edge
         }
     }
 
@@ -252,6 +260,38 @@ impl OrderBookStrategy {
         }
     }
 
+    // Cancel a single working side if present (respects throttle unless force)
+    fn cancel_side(&mut self, is_bid: bool, force: bool) {
+        if self.engine.is_none() || self.cfg.is_none() { return; }
+        if is_bid {
+            if let Some(order_id) = self.working_bid {
+                if !force {
+                    if let Some(prev) = self.last_cancel_at {
+                        if prev.elapsed() < self.min_cancel_interval { return; }
+                    }
+                }
+                let h = self.engine.as_ref().unwrap();
+                let cfg = self.cfg.as_ref().unwrap();
+                let _ = h.cancel_order(cfg.provider, cfg.account_name.clone(), order_id);
+                self.last_cancel_at = Some(Instant::now());
+                self.working_bid = None;
+            }
+        } else {
+            if let Some(order_id) = self.working_ask {
+                if !force {
+                    if let Some(prev) = self.last_cancel_at {
+                        if prev.elapsed() < self.min_cancel_interval { return; }
+                    }
+                }
+                let h = self.engine.as_ref().unwrap();
+                let cfg = self.cfg.as_ref().unwrap();
+                let _ = h.cancel_order(cfg.provider, cfg.account_name.clone(), order_id);
+                self.last_cancel_at = Some(Instant::now());
+                self.working_ask = None;
+            }
+        }
+    }
+
     // Determine if current BBO moved far from the anchor (or anchor too old)
     fn bbo_moved_far(&self, bb_px: Decimal, ba_px: Decimal) -> bool {
         if let Some((abid, aask)) = self.anchor_bbo {
@@ -261,11 +301,7 @@ impl OrderBookStrategy {
             }
             let move_bid = (bb_px - abid).abs();
             let move_ask = (ba_px - aask).abs();
-            let mv = if move_bid > move_ask {
-                move_bid
-            } else {
-                move_ask
-            };
+            let mv = if move_bid > move_ask { move_bid } else { move_ask };
             let mult = Decimal::from(self.stale_spread_mult as i64);
             if mv >= spread * mult {
                 return true;
@@ -303,6 +339,9 @@ impl OrderBookStrategy {
         {
             if ba_px > bb_px && self.bbo_moved_far(bb_px, ba_px) {
                 self.cancel_all_for_instrument_force();
+                // Drop local tracking too
+                self.working_bid = None;
+                self.working_ask = None;
             }
         } else {
             // Without BBO context, be conservative: do nothing except tick the refresh timer.
@@ -318,15 +357,7 @@ impl OrderBookStrategy {
             return;
         }
         let h = self.engine.as_ref().unwrap().clone();
-        let (_, _account_name_clone, max_pos_abs, instrument_clone) = {
-            let cfg = self.cfg.as_ref().unwrap();
-            (
-                cfg.key.clone(),
-                cfg.account_name.clone(),
-                cfg.max_pos_abs,
-                cfg.instrument.clone(),
-            )
-        };
+        let max_pos_abs = self.cfg.as_ref().unwrap().max_pos_abs;
         // Only quote when we have a valid BBO (with sizes)
         let ((bb_px, bb_sz), (ba_px, ba_sz)) = match (self.book.best_bid(), self.book.best_ask()) {
             (Some((bb_px, bb_sz)), Some((ba_px, ba_sz))) if ba_px > bb_px => {
@@ -335,22 +366,25 @@ impl OrderBookStrategy {
             _ => return,
         };
 
+        // Basic spread edge: require at least X bps of mid
+        let mid = (bb_px + ba_px) / Decimal::from(2i64);
+        let spread = ba_px - bb_px;
+        if mid > Decimal::ZERO {
+            let min_spread = mid * self.min_spread_ratio; // e.g., 0.005% of mid
+            if spread < min_spread {
+                // too tight to have an edge
+                return;
+            }
+        }
+
         // Decide which sides to quote based on current net position and simple microstructure signals
         let mut want_bid = true;
         let mut want_ask = true;
         // Inventory and max position guards
-        if self.net_pos >= max_pos_abs {
-            want_bid = false;
-        }
-        if self.net_pos <= -max_pos_abs {
-            want_ask = false;
-        }
-        if self.net_pos > Decimal::ZERO {
-            want_bid = false;
-        }
-        if self.net_pos < Decimal::ZERO {
-            want_ask = false;
-        }
+        if self.net_pos >= max_pos_abs { want_bid = false; }
+        if self.net_pos <= -max_pos_abs { want_ask = false; }
+        if self.net_pos > Decimal::ZERO { want_bid = false; }
+        if self.net_pos < Decimal::ZERO { want_ask = false; }
 
         // Top-of-book imbalance skew: favor the side with deeper interest; avoid quoting the likely adverse side
         let total_sz = bb_sz + ba_sz;
@@ -359,17 +393,15 @@ impl OrderBookStrategy {
             let upper = Decimal::new(65, 2); // 0.65
             let lower = Decimal::new(35, 2); // 0.35
             if imb >= upper {
-                want_ask = false;
+                // bid heavy → avoid selling into strength unless offloading inventory
+                if self.net_pos <= Decimal::ZERO { want_ask = false; }
+            } else if imb <= lower {
+                // ask heavy → avoid buying into weakness unless covering short
+                if self.net_pos >= Decimal::ZERO { want_bid = false; }
             }
-            // avoid selling into strength
-            else if imb <= lower {
-                want_bid = false;
-            } // avoid buying into weakness
         }
 
         // Momentum handling:
-        // - If position is over 100 in the direction of momentum, offer out into momentum.
-        // - Otherwise, let winners run by not placing exit orders with the prevailing trend.
         let mom_up = self.trend_mom > Decimal::ZERO;
         let mom_down = self.trend_mom < Decimal::ZERO;
         let offer_threshold: Decimal = Decimal::from(100);
@@ -381,17 +413,12 @@ impl OrderBookStrategy {
             want_bid = true;
         } else {
             // Default behavior: let winners run (avoid placing exits with the trend)
-            if mom_up && self.net_pos > Decimal::ZERO {
-                want_ask = false;
-            } else if mom_down && self.net_pos < Decimal::ZERO {
-                want_bid = false;
-            }
+            if mom_up && self.net_pos > Decimal::ZERO { want_ask = false; }
+            else if mom_down && self.net_pos < Decimal::ZERO { want_bid = false; }
         }
 
         // Edge gating via microprice tilt + momentum alignment
-        let spread = ba_px - bb_px;
         if spread > Decimal::ZERO && total_sz > Decimal::ZERO {
-            let mid = (bb_px + ba_px) / Decimal::from(2i64);
             let micro = (ba_px * bb_sz + bb_px * ba_sz) / total_sz;
             let tilt = micro - mid;
             let tilt_thresh = spread * Decimal::new(2, 1); // 0.2 * spread
@@ -399,21 +426,19 @@ impl OrderBookStrategy {
             let edge_down = tilt < -tilt_thresh && mom_down;
             let exit_override = (self.net_pos > offer_threshold && mom_up)
                 || (self.net_pos < -offer_threshold && mom_down);
-            if want_bid && !exit_override && !edge_up {
+            if want_bid && !exit_override && !edge_down {
+                // require micro tilt down to add bids
                 want_bid = false;
             }
-            if want_ask && !exit_override && !edge_down {
+            if want_ask && !exit_override && !edge_up {
+                // require micro tilt up to add asks
                 want_ask = false;
             }
         }
 
-        // If both sides were disabled by filters, fall back to the side of least inventory exposure
+        // If both sides disabled, fall back to the side of least inventory exposure
         if !want_bid && !want_ask {
-            if self.net_pos >= Decimal::ZERO {
-                want_bid = true;
-            } else {
-                want_ask = true;
-            }
+            if self.net_pos >= Decimal::ZERO { want_bid = true; } else { want_ask = true; }
         }
 
         let desired = (want_bid, want_ask);
@@ -431,81 +456,111 @@ impl OrderBookStrategy {
         self.last_desired = Some(desired);
         self.last_bbo = Some((bb_px, ba_px));
 
-        // Clear existing working orders to avoid stale or wrong-side resting orders (rate-limited)
-        let did_cancel = self.cancel_all_for_instrument();
-        if !did_cancel {
-            // If we couldn't cancel due to throttle and we still have open orders, avoid stacking new ones.
-            let open = h.open_orders_for_instrument(&instrument_clone);
-            if !open.is_empty() {
-                return;
-            }
-        }
-
-        // Apply per-side placement cooldowns
-        let now = Instant::now();
-        if want_bid {
-            if let Some(t) = self.last_place_bid_at {
-                if now.duration_since(t) < self.place_cooldown {
-                    // suppress bid placement due to cooldown
-                    want_bid = false;
-                }
-            }
-        }
-        if want_ask {
-            if let Some(t) = self.last_place_ask_at {
-                if now.duration_since(t) < self.place_cooldown {
-                    // suppress ask placement for this cycle
-                    want_ask = false;
-                }
-            }
-        }
-
-        // Set anchor BBO at (re)placement time for stale-distance tracking
-        if desired.0 || desired.1 {
+        // Detect staleness relative to anchor and reset sides if needed
+        let moved_far = self.bbo_moved_far(bb_px, ba_px);
+        if moved_far {
+            // Cancel both sides forcefully if market moved far
+            self.cancel_side(true, true);
+            self.cancel_side(false, true);
             self.anchor_bbo = Some((bb_px, ba_px));
             self.anchor_set_at = Some(Instant::now());
         }
 
+        // Side-specific management: cancel undesired sides, place desired if not working and not in cooldown
+        let now = Instant::now();
+        // Cancel ask if not desired
+        if !want_ask { self.cancel_side(false, false); }
+        // Cancel bid if not desired
+        if !want_bid { self.cancel_side(true, false); }
+
         if self.can_trade {
-            // Re-place desired sides using join orders to stick to BBO
+            // Set anchor at placement time
+            if desired.0 || desired.1 {
+                self.anchor_bbo = Some((bb_px, ba_px));
+                self.anchor_set_at = Some(Instant::now());
+            }
+
             let key = SymbolKey {
                 instrument: self.cfg.clone().unwrap().instrument,
                 provider: self.cfg.clone().unwrap().provider,
             };
-            if want_bid {
-                self.buy_count += 1;
-                self.last_place_bid_at = Some(now);
-
-                let order_id = h.place_order(
-                    self.account_name.clone(),
-                    key.clone(),
-                    tt_types::accounts::events::Side::Buy,
-                    1,
-                    OrderType::JoinBid,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                ).unwrap();
+            // BID placement
+            if want_bid && self.working_bid.is_none() {
+                let can_place = match self.last_place_bid_at { Some(t) => now.duration_since(t) >= self.place_cooldown, None => true };
+                if can_place {
+                    self.buy_count += 1;
+                    self.last_place_bid_at = Some(now);
+                    if let Ok(order_id) = h.place_order(
+                        self.account_name.clone(),
+                        key.clone(),
+                        tt_types::accounts::events::Side::Buy,
+                        1,
+                        OrderType::JoinBid,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    ) {
+                        self.working_bid = Some(order_id);
+                    }
+                }
             }
-            if want_ask {
-                let order_id = h.place_order(
-                    self.account_name.clone(),
-                    key,
-                    tt_types::accounts::events::Side::Sell,
-                    1,
-                    OrderType::JoinBid,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                ).unwrap();
+            // ASK placement (FIX: JoinAsk)
+            if want_ask && self.working_ask.is_none() {
+                let can_place = match self.last_place_ask_at { Some(t) => now.duration_since(t) >= self.place_cooldown, None => true };
+                if can_place {
+                    self.sell_count += 1;
+                    self.last_place_ask_at = Some(now);
+                    if let Ok(order_id) = h.place_order(
+                        self.account_name.clone(),
+                        key,
+                        tt_types::accounts::events::Side::Sell,
+                        1,
+                        OrderType::JoinAsk,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    ) {
+                        self.working_ask = Some(order_id);
+                    }
+                }
             }
         }
+    }
+
+    // Sync our working ids against the latest OrdersBatch snapshot
+    fn sync_working_from_orders(&mut self, ob: &wire::OrdersBatch) {
+        use tt_types::accounts::order::OrderState;
+        if self.cfg.is_none() { return; }
+        let instr = &self.cfg.as_ref().unwrap().instrument;
+        // Build a quick set of still-open orders for our instrument
+        for ou in ob.orders.iter().filter(|o| &o.instrument == instr) {
+            if let Some(wb) = self.working_bid {
+                if ou.order_id == wb {
+                    // Clear tracking when no longer working
+                    if matches!(ou.state, OrderState::Canceled | OrderState::Rejected | OrderState::Filled) || ou.leaves == 0 {
+                        self.working_bid = None;
+                    }
+                }
+            }
+            if let Some(wa) = self.working_ask {
+                if ou.order_id == wa {
+                    if matches!(ou.state, OrderState::Canceled | OrderState::Rejected | OrderState::Filled) || ou.leaves == 0 {
+                        self.working_ask = None;
+                    }
+                }
+            }
+        }
+
+        // If we track an id that no longer appears for our instrument at all, drop it.
+        let ids: Vec<_> = ob.orders.iter().filter(|o| &o.instrument == instr).map(|o| o.order_id).collect();
+        if let Some(wb) = self.working_bid { if !ids.contains(&wb) { self.working_bid = None; } }
+        if let Some(wa) = self.working_ask { if !ids.contains(&wa) { self.working_ask = None; } }
     }
 }
 
@@ -581,6 +636,8 @@ impl Strategy for OrderBookStrategy {
     }
 
     fn on_orders_batch(&mut self, b: &wire::OrdersBatch) {
+        // Sync state of working order ids, then print
+        self.sync_working_from_orders(b);
         for order in &b.orders {
             println!("{:?}", order);
         }

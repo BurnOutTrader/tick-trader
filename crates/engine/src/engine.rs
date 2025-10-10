@@ -1233,6 +1233,10 @@ impl EngineRuntime {
                     }
                     Response::AccountDeltaBatch(ab) => {
                         {
+                            // Update portfolio manager with latest account deltas
+                            pm.apply_account_delta_batch(ab.clone());
+                        }
+                        {
                             let mut st = state.lock().await;
                             st.last_accounts = Some(ab.clone());
                         }
