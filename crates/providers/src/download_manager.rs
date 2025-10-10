@@ -26,6 +26,22 @@ use tt_types::securities::hours::market_hours::{
 use tt_types::securities::symbols::{Instrument, exchange_market_type};
 use tt_types::server_side::traits::HistoricalDataProvider;
 
+#[derive(Clone, Hash, PartialEq, Eq)]
+pub struct DownloadKey {
+    provider_kind: ProviderKind,
+    instrument: Instrument,
+    topic: Topic,
+}
+impl DownloadKey {
+    pub fn new(provider_kind: ProviderKind, instrument: Instrument, topic: Topic) -> DownloadKey {
+        Self {
+            provider_kind,
+            instrument,
+            topic,
+        }
+    }
+}
+
 pub struct Entry {
     result: Mutex<Option<anyhow::Result<()>>>,
     pub notify: Notify,
@@ -33,9 +49,8 @@ pub struct Entry {
     join: Mutex<Option<JoinHandle<()>>>,
 }
 
-#[allow(clippy::type_complexity)]
 struct DownloadManagerInner {
-    inflight: Arc<Mutex<HashMap<(ProviderKind, Instrument, Topic), std::sync::Arc<Entry>>>>,
+    inflight: Arc<Mutex<HashMap<DownloadKey, std::sync::Arc<Entry>>>>,
 }
 
 #[derive(Clone)]
@@ -45,7 +60,7 @@ pub struct DownloadManager {
 
 #[derive(Clone)]
 pub struct DownloadTaskHandle {
-    key: (ProviderKind, Instrument, Topic),
+    key: DownloadKey,
     pub entry: Arc<Entry>,
 }
 
@@ -53,7 +68,7 @@ impl DownloadTaskHandle {
     pub fn id(&self) -> EngineUuid {
         self.entry.id
     }
-    pub fn key(&self) -> &(ProviderKind, Instrument, Topic) {
+    pub fn key(&self) -> &DownloadKey {
         &self.key
     }
     pub fn is_complete(&self) -> bool {
@@ -112,7 +127,7 @@ impl DownloadManager {
         _client: std::sync::Arc<dyn HistoricalDataProvider>,
         req: HistoricalRequest,
     ) -> anyhow::Result<Option<DownloadTaskHandle>> {
-        let key = (req.provider_kind, req.instrument.clone(), req.topic);
+        let key = DownloadKey::new(req.provider_kind, req.instrument.clone(), req.topic);
         let guard = self.inner.inflight.lock().await;
         if let Some(entry) = guard.get(&key) {
             let handle = DownloadTaskHandle {
@@ -132,7 +147,7 @@ impl DownloadManager {
         client: std::sync::Arc<dyn HistoricalDataProvider>,
         req: HistoricalRequest,
     ) -> anyhow::Result<DownloadTaskHandle> {
-        let key = (req.provider_kind, req.instrument.clone(), req.topic);
+        let key = DownloadKey::new(req.provider_kind, req.instrument.clone(), req.topic);
         // fast path: existing
         {
             let guard = self.inner.inflight.lock().await;
