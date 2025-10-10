@@ -1,0 +1,35 @@
+[package]
+name = "tt-bus"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[features]
+bench = ["dep:hdrhistogram"]
+server = []
+
+[dependencies]
+tt-types = { path = "../types" }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+# bench-only (optional normal dependency so feature-gated code compiles)
+hdrhistogram = { version = "7", optional = true }
+dashmap = {workspace = true}
+tracing = { workspace = true }
+bytes = {workspace = true, features = ["serde"]}
+futures-util = {workspace = true}
+tokio-util = {workspace = true}
+async-trait = { workspace = true }
+once_cell = { workspace = true }
+log = "0.4.28"
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+async-trait = { workspace = true }
+
+
+[[bin]]
+name = "no_strategy_test"
+path = "bin/no_strategy_test.rs"
