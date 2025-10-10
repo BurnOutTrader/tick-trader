@@ -226,11 +226,9 @@ impl OrderBookStrategy {
             let open = h.open_orders_for_instrument(&cfg.instrument);
             let mut did_cancel = false;
             for ou in open {
-                if let Some(poid) = ou.provider_order_id {
-                    let _ = h.cancel_order(wire::CancelOrder {
-                        account_name: cfg.account_name.clone(),
-                        provider_order_id: poid.0,
-                    });
+                {
+                    // Use engine order_id with provider to cancel via engine's mapping
+                    let _ = h.cancel_order(ou.provider_kind, cfg.account_name.clone(), ou.order_id);
                     did_cancel = true;
                 }
             }
@@ -247,12 +245,8 @@ impl OrderBookStrategy {
         if let (Some(h), Some(cfg)) = (&self.engine, &self.cfg) {
             let open = h.open_orders_for_instrument(&cfg.instrument);
             for ou in open {
-                if let Some(poid) = ou.provider_order_id {
-                    let _ = h.cancel_order(wire::CancelOrder {
-                        account_name: cfg.account_name.clone(),
-                        provider_order_id: poid.0,
-                    });
-                }
+                // Force-cancel using engine order_id mapping
+                let _ = h.cancel_order(ou.provider_kind, cfg.account_name.clone(), ou.order_id);
             }
             self.last_cancel_at = Some(Instant::now());
         }
