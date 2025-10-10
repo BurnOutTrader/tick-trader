@@ -307,6 +307,11 @@ pub struct EngineHandle {
 
 impl EngineHandle {
     // === FIRE-AND-FORGET ===
+    /// Enqueue a subscribe request to be handled by the engine task.
+    ///
+    /// Parameters:
+    /// - topic: Logical data stream to subscribe to (e.g., Ticks, Quotes, MBP10, Candles).
+    /// - key: SymbolKey including instrument and provider.
     #[inline]
     pub fn subscribe_now(&self, topic: DataTopic, key: SymbolKey) {
         let _ = self.cmd_q.push(Command::Subscribe {
@@ -314,6 +319,11 @@ impl EngineHandle {
             key,
         });
     }
+    /// Enqueue an unsubscribe request for a previously subscribed stream.
+    ///
+    /// Parameters:
+    /// - topic: Logical data stream to unsubscribe from.
+    /// - key: SymbolKey including instrument and provider.
     #[inline]
     pub fn unsubscribe_now(&self, topic: DataTopic, key: SymbolKey) {
         let _ = self.cmd_q.push(Command::Unsubscribe {
@@ -321,6 +331,12 @@ impl EngineHandle {
             key,
         });
     }
+    /// Enqueue a new order for asynchronous placement and return its EngineUuid immediately.
+    ///
+    /// Parameters:
+    /// - spec: Complete order specification (account, key, side, qty, type, prices, etc.).
+    ///
+    /// Returns: EngineUuid assigned locally for correlation with subsequent order updates.
     #[inline]
     pub fn place_now(&self, mut spec: tt_types::wire::PlaceOrder) -> EngineUuid {
         let id = EngineUuid::new();
@@ -370,6 +386,13 @@ impl EngineHandle {
     }
 
     // Market data
+    /// Subscribe to a market data stream for a specific instrument and provider.
+    ///
+    /// Parameters:
+    /// - data_topic: Logical stream to subscribe to (Ticks, Quotes, MBP10, Candles).
+    /// - key: SymbolKey composed of instrument and provider.
+    ///
+    /// On success, a SubscribeResponse will be delivered to the strategy via on_subscribe.
     pub async fn subscribe_key(&self, data_topic: DataTopic, key: SymbolKey) -> anyhow::Result<()> {
         let topic = data_topic.to_topic_or_err()?;
         // Ensure vendor watch is running for this provider
@@ -389,6 +412,11 @@ impl EngineHandle {
         Ok(())
     }
 
+    /// Unsubscribe from a market data stream previously requested with subscribe_key.
+    ///
+    /// Parameters:
+    /// - data_topic: Logical stream to unsubscribe from.
+    /// - key: SymbolKey composed of instrument and provider.
     pub async fn unsubscribe_key(
         &self,
         data_topic: DataTopic,
@@ -405,6 +433,13 @@ impl EngineHandle {
         Ok(())
     }
 
+    /// List instruments for a provider, optionally filtered by a pattern understood by the server.
+    ///
+    /// Parameters:
+    /// - provider: Data provider to query.
+    /// - pattern: Optional filter string (provider-specific; None returns all).
+    ///
+    /// Returns: Vec of instruments or empty vec on timeout/unsupported response.
     pub async fn list_instruments(
         &self,
         provider: ProviderKind,
@@ -1047,6 +1082,11 @@ impl EngineRuntime {
         true
     }
 
+    /// Create a new EngineRuntime bound to a ClientMessageBus.
+    ///
+    /// Parameters:
+    /// - bus: Connected ClientMessageBus used for all requests and streaming responses.
+    /// - slow_spin: Optional nanos to sleep when polling SHM without new data (to avoid tight loops).
     pub fn new(bus: Arc<ClientMessageBus>, slow_spin: Option<u64>) -> Self {
         let instruments = Arc::new(DashMap::new());
         Self {
@@ -1071,6 +1111,12 @@ impl EngineRuntime {
         }
     }
 
+    /// Start the engine processing loop and hand an EngineHandle to the strategy.
+    ///
+    /// Parameters:
+    /// - strategy: Your Strategy implementation; on_start will be invoked with an EngineHandle.
+    ///
+    /// Returns: EngineHandle for issuing subscriptions and orders from your strategy.
     pub async fn start<S: Strategy>(&mut self, mut strategy: S) -> anyhow::Result<EngineHandle> {
         let (tx, rx) = mpsc::channel::<Response>(2048);
         let tx_internal = tx.clone();
