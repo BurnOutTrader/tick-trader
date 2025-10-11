@@ -200,7 +200,8 @@ tick_trader DB and roles initialized.
 ### 3) Start the server (separate terminal):
 
 ```bash
-TT_BUS_ADDR=/tmp/tick-trader.sock cargo run -p tt-server
+cd server
+cargo run -p tt-server
 ```
 
 ### 3) Prepare .env with your provider credentials (ProjectX example):
