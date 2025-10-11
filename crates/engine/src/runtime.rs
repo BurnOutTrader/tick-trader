@@ -1011,29 +1011,27 @@ impl EngineRuntime {
                     Response::DbUpdateComplete { .. } => {}
                 }
                 // In backtest mode, advance the deterministic clock slightly and drive time-based consolidators once per event
-                if handle_inner_for_task.backtest_mode {
-                    if let Some(clock) = &handle_inner_for_task.backtest_clock {
-                        clock.bump_ns(1); // +1ns to total-order identical timestamps
-                        let now = clock.now_dt();
-                        let keys: Vec<(Topic, SymbolKey)> = handle_inner_for_task
-                            .consolidators
-                            .iter()
-                            .map(|kv| kv.key().clone())
-                            .collect();
-                        for (tpc, sk) in keys.into_iter() {
-                            let out_opt = {
-                                let key = (tpc, sk.clone());
-                                if let Some(mut cons_ref) = handle_inner_for_task
-                                    .consolidators
-                                    .get_mut(&key)
-                                {
-                                    cons_ref.value_mut().on_time(now)
-                                } else { None }
-                            };
-                            if let Some(tt_types::consolidators::ConsolidatedOut::Candle(c)) = out_opt {
-                                pm.update_apply_last_price(sk.provider, &c.instrument, c.close);
-                                strategy_for_task.on_bar(&c, sk.provider);
-                            }
+                if handle_inner_for_task.backtest_mode && let Some(clock) = &handle_inner_for_task.backtest_clock {
+                    clock.bump_ns(1); // +1ns to total-order identical timestamps
+                    let now = clock.now_dt();
+                    let keys: Vec<(Topic, SymbolKey)> = handle_inner_for_task
+                        .consolidators
+                        .iter()
+                        .map(|kv| kv.key().clone())
+                        .collect();
+                    for (tpc, sk) in keys.into_iter() {
+                        let out_opt = {
+                            let key = (tpc, sk.clone());
+                            if let Some(mut cons_ref) = handle_inner_for_task
+                                .consolidators
+                                .get_mut(&key)
+                            {
+                                cons_ref.value_mut().on_time(now)
+                            } else { None }
+                        };
+                        if let Some(tt_types::consolidators::ConsolidatedOut::Candle(c)) = out_opt {
+                            pm.update_apply_last_price(sk.provider, &c.instrument, c.close);
+                            strategy_for_task.on_bar(&c, sk.provider);
                         }
                     }
                 }
