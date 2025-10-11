@@ -36,7 +36,7 @@ The engine can place live orders and is intended strictly for testing and evalua
 - 🧠 Strategies: run multiple strategies as separate processes/binaries.
 - 🖧 Server: runs as a separate service; communicates over UDS and SHM; automatically starts/stops adapters (e.g., ProjectX) to minimize resource usage.
 - 🔌 Adapters: multiple instances of the same adapter can run concurrently (e.g., ProjectX Tradeify + Topstep).
-- 🏢 ProjectX tenants: not all firms are pre‑encoded in `ProjectXTenant` yet; adding a new tenant is straightforward and reuses the existing logic.
+- 🏢 ProjectX tenants: All known firms supported. reach out if one doesn't connect, due to any error.
 - 🚧 Status: work in progress — the architecture is largely stabilized, but features are still evolving.
 - 📡 Support for publishing/sharing strategy signals/insights on the bus will be implemented last
 - 🛅 PostgreSQL + Docker Database for storage and query of historical data by strategies and the server. 
