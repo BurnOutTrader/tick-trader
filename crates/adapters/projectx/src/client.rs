@@ -94,7 +94,6 @@ impl PXClient {
             let mut s = match FuturesContract::from_root_with(
                 &instrument,
                 symbol_info.exchange,
-                SecurityType::Future,
                 inst.id.clone(),
                 self.provider_kind,
                 tick_value,
