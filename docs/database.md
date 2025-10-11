@@ -1,104 +1,50 @@
-# Tick Trader Database
+# Tick Trader Database (PostgreSQL)
 
-This document describes the database crate that powers Tick Trader’s on-disk history and the lightweight DuckDB catalog used to discover and maintain it.
+This document describes the Postgres-backed database used by Tick Trader. We use sqlx for async access, and a small set of normalized tables tuned for high-rate appends and fast time-range queries.
 
-Optional for remote db you should first change you login credentials by creating a .env in
-```bash
-# used by the official image to create the bootstrap superuser
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=change-this-super-secret
+Quick start (local Postgres via Docker):
+1. cd pg && cp .env.example .env
+2. chmod +x init/01-init.sh
+3. docker compose up -d
+4. Export DATABASE_URL (or rely on DB_PATH fallback described below)
 
-# our app DB name
-TT_DB=tick_trader
+Environment:
+- DATABASE_URL: postgres://user:pass@host:port/tick_trader
+- If not set, components synthesize a URL from DB_PATH like host:host_port:container_port (default 127.0.0.1:5432:5432) and pg/.env.example defaults.
 
-# app roles (server = writer; strategies = reader)
-TT_WRITER=tt_writer
-TT_WRITER_PASSWORD=change-writer-pass
-TT_READER=tt_reader
-TT_READER_PASSWORD=change-reader-pass
-```
-## Goals
+Schema overview (see crates/database/src/schema.rs):
+- instrument(id BIGSERIAL, sym TEXT UNIQUE)
+- bars_1m(provider TEXT, symbol_id BIGINT, time_start TIMESTAMPTZ, time_end TIMESTAMPTZ, open/high/low/close NUMERIC(18,9), volume/ask_volume/bid_volume NUMERIC(18,9), resolution TEXT, PRIMARY KEY(provider,symbol_id,time_end))
+- latest_bar_1m(provider TEXT, symbol_id BIGINT, time_start/time_end TIMESTAMPTZ, open/high/low/close NUMERIC(18,9), volume/ask_volume/bid_volume NUMERIC(18,9), resolution TEXT, PRIMARY KEY(provider,symbol_id))
+- tick(ts_ns BIGINT, provider TEXT, symbol_id BIGINT, price NUMERIC(18,9), volume NUMERIC(18,9), side SMALLINT, venue_seq BIGINT, key_tie BIGINT, exec_id TEXT, PRIMARY KEY(provider,symbol_id,ts_ns,key_tie)); BRIN index on ts_ns
+- bbo(ts_ns BIGINT, provider TEXT, symbol_id BIGINT, bid/bid_size/ask/ask_size NUMERIC(18,9), bid_orders/ask_orders INTEGER, venue_seq BIGINT, is_snapshot BOOLEAN, key_tie BIGINT, PRIMARY KEY(provider,symbol_id,ts_ns,key_tie)); BRIN index on ts_ns
+- mbp10(provider TEXT, symbol_id BIGINT, ts_recv_ns BIGINT, ts_event_ns BIGINT, rtype/publisher_id/instrument_ref SMALLINT/INTEGER/INTEGER, action/side/depth SMALLINT, price/size NUMERIC(18,9), flags SMALLINT, ts_in_delta INTEGER, sequence BIGINT, book_* arrays, PRIMARY KEY(provider,symbol_id,ts_event_ns,sequence))
+- series_extent(provider TEXT, symbol_id BIGINT, topic SMALLINT, earliest/latest TIMESTAMPTZ, PRIMARY KEY(provider,symbol_id,topic))
+- kvp(ns TEXT, key TEXT, ts TIMESTAMPTZ, value JSONB, PRIMARY KEY(ns,key))
 
-- Simple, durable file-based storage in Parquet
-- Minimal catalog to track what exists and where
-- Deterministic, human-readable paths and file names
-- Ingestion APIs that are easy to use and safe to repeat
-- Maintenance tools for pruning and quarantining broken files
+Provider mapping:
+- ProviderKind is mapped to a stable short code via tt_database::paths::provider_kind_to_db_string (e.g., "projectx", "rithmic").
 
-## File Structure
-![Structure](/docs/misc/file_structure.png)
+APIs (no separate row models; we map directly to domain types):
+- Ingest: tt_database::ingest::{ingest_candles, ingest_ticks, ingest_bbo, ingest_mbp10}
+- Queries: tt_database::queries::{latest_data_time, get_extent, get_range, get_symbols, latest_bars_1m}
+- Schema/init: tt_database::schema::ensure_schema, get_or_create_instrument_id
+- Connection: tt_database::init::{pool_from_env, init_db}
 
-## Layout (authoritative)
+De-duplication & ordering:
+- Candles: PRIMARY KEY(provider,symbol_id,time_end)
+- Ticks/BBO: PRIMARY KEY(provider,symbol_id,ts_ns,key_tie) with key_tie as sequence tiebreaker when timestamps collide.
+- MBP10: PRIMARY KEY(provider,symbol_id,ts_event_ns,sequence)
 
-All path logic lives in `tt-database::paths`. The layout is:
+Recommended indexes:
+- BRIN on tick.ts_ns and bbo.ts_ns for large append-only scans.
+- Unique index on series_extent (already enforced by PK).
 
-```
-<data_root>/
-  {provider}/
-    {market_type}/
-      [root_symbol/]{instrument}/
-        {topic}/
-          {YYYY}/
-            {instrument}.{topic}.monthly.{YYYY}{MM}.parquet
-```
+Roles and security (pg/.env.example):
+- Server (writer) uses TT_WRITER; strategies can use TT_READER (read-only). You can also run both with the POSTGRES superuser locally.
 
-Notes:
-- Futures include an extra folder level for the root symbol before the specific instrument.
-- Exactly one Parquet file per instrument per topic per month.
-- Topic strings are canonicalized by `paths::topic_to_db_string`.
+Migration notes:
+- Older docs referenced DuckDB + Parquet catalog. We now use PostgreSQL exclusively; strategy and server read/write directly via sqlx.
 
-## Catalog
-
-We use a small DuckDB database as a catalog for fast discovery and maintenance. The schema is created via:
-
-- `init::create_identity_schema_if_needed` (providers/symbols/…)
-- `duck::create_partitions_schema` (datasets/partitions)
-
-Important tables:
-- `datasets(provider_id, symbol_id, kind, resolution, resolution_key)`
-- `partitions(dataset_id, path, storage, rows, bytes, min_ts_ns, max_ts_ns, min_seq, max_seq, day_key)`
-
-The `partitions` table holds per-file stats and supports range pruning without opening Parquet.
-
-## Ingestion and persistence
-
-- `ingest::*` functions accept batches of rows, group them by (year, month) based on timestamps, and call the corresponding persistence function.
-- `perist::*_partition_zstd` functions write or merge a monthly Parquet file with ZSTD compression and upsert the `partitions` row with updated stats.
-- Merging is performed by `append::append_merge_parquet`, which deduplicates by a stable composite key and writes a new file atomically.
-
-## Query helpers
-
-- `duck::earliest_available` / `duck::latest_available` return the earliest/latest timestamps across all partitions for a dataset.
-- `duck::resolve_dataset_id` bridges human keys (provider/symbol/topic) to a `dataset_id` using a canonical mapping from Topic.
-
-Legacy higher-level queries remain in `queries.rs` and are gated behind the `queries` feature until they are fully updated to the monthly layout.
-
-## Maintenance
-
-- `duck::prune_missing_partitions` removes catalog rows that point to files that no longer exist.
-- `duck::quarantine_unreadable_partitions` attempts to read Parquet footers and removes catalog rows for unreadable files.
-
-## Typical flow
-
-1. Open a DuckDB connection (in-memory for tests or file-backed): `duck::connect(None)`.
-2. Initialize schemas: `init::create_identity_schema_if_needed(&conn)` and `duck::create_partitions_schema(&conn)`.
-3. Call `ingest_ticks` / `ingest_candles` / `ingest_bbo` with a `data_root` to persist data.
-4. Query availability: `earliest_available` / `latest_available`.
-5. Run maintenance periodically: prune/quarantine.
-
-## Shared usage and configuration
-
-Tick Trader uses DuckDB as an integrated catalog and metadata database. All historical and real-time data is stored in Parquet files, with DuckDB tracking and managing these files for fast discovery, pruning, and maintenance. Both the server and all strategies must use the same DB_PATH environment variable, ensuring they access the same DuckDB catalog and Parquet data. This is critical for correct operation, as mismatched DB_PATH values will result in inconsistent or missing data views.
-
-- Set DB_PATH in your environment or .env file to the desired storage directory (default: ./storage).
-- Both server and strategies must use the same DB_PATH value.
-
-## Design choices
-
-- One file per instrument/topic/month is a good balance between file count and update granularity.
-- All path construction flows through `paths.rs`, so changing conventions in one place updates the system consistently.
-- Catalog keeps only coarse stats (min/max ns, optional seq), enabling pushdown without heavy scans.
-
-## Testing
-
-See `crates/database/tests/db_catalog_tests.rs` for integration tests that validate dataset creation, partition registration, availability queries, and maintenance routines.
+Testing:
+- Integration tests live in crates/database/tests/db_tests.rs. Set DATABASE_URL and run `cargo test -p tt-database`.

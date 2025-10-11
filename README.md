@@ -10,7 +10,7 @@
 [![Provider](https://img.shields.io/badge/Provider-Rithmic%20(planned)-95a5a6)](#)
 [![Provider](https://img.shields.io/badge/Provider-DataBento%20(planned)-95a5a6)](https://www.databento.com)
 [![Columnar](https://img.shields.io/badge/Columnar-Arrow-5c6bc0)](https://arrow.apache.org/)
-[![Catalog](https://img.shields.io/badge/Catalog-DuckDB-43b581)](https://duckdb.org/)
+[![Database](https://img.shields.io/badge/Database-PostgreSQL-336791?logo=postgresql)](https://www.postgresql.org/)
 
 
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-Sponsor-FFDD00?logo=buymeacoffee&logoColor=000)](https://buymeacoffee.com/BurnOutTrader)
@@ -162,11 +162,10 @@ To use stop loss and take profit brackets in ProjectX switch to OCO brackets. (n
   - RITHMIC_{SYSTEM}_{USERNAME|APIKEY|PASSWORD|FCM_ID|IB_ID|USER_TYPE}
 - Server address:
   - TT_BUS_ADDR defaults to /tmp/tick-trader.sock (macOS) or @tick-trader.sock (Linux abstract). Override in .env or env.
-- Database path:
-  - DB_PATH sets the address of the database
-    - DB_PATH=127.0.0.1:5432:5432
-- Integrated database:
-  - Tick Trader uses DuckDB as an integrated catalog and metadata database. DuckDB tracks and manages Parquet files, which are used for durable, efficient storage of all historical and real-time data. Both the server and strategies interact with the same DuckDB instance and Parquet files via the shared DB_PATH.
+- Database connection:
+  - Tick Trader now uses PostgreSQL via sqlx. Set DATABASE_URL for a direct connection string, e.g. postgres://user:pass@127.0.0.1:5432/tick_trader.
+  - If DATABASE_URL is not set, we fall back to DB_PATH in the form host:host_port:container_port (default: 127.0.0.1:5432:5432) to construct a local URL using pg/.env.example defaults.
+  - See pg/docker-compose.yml and pg/.env.example for a ready-to-run local instance with app roles.
 
 ## ⚡ Quick start
 
@@ -273,24 +272,23 @@ This will reduce allocations and CPU for high-rate feeds while keeping the curre
   - DataBento: Market Data, Historical (planned adapter).
 
 
-## 📦 Historical data, catalog, and storage
+## 📦 Historical data and storage (PostgreSQL)
 
-- Automatic download and cataloging:
-  - The engine and server can automatically fetch historical data from the configured provider and persist it as Parquet, while maintaining a searchable DuckDB catalog.
-  - Storage layout (from `DB_PATH`):
-    - Parquet partitions live under `DB_PATH/market_data/`.
-    - A catalog file `DB_PATH/market_data/catalog.duckdb` indexes all partitions (providers, symbols, datasets, time ranges).
-  - The catalog is self-healing: on startup we create missing schema, prune entries for missing files, and quarantine unreadable/corrupt partitions.
-- Live and historical consolidation:
-  - Non standard duration Candles are produced via streaming consolidators (e.g., 1s/1m/1h/1d) so clients can subscribe to coarser data without subscribing to raw ticks.
-    - This reduces over-the-wire volume and storage churn while keeping deterministic bar construction.
-- Querying your data:
-  - From strategies: use our database layer to query time windows or scan partitions directly.
-  - From other tools/languages:
-    - DuckDB catalog: DuckDB CLI and bindings for Python, R, Node.js, Java, etc.
-    - Parquet files: widely supported via Arrow/Parquet ecosystems (Python: pandas/pyarrow/duckdb; Rust: polars/arrow2; R: arrow; Java/Scala: Spark; Go: parquet-go; Julia: Arrow.jl; Node.js: duckdb-wasm/arrow JS).
-  - This means you can inspect, analyze, and model with the same files your engine writes—no proprietary format.
-- The backtesting engine will accurately feed data into the system based on subscriptions and date ranges, there is no need for manual file handling.
+This project now uses PostgreSQL for historical storage and queries.
+
+- Ingestion (server/providers): use tt_database::ingest::{ingest_candles, ingest_ticks, ingest_bbo, ingest_mbp10} to persist data. De-duplication is enforced by primary keys.
+- Hot latest for bars: latest_bar_1m maintains one row per (provider,symbol) for O(1) “latest” queries.
+- Extents: series_extent caches earliest/latest per (provider,symbol,topic) for fast probes.
+- Queries (strategies/server): use tt_database::queries::{latest_data_time, get_extent, get_range, get_symbols, latest_bars_1m}.
+- Schema overview (simplified): bars_1m, latest_bar_1m, tick, bbo, mbp10, series_extent, instrument, kvp. See docs/database.md for details.
+
+Running Postgres locally:
+- docker compose -f pg/docker-compose.yml up -d (after copying pg/.env.example to pg/.env)
+- Configure DATABASE_URL or rely on DB_PATH fallback as described above.
+
+Notes:
+- Consolidators still produce 1s/1m/1h/1d candles for bandwidth efficiency and determinism.
+- Strategies and server both connect directly to PostgreSQL via sqlx. No DuckDB/Parquet catalog is used anymore.
 
 
 ## 🔑 Key-based subscription example
