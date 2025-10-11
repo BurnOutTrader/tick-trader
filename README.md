@@ -172,8 +172,6 @@ To use stop loss and take profit brackets in ProjectX switch to OCO brackets. (n
     - PX_TOPSTEP_FIRM=topstep
   - For all available firms and the correct string see: [providers.rs](crates/types/src/providers.rs)
     We build the api configuration from the api string from_env_string()
-- Rithmic keys use the RITHMIC_ prefix (parsing supported, implementation TBD):
-  - RITHMIC_{SYSTEM}_{USERNAME|APIKEY|PASSWORD|FCM_ID|IB_ID|USER_TYPE}
 - Server address:
   - TT_BUS_ADDR defaults to /tmp/tick-trader.sock (macOS) or @tick-trader.sock (Linux abstract). Override in .env or env.
 - Database connection:
