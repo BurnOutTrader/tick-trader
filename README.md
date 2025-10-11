@@ -300,44 +300,8 @@ Running Postgres locally:
 - Configure DATABASE_URL or rely on DB_PATH fallback as described above.
 
 Notes:
-- Consolidators still produce 1s/1m/1h/1d candles for bandwidth efficiency and determinism.
+- Consolidators can still produce 1s/1m/1h/1d candles for bandwidth efficiency and determinism.
 - Strategies and server both connect directly to PostgreSQL via sqlx. No DuckDB/Parquet catalog is used anymore.
-
-
-## 🔑 Key-based subscription example
-
-Example taken from the engine test binary (MNQZ25 via ProjectX Topstep):
-
-```rust
-use tt_types::keys::Topic;
-use tt_types::wire::{Request, SubscribeKey};
-
-// Send key-based subscribes; no FlowCredit needed (server manages backpressure).
-let _ = req_tx.send(Request::SubscribeKey(SubscribeKey { topic: Topic::Ticks, key: key.clone(), latest_only: false, from_seq: 0 })).await;
-let _ = req_tx.send(Request::SubscribeKey(SubscribeKey { topic: Topic::Depth, key: key.clone(), latest_only: false, from_seq: 0 })).await;
-```
-
-- SubscribeKey registers interest on (topic, key) and triggers Router → UpstreamManager::subscribe_md on first subscriber.
-- No FlowCredit is needed: the server auto-manages credits/backpressure and continues delivering as long as the client keeps up.
-- For lossless topics (Orders/Positions/AccountEvt), the Router tolerates transient backpressure and will only disconnect a client after sustained backlog (i.e., serious slowdown) beyond an internal threshold; otherwise it prefers to drop isolated batches for that client to keep the system healthy.
-
-
-## 📬 Data delivery to strategies
-
-- EngineRuntime delivers data to your Strategy via callbacks:
-  - on_tick, on_quote, on_mbp10 (Depth/OrderBook), on_bar
-  - on_orders_batch, on_positions_batch, on_account_delta_batch
-  - on_subscribe/on_unsubscribe for control acknowledgments
-- SHM-first for hot feeds:
-  - Hot market data (Ticks, Quotes, MBP10) is produced into per-(topic,key) SHM snapshots by the provider adapter.
-  - The Router emits Response::AnnounceShm for each (topic,key) once available.
-  - The engine, upon AnnounceShm, spawns a lightweight polling task that reads snapshots from SHM and invokes your callbacks. No duplicate UDS messages are sent for these topics while SHM is active.
-- UDS is still used for:
-  - Control-plane (subscribe/unsubscribe acks, pings, discovery), orders/positions/account events (lossless), bars/candles, and any topic not backed by SHM.
-- Fallback behavior:
-  - If SHM is not announced for a subscribed hot stream, the engine continues to receive the corresponding UDS batches and dispatches callbacks as before.
-- Strategy code does not change: you continue to implement the same callbacks; the engine selects the transport.
-
 
 ## 📈 Symbology quick reference
 
@@ -406,6 +370,23 @@ impl Strategy for MyStrat {
 }
 ```
 
+
+## 📬 Data delivery to strategies
+
+- EngineRuntime delivers data to your Strategy via callbacks:
+  - on_tick, on_quote, on_mbp10 (Depth/OrderBook), on_bar
+  - on_orders_batch, on_positions_batch, on_account_delta_batch
+  - on_subscribe/on_unsubscribe for control acknowledgments
+- SHM-first for hot feeds:
+  - Hot market data (Ticks, Quotes, MBP10) is produced into per-(topic,key) SHM snapshots by the provider adapter.
+  - The Router emits Response::AnnounceShm for each (topic,key) once available.
+  - The engine, upon AnnounceShm, spawns a lightweight polling task that reads snapshots from SHM and invokes your callbacks. No duplicate UDS messages are sent for these topics while SHM is active.
+- UDS is still used for:
+  - Control-plane (subscribe/unsubscribe acks, pings, discovery), orders/positions/account events (lossless), bars/candles, and any topic not backed by SHM.
+- Fallback behavior:
+  - If SHM is not announced for a subscribed hot stream, the engine continues to receive the corresponding UDS batches and dispatches callbacks as before.
+- Strategy code does not change: you continue to implement the same callbacks; the engine selects the transport.
+
 Fire-and-forget commands + instant reads
 - subscribe_now(topic, key)
 - unsubscribe_now(topic, key)
@@ -451,3 +432,6 @@ Why this is faster and simpler
 - Bounded command queue provides backpressure isolation — your decisions enqueue instantly; the engine handles I/O.
 
 More details: see docs/strategies.md and docs/advanced.md.
+
+
+
