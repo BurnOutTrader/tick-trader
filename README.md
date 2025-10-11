@@ -67,6 +67,30 @@ pub trait Strategy: Send + 'static {
 
     fn accounts(&self) -> Vec<AccountKey> { Vec::new() }
 }
+
+/// Just implement the trait
+pub struct MyStrategy;
+
+impl Strategy for MyStrategy {
+  fn on_start(&mut self, _h: EngineHandle) {}
+  fn on_stop(&mut self) {}
+
+  fn on_tick(&mut self, _t: &Tick, _provider_kind: ProviderKind) {}
+  fn on_quote(&mut self, _q: &Bbo, _provider_kind: ProviderKind) {}
+  fn on_bar(&mut self, _b: &Candle, _provider_kind: ProviderKind) {}
+  fn on_mbp10(&mut self, _d: &Mbp10, _provider_kind: ProviderKind) {}
+
+  fn on_orders_batch(&mut self, _b: &OrdersBatch) {}
+  fn on_positions_batch(&mut self, _b: &PositionsBatch) {}
+  fn on_account_delta(&mut self, _accounts: &[AccountDelta]) {}
+
+  fn on_trades_closed(&mut self, _trades: Vec<Trade>) {}
+
+  fn on_subscribe(&mut self, _instrument: Instrument, _data_topic: DataTopic, _success: bool) {}
+  fn on_unsubscribe(&mut self, _instrument: Instrument, _data_topic: DataTopic) {}
+
+  fn accounts(&self) -> Vec<AccountKey> { Vec::new() }
+}
 ```
 Then in main
 ```rust
@@ -80,23 +104,12 @@ async fn main() -> anyhow::Result<()> {
         .with_target(true)
         .init();
   
-  let instrument = Instrument::from_str("MNQ.Z25").unwrap(); //you can also subscribe at run time
-  let provider = ProviderKind::ProjectX(ProjectXTenant::Topstep); //you can also subscribe at run time
-
     let addr = std::env::var("TT_BUS_ADDR").unwrap_or_else(|_| "/tmp/tick-trader.sock".to_string());
     let bus = ClientMessageBus::connect(&addr).await?;
     let mut engine = EngineRuntime::new(bus.clone());
-    let account_name = AccountName::from_str("PRAC-V2-64").unwrap();
-    let strategy = TotalLiveTestStrategy {
-        _symbol: instrument.clone(),
-        data_provider: provider,
-        execution_provider: provider,
-        account_name: account_name.clone(),
-        subscribed: Vec::new(),
-        last_order_type: OrderType::Market,
-        engine: None,
-        symbol_key: SymbolKey::new(instrument, )
-    };
+  
+    // You can build your strategy with any properties you want, this is empty for brevity
+    let strategy = MyStrategy {};
     let _handle = engine.start(strategy).await?;
 
     // Auto shutdown in 1000000 seconds
