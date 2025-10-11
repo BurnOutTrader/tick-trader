@@ -66,7 +66,7 @@ pub async fn ingest_ticks(
         .await?;
     }
 
-    Ok(res.rows_affected() as u64)
+    Ok(res.rows_affected())
 }
 
 /// Insert a batch of best bid/offer quotes with de-duplication.
@@ -125,7 +125,7 @@ pub async fn ingest_bbo(
         .await?;
     }
 
-    Ok(res.rows_affected() as u64)
+    Ok(res.rows_affected())
 }
 
 /// Insert a batch of candles into bars_1m and update latest_bar_1m.
@@ -199,7 +199,7 @@ pub async fn ingest_candles(
         .await?;
     }
 
-    Ok(res.rows_affected() as u64)
+    Ok(res.rows_affected())
 }
 
 pub async fn ingest_mbp10(
@@ -294,5 +294,5 @@ pub async fn ingest_mbp10(
         .await?;
     }
 
-    Ok(res.rows_affected() as u64)
+    Ok(res.rows_affected())
 }
