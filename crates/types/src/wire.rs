@@ -478,6 +478,14 @@ pub struct DbPageInfo {
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, PartialEq, Clone, Debug)]
 #[archive(check_bytes)]
+pub struct DbUpdateKeyLatest {
+    pub provider: ProviderKind,
+    pub instrument: Instrument,
+    pub topic: Topic,
+}
+
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, PartialEq, Clone, Debug)]
+#[archive(check_bytes)]
 pub enum Request {
     // Control from clients to server (coarse)
     Subscribe(Subscribe),
@@ -499,6 +507,8 @@ pub enum Request {
     DbGetLatest(DbGetLatest),
     DbGetRange(DbGetRange),
     DbGetSymbols(DbGetSymbols),
+    // Historical data update trigger
+    DbUpdateKeyLatest(DbUpdateKeyLatest),
     // Execution
     PlaceOrder(PlaceOrder),
     CancelOrder(CancelOrder),
@@ -527,8 +537,6 @@ pub enum Response {
     PositionsBatch(PositionsBatch),
     AccountDeltaBatch(AccountDeltaBatch),
     ClosedTrades(Vec<Trade>),
-    // DB paging info (sent alongside or after data batches)
-    DbPage(DbPageInfo),
     SubscribeResponse {
         topic: Topic,
         instrument: Instrument,
@@ -570,6 +578,7 @@ impl Bytes<Self> for WireMessage {
         // tokio/bytes may yield slices with only 4-byte alignment.
         let mut aligned = AlignedVec::with_capacity(data.len());
         aligned.extend_from_slice(data);
+        
         match rkyv::from_bytes::<WireMessage>(&aligned) {
             Ok(response) => Ok(response),
             Err(e) => Err(anyhow::Error::msg(e.to_string())),

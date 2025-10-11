@@ -1,5 +1,5 @@
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
-use std::fmt::Display;
+use std::fmt::{Display, Formatter};
 use std::hash::Hash;
 use strum_macros::Display;
 
@@ -235,4 +235,13 @@ pub enum RithmicServer {
 pub enum ProviderKind {
     ProjectX(ProjectXTenant),
     Rithmic(RithmicSystem),
+}
+
+impl Display for ProviderKind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ProviderKind::ProjectX(x) => write!(f, "projectx:{}", x),
+            ProviderKind::Rithmic(r) => write!(f, "rithmic:{}", r),
+        }
+    }
 }

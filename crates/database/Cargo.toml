@@ -17,18 +17,10 @@ tracing = { workspace = true }
 serde_json = {workspace = true}
 tokio = { workspace = true }
 ahash = { workspace = true }
-duckdb = { workspace = true, features = ["bundled"] }
 arrow = "56.1.0"
 parquet = "56.2.0"
 nanoid = "0.4.0"
 tempfile = "3.10.1"
 lazy_static = {workspace = true}
+sqlx = { workspace = true }
 
-[features]
-# Gate legacy query/update modules until refactored to monthly layout
-queries = []
-default = ["queries"]
-
-[[bin]]
-name = "data_integrity"
-path = "bin/data_integrity.rs"

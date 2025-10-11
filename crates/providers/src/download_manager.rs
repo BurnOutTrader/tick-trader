@@ -1,9 +1,7 @@
 use chrono::{DateTime, Duration, Utc};
 use chrono_tz::Tz;
 use dotenv::dotenv;
-use rust_decimal::prelude::ToPrimitive;
 use std::collections::HashMap;
-use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::Notify;
 use tokio::sync::{Mutex, RwLock};
@@ -11,11 +9,9 @@ use tokio::task::JoinHandle;
 use tokio::time::{Duration as TokioDuration, timeout};
 use tracing::info;
 use tt_database::ingest::{ingest_bbo, ingest_candles, ingest_ticks};
-use tt_database::init::init_db;
-use tt_database::models::{BboRow, CandleRow, TickRow};
-use tt_database::paths::provider_kind_to_db_string;
+use tt_database::init::Connection;
 use tt_database::queries::latest_data_time;
-use tt_types::data::models::{Resolution, TradeSide};
+use tt_types::data::models::Resolution;
 use tt_types::engine_id::EngineUuid;
 use tt_types::history::{HistoricalRequest, HistoryEvent};
 use tt_types::keys::Topic;
@@ -23,7 +19,7 @@ use tt_types::providers::ProviderKind;
 use tt_types::securities::hours::market_hours::{
     MarketHours, SessionKind, hours_for_exchange, next_session_open_after,
 };
-use tt_types::securities::symbols::{Instrument, exchange_market_type};
+use tt_types::securities::symbols::Instrument;
 use tt_types::server_side::traits::HistoricalDataProvider;
 
 #[derive(Clone, Hash, PartialEq, Eq)]
@@ -51,6 +47,7 @@ pub struct Entry {
 
 struct DownloadManagerInner {
     inflight: Arc<RwLock<HashMap<DownloadKey, std::sync::Arc<Entry>>>>,
+    db: tt_database::init::Connection,
 }
 
 #[derive(Clone)]
@@ -113,9 +110,52 @@ impl Default for DownloadManager {
 
 impl DownloadManager {
     pub fn new() -> Self {
+        // Load .env first
+        dotenv().ok();
+        // Try to read DATABASE_URL; else synthesize from DB_PATH fallback and pg defaults
+        let fallback_url = if std::env::var("DATABASE_URL").is_err() {
+            // DB_PATH format like "127.0.0.1:5432:5432" (host:host_port:container_port)
+            let db_path =
+                std::env::var("DB_PATH").unwrap_or_else(|_| "127.0.0.1:5432:5432".to_string());
+            let parts: Vec<&str> = db_path.split(':').collect();
+            let (host, port) = match parts.as_slice() {
+                [h, p_host, _p_container] => (*h, *p_host),
+                [h, p] => (*h, *p),
+                [h] => (*h, "5432"),
+                _ => ("127.0.0.1", "5432"),
+            };
+            let user = std::env::var("POSTGRES_USER").unwrap_or_else(|_| "postgres".to_string());
+            let pass = std::env::var("POSTGRES_PASSWORD")
+                .unwrap_or_else(|_| "change-this-super-secret".to_string());
+            let db = std::env::var("TT_DB").unwrap_or_else(|_| "tick_trader".to_string());
+            Some(format!(
+                "postgres://{}:{}@{}:{}/{}",
+                user, pass, host, port, db
+            ))
+        } else {
+            None
+        };
+        let db = match tt_database::init::pool_from_env() {
+            Ok(p) => p,
+            Err(_) => {
+                let url = fallback_url.unwrap_or_else(|| {
+                    panic!("DATABASE_URL not set and no fallback could be constructed")
+                });
+                sqlx::postgres::PgPoolOptions::new()
+                    .max_connections(
+                        std::env::var("TT_DB_MAX_CONNS")
+                            .ok()
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(8),
+                    )
+                    .connect_lazy(&url)
+                    .expect("failed to create Postgres pool from fallback URL")
+            }
+        };
         Self {
             inner: std::sync::Arc::new(DownloadManagerInner {
                 inflight: Arc::new(RwLock::new(HashMap::new())),
+                db,
             }),
         }
     }
@@ -190,8 +230,9 @@ impl DownloadManager {
             let key2 = key.clone();
             let client2 = client.clone();
             let req2 = req.clone();
+            let db_conn = dm.inner.db.clone();
             let handle = tokio::spawn(async move {
-                let res = run_download(client2, req2).await;
+                let res = run_download(client2, req2, db_conn).await;
                 // store result and notify
                 {
                     let mut g = entry2.result.lock().await;
@@ -218,12 +259,11 @@ impl DownloadManager {
 async fn run_download(
     client: Arc<dyn HistoricalDataProvider>,
     req: HistoricalRequest,
+    connection: Connection,
 ) -> anyhow::Result<()> {
-    dotenv().ok();
-    let db_path = std::env::var("DB_PATH").unwrap_or_else(|_| "./storage".to_string());
-    let db_path = Path::new(&db_path);
+    // Ensure the schema exists before we start persisting fetched data. This is idempotent.
+    tt_database::schema::ensure_schema(&connection).await?;
     const CAL_TZ: Tz = chrono_tz::UTC;
-    let connection = init_db(db_path)?;
     let resolution = match req.topic {
         Topic::Ticks => None,
         Topic::Quotes => None,
@@ -236,7 +276,6 @@ async fn run_download(
     };
 
     let provider_code = client.name();
-    let market_type = exchange_market_type(req.exchange);
     let hours = hours_for_exchange(req.exchange);
 
     let earliest = client
@@ -247,7 +286,7 @@ async fn run_download(
 
     // Cursor := max(persisted_ts)+1ns, else provider earliest
     let mut cursor: DateTime<Utc> =
-        match latest_data_time(&connection, req.provider_kind, &req.instrument, req.topic) {
+        match latest_data_time(&connection, req.provider_kind, &req.instrument, req.topic).await {
             Ok(Some(ts)) => ts + Duration::nanoseconds(1),
             Ok(None) => match earliest {
                 None => return Err(anyhow::anyhow!("no data available")),
@@ -318,9 +357,9 @@ async fn run_download(
 
         // Accumulators and watermark of the max timestamp we actually received.
         let mut max_ts: Option<DateTime<Utc>> = None;
-        let mut ticks: Vec<TickRow> = Vec::new();
-        let mut candles: Vec<CandleRow> = Vec::new();
-        let mut quotes: Vec<BboRow> = Vec::new();
+        let mut ticks: Vec<tt_types::data::core::Tick> = Vec::new();
+        let mut candles: Vec<tt_types::data::core::Candle> = Vec::new();
+        let mut quotes: Vec<tt_types::data::core::Bbo> = Vec::new();
 
         for ev in events {
             match ev {
@@ -335,48 +374,21 @@ async fn run_download(
                         if !c.is_closed(Utc::now()) {
                             continue;
                         }
-                        candles.push(CandleRow::from_candle(provider_code, c));
+                        candles.push(c);
                     }
                 }
                 HistoryEvent::Tick(t) => {
                     if matches!(req.topic, Topic::Ticks) {
                         let ts = t.time;
                         max_ts = Some(max_ts.map_or(ts, |m| m.max(ts)));
-                        let side_u8 = match t.side {
-                            TradeSide::Buy => 1,
-                            TradeSide::Sell => 2,
-                            _ => 0,
-                        };
-                        ticks.push(TickRow {
-                            provider: provider_kind_to_db_string(provider_code),
-                            symbol_id: t.symbol,
-                            price: t.price.to_f64().unwrap_or(0.0),
-                            size: t.volume.to_f64().unwrap_or(0.0),
-                            side: side_u8,
-                            key_ts_utc_ns: dt_to_ns_i64(t.time), // robust ns key
-                            key_tie: t.venue_seq.unwrap_or(0),
-                            venue_seq: t.venue_seq,
-                            exec_id: None,
-                        });
+                        ticks.push(t);
                     }
                 }
                 HistoryEvent::Bbo(q) => {
                     if matches!(req.topic, Topic::Quotes) {
                         let ts = q.time;
                         max_ts = Some(max_ts.map_or(ts, |m| m.max(ts)));
-                        quotes.push(BboRow {
-                            provider: provider_kind_to_db_string(provider_code),
-                            symbol_id: q.symbol,
-                            key_ts_utc_ns: dt_to_ns_i64(q.time),
-                            bid: q.bid.to_f64().unwrap_or(0.0),
-                            bid_size: q.bid_size.to_f64().unwrap_or(0.0),
-                            ask: q.ask.to_f64().unwrap_or(0.0),
-                            ask_size: q.ask_size.to_f64().unwrap_or(0.0),
-                            bid_orders: q.bid_orders,
-                            ask_orders: q.ask_orders,
-                            venue_seq: q.venue_seq,
-                            is_snapshot: q.is_snapshot,
-                        });
+                        quotes.push(q);
                     }
                 }
                 HistoryEvent::EndOfStream => break,
@@ -391,51 +403,29 @@ async fn run_download(
         match req.topic {
             Topic::Ticks => {
                 if !ticks.is_empty() {
-                    let out_paths = ingest_ticks(
-                        &connection,
-                        &req.provider_kind,
-                        &req.instrument,
-                        market_type,
-                        req.topic,
-                        &ticks,
-                        db_path,
-                        9,
-                    )?;
-                    tracing::info!(files = out_paths.len(), start=%cursor, end=%end, "persisted ticks");
+                    let _rows =
+                        ingest_ticks(&connection, req.provider_kind, &req.instrument, ticks)
+                            .await?;
+                    tracing::info!(rows = _rows, start=%cursor, end=%end, "persisted ticks");
                 } else {
                     tracing::debug!(start=%cursor, end=%end, "no ticks returned");
                 }
             }
             Topic::Quotes => {
                 if !quotes.is_empty() {
-                    let out_paths = ingest_bbo(
-                        &connection,
-                        &req.provider_kind,
-                        &req.instrument,
-                        market_type,
-                        req.topic,
-                        &quotes,
-                        db_path,
-                        9,
-                    )?;
-                    tracing::info!(files = out_paths.len(), start=%cursor, end=%end, "persisted bbo");
+                    let rows =
+                        ingest_bbo(&connection, req.provider_kind, &req.instrument, quotes).await?;
+                    tracing::info!(rows = rows, start=%cursor, end=%end, "persisted bbo");
                 } else {
                     tracing::debug!(start=%cursor, end=%end, "no bbo returned");
                 }
             }
             Topic::Candles1s | Topic::Candles1m | Topic::Candles1h | Topic::Candles1d => {
                 if !candles.is_empty() {
-                    let out_paths = ingest_candles(
-                        &connection,
-                        &req.provider_kind,
-                        &req.instrument,
-                        market_type,
-                        req.topic,
-                        &candles,
-                        db_path,
-                        9,
-                    )?;
-                    tracing::info!(files = out_paths.len(), start=%cursor, end=%end, "persisted candles");
+                    let rows =
+                        ingest_candles(&connection, req.provider_kind, &req.instrument, candles)
+                            .await?;
+                    tracing::info!(rows = rows, start=%cursor, end=%end, "persisted candles");
                 } else {
                     tracing::debug!(start=%cursor, end=%end, "no candles returned");
                 }
@@ -476,43 +466,6 @@ fn choose_span(res: Option<Resolution>) -> chrono::Duration {
         }
         Some(Resolution::Daily) | Some(Resolution::Weekly) => chrono::Duration::days(7),
         None => chrono::Duration::days(1), // ticks/quotes/depth: be conservative
-    }
-}
-
-#[inline]
-fn dt_to_ns_i64(dt: chrono::DateTime<Utc>) -> i64 {
-    // Try the safe method that returns Option<i64>
-    if let Some(n) = dt.timestamp_nanos_opt() {
-        n
-    } else {
-        // Fallback: dt is out of representable range, clamp
-        let secs = dt.timestamp();
-        let sub = dt.timestamp_subsec_nanos() as i64;
-        // Compose, but guard overflow manually
-        // Note timestamp() * 1_000_000_000 may overflow i64, so clamp
-        match secs.checked_mul(1_000_000_000) {
-            Some(sec_nano_base) => {
-                // may still overflow on addition
-                match sec_nano_base.checked_add(sub) {
-                    Some(v) => v,
-                    None => {
-                        if sec_nano_base.is_negative() {
-                            i64::MIN
-                        } else {
-                            i64::MAX
-                        }
-                    }
-                }
-            }
-            None => {
-                // overflow in multiplication
-                if secs.is_negative() {
-                    i64::MIN
-                } else {
-                    i64::MAX
-                }
-            }
-        }
     }
 }
 

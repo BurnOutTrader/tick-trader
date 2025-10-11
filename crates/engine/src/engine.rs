@@ -5,10 +5,10 @@ use crate::portfolio::PortfolioManager;
 use anyhow::anyhow;
 use chrono::Utc;
 use dashmap::DashMap;
-use duckdb::Connection;
 use rust_decimal::prelude::ToPrimitive;
 use std::collections::{HashMap, VecDeque};
-use std::path::Path;
+// use std::path::Path;
+use sqlx::{Pool, Postgres};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -16,7 +16,6 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 use tracing::trace;
 use tracing::{error, info};
 use tt_bus::{ClientMessageBus, ClientSubId};
-use tt_database::init::init_db;
 use tt_types::accounts::account::AccountName;
 use tt_types::accounts::events::{AccountDelta, PositionSide};
 use tt_types::data::core::{Bbo, Candle, Tick};
@@ -54,13 +53,24 @@ struct EngineInner {
     interest: HashMap<StreamKey, InterestEntry>,
     metrics: HashMap<StreamKey, StreamMetrics>,
     #[allow(dead_code)]
-    database: Connection,
+    db: Pool<Postgres>,
     caches: Caches,
 }
 
 impl<P: MarketDataProvider + 'static> Engine<P> {
     pub fn new(provider: Arc<P>, cfg: EngineConfig) -> anyhow::Result<Self> {
-        let database = init_db(Path::new(&cfg.db_path))?;
+        // Initialize Postgres connection pool lazily (non-async) using sqlx
+        // Prefer env var DATABASE_URL; fallback to cfg.db_path if it looks like a URL.
+        let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| cfg.db_path.clone());
+        if db_url.is_empty() {
+            return Err(anyhow!(
+                "DATABASE_URL is not set and cfg.db_path is empty; cannot initialize Postgres pool"
+            ));
+        }
+        // Use a small default pool; strategies typically run few concurrent queries.
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(8)
+            .connect_lazy(&db_url)?;
         Ok(Self {
             provider,
             cfg,
@@ -68,7 +78,7 @@ impl<P: MarketDataProvider + 'static> Engine<P> {
                 interest: HashMap::new(),
                 metrics: HashMap::new(),
                 caches: Caches::default(),
-                database,
+                db: pool,
             })),
         })
     }
@@ -1343,9 +1353,6 @@ impl EngineRuntime {
                         // Record closed trades for realized PnL computation
                         pm.apply_closed_trades(t.clone());
                         strategy_for_task.on_trades_closed(t);
-                    }
-                    Response::DbPage(_p) => {
-                        // Paging metadata from DB queries; engine ignores for now
                     }
                     Response::Tick {
                         tick,

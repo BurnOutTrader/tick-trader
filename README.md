@@ -42,6 +42,7 @@ The engine can place live orders and is intended strictly for testing and evalua
 - 🏢 ProjectX tenants: not all firms are pre‑encoded in `ProjectXTenant` yet; adding a new tenant is straightforward and reuses the existing logic.
 - 🚧 Status: work in progress — the architecture is largely stabilized, but features are still evolving.
 - 📡 Support for publishing/sharing strategy signals/insights on the bus will be implemented last
+- 🛅 PostgreSQL + Docker Database for storage and query of historical data by strategies and the server. 
 
 ### Strategies are straight forward
 [Example Strategy](crates/a_strategies/examples/data_test_strategy)
@@ -82,8 +83,8 @@ async fn main() -> anyhow::Result<()> {
         .with_target(true)
         .init();
   
-  let instrument = Instrument::from_str("MNQ.Z25").unwrap();
-  let provider = ProviderKind::ProjectX(ProjectXTenant::Topstep);
+  let instrument = Instrument::from_str("MNQ.Z25").unwrap(); //you can also subscribe at run time
+  let provider = ProviderKind::ProjectX(ProjectXTenant::Topstep); //you can also subscribe at run time
 
     let addr = std::env::var("TT_BUS_ADDR").unwrap_or_else(|_| "/tmp/tick-trader.sock".to_string());
     let bus = ClientMessageBus::connect(&addr).await?;
@@ -163,43 +164,74 @@ To use stop loss and take profit brackets in ProjectX switch to OCO brackets. (n
   - RITHMIC_{SYSTEM}_{USERNAME|APIKEY|PASSWORD|FCM_ID|IB_ID|USER_TYPE}
 - Server address:
   - TT_BUS_ADDR defaults to /tmp/tick-trader.sock (macOS) or @tick-trader.sock (Linux abstract). Override in .env or env.
-- Engine database path:
-  - DB_PATH sets the directory for local database storage used by both the server and strategies (tt-engine). Both must use the same DB_PATH to ensure consistent access to the DuckDB catalog and Parquet data. Defaults to ./storage if not set. Example:
-    - DB_PATH=./mydata
+- Database path:
+  - DB_PATH sets the address of the database
+    - DB_PATH=127.0.0.1:5432:5432
 - Integrated database:
   - Tick Trader uses DuckDB as an integrated catalog and metadata database. DuckDB tracks and manages Parquet files, which are used for durable, efficient storage of all historical and real-time data. Both the server and strategies interact with the same DuckDB instance and Parquet files via the shared DB_PATH.
 
 ## ⚡ Quick start
 
-1) Build the workspace:
+### 1) Build the workspace:
 
 ```bash
 cargo build
 ```
 
-2) Start the server (separate terminal):
+### 2) Initialize the database
+🗄️ Database Setup (PostgreSQL + Docker)
+
+This project uses a PostgreSQL instance defined in pg/docker-compose.yml.
+It runs a local database named tick_trader with dedicated roles for the server and strategies.
+
+🧰 Prerequisites
+•	Docker Desktop (or Docker Engine + Compose plugin)
+•	Ports 5432 free locally
+
+```bash
+cd pg
+cp .env.example .env   
+chmod +x init/01-init.sh
+docker compose up -d
+docker compose logs -f postgres
+```
+
+✅ Expected output:
+
+```terminaloutput
+PostgreSQL init process complete; ready for start up.
+database system is ready to accept connections
+tick_trader DB and roles initialized.
+```
+
+### 3) Start the server (separate terminal):
 
 ```bash
 TT_BUS_ADDR=/tmp/tick-trader.sock cargo run -p tt-server
 ```
 
-3) Prepare .env with your provider credentials (ProjectX example):
-
+### 3) Prepare .env with your provider credentials (ProjectX example):
+Warning: do not change db path unless you are experienced, It should remain a local address.
 ```env
 PX_TOPSTEP_USERNAME=your_user
 PX_TOPSTEP_APIKEY=your_key
 PX_TOPSTEP_FIRM=topstep
 TT_BUS_ADDR=/tmp/tick-trader.sock
+DB_PATH=127.0.0.1:5432:5432 
 ```
 
-4) Run the test strategy (client) in another terminal:
+### 4) Run the test strategy (client) in another terminal:
 
 ```bash
-cargo run -p tt-engine --bin tt-engine-test_strategy
+cargo run -p crates/a_strategies/examples --bin tt-data_test_strategy
 ```
 
-It connects over UDS for control and lossless streams. Hot market data (Ticks/Quotes/MBP10) is delivered via SHM snapshots once announced; the engine automatically starts per-(topic,key) SHM readers. If SHM is not available for a stream, the engine falls back to UDS delivery.
-
+## Stop The Database
+If you want to stop the database run
+```bash
+cd pg
+docker compose down
+```
 
 ## 📚 Documentation index
 
@@ -209,6 +241,12 @@ It connects over UDS for control and lossless streams. Hot market data (Ticks/Qu
 - Database and persistence: [docs/database.md](docs/database.md)
 - Strategies guide: [docs/strategies.md](docs/strategies.md)
 - Advanced topics and notes: [docs/advanced.md](docs/advanced.md)
+
+## Server
+
+- It connects to strategies over UDS for control and lossless streams. 
+- Hot market data (Ticks/Quotes/MBP10) is delivered via SHM snapshots once announced; the engine automatically starts per-(topic,key) SHM readers. 
+- If SHM is not available for a stream, the strategy engine and server router fall back to UDS delivery for that stream only.
 
 ## 🧾 Wire serialization and alignment (current)
 

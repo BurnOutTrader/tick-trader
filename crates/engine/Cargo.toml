@@ -5,7 +5,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-tt-database = {path = "../database", features = ["queries"]}
+# Database access now goes through Postgres via sqlx; tt-database may still provide models/paths
+tt-database = {path = "../database"}
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -16,10 +17,10 @@ tt-types = { path = "../types" }
 tt-bus = { path = "../bus" }
 tt-shm = { path = "../shm" }
 dashmap = { workspace = true }
-duckdb = {workspace = true}
 rust_decimal = {workspace = true}
 ahash = { workspace = true }
 crossbeam = { workspace = true }
+sqlx = { workspace = true }
 
 [[bin]]
 name = "tt-engine-test_strategy"

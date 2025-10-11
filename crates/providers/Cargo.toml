@@ -12,10 +12,10 @@ tt-types = { path = "../types" }
 tt-bus = { path = "../bus", features = ["server"] }
 projectx = { package = "tt-projectx", path = "../adapters/projectx" }
 tt-shm = { path = "../shm" }
-tt-database = {path = "../database", features = ["queries"]}
+tt-database = { path = "../database" }
 tokio = { workspace = true }
 chrono = { workspace = true }
 chrono-tz = { workspace = true }
 rust_decimal = { workspace = true }
-duckdb = {workspace = true}
 dotenv =  {workspace = true}
+sqlx = { workspace = true }

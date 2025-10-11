@@ -10,6 +10,7 @@ server = []
 
 [dependencies]
 tt-types = { path = "../types" }
+chrono = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }
 # bench-only (optional normal dependency so feature-gated code compiles)

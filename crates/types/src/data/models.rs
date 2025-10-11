@@ -31,28 +31,18 @@ pub enum Resolution {
 impl Resolution {
     /// Returns a short key string for file paths or topic suffixes when applicable.
     /// Returns None for TickBars which are generally parameterized elsewhere.
-    pub fn as_key(&self) -> Option<&'static str> {
-        match self {
-            Resolution::Seconds(n) => Some(Box::leak(format!("sec{}", n).into_boxed_str())),
-            Resolution::Minutes(n) => Some(Box::leak(format!("min{}", n).into_boxed_str())),
-            Resolution::Hours(n) => Some(Box::leak(format!("hr{}", n).into_boxed_str())),
-            Resolution::Daily => Some("daily"),
-            Resolution::Weekly => Some("weekly"),
-        }
-    }
-
-    pub fn is_intraday(&self) -> bool {
-        !matches!(self, Resolution::Daily | Resolution::Weekly)
-    }
-
-    pub fn to_os_string(&self) -> String {
-        match self {
+    pub fn as_key(&self) -> Option<String> {
+        Some(match self {
             Resolution::Seconds(n) => format!("sec{}", n),
             Resolution::Minutes(n) => format!("min{}", n),
             Resolution::Hours(n) => format!("hr{}", n),
             Resolution::Daily => "daily".to_string(),
             Resolution::Weekly => "weekly".to_string(),
-        }
+        })
+    }
+
+    pub fn is_intraday(&self) -> bool {
+        !matches!(self, Resolution::Daily | Resolution::Weekly)
     }
 
     pub fn as_duration(&self) -> chrono::Duration {

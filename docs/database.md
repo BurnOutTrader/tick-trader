@@ -2,6 +2,21 @@
 
 This document describes the database crate that powers Tick Trader’s on-disk history and the lightweight DuckDB catalog used to discover and maintain it.
 
+Optional for remote db you should first change you login credentials by creating a .env in
+```bash
+# used by the official image to create the bootstrap superuser
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=change-this-super-secret
+
+# our app DB name
+TT_DB=tick_trader
+
+# app roles (server = writer; strategies = reader)
+TT_WRITER=tt_writer
+TT_WRITER_PASSWORD=change-writer-pass
+TT_READER=tt_reader
+TT_READER_PASSWORD=change-reader-pass
+```
 ## Goals
 
 - Simple, durable file-based storage in Parquet
