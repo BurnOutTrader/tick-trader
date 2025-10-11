@@ -590,36 +590,88 @@ impl EngineRuntime {
                 securities_by_provider_for_task.clone(),
             )
             .await;
-            while let Some(resp) = rx.recv().await {
-                // Fulfill engine-local correlated callbacks first
-                match &resp {
-                    Response::InstrumentsResponse(ir) => {
-                        if let Some((_k, tx)) = pending.remove(&ir.corr_id) {
-                            let _ = tx.send(resp.clone());
-                            continue;
+
+            // Create a time ticker to drive consolidators' on_time about 50ms after each whole second
+            let mut ticker = {
+                use tokio::time::{Instant, MissedTickBehavior, interval_at};
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default();
+                let sub_ns = now.subsec_nanos();
+                let target_ns: u32 = 50_000_000; // 50ms after the whole second
+                let wait_ns: u64 = if sub_ns <= target_ns {
+                    (target_ns - sub_ns) as u64
+                } else { 1_000_000_000u64 - (sub_ns as u64 - target_ns as u64)
+                };
+                let start = Instant::now() + Duration::from_nanos(wait_ns);
+                let mut iv = interval_at(start, Duration::from_secs(1));
+                iv.set_missed_tick_behavior(MissedTickBehavior::Skip);
+                iv
+            };
+
+            loop {
+                tokio::select! {
+                    biased;
+                    // Drive time-based consolidation first if due
+                    _ = ticker.tick() => {
+                        let now = chrono::Utc::now();
+                        // Snapshot keys to avoid holding iterator while mutating entries
+                        let keys: Vec<(Topic, SymbolKey)> = handle_inner_for_task
+                            .consolidators
+                            .iter()
+                            .map(|kv| kv.key().clone())
+                            .collect();
+                        for (tpc, sk) in keys.into_iter() {
+                            // Short-lived mutable borrow to call on_time
+                            let out_opt = {
+                                let key = (tpc, sk.clone());
+                                if let Some(mut cons_ref) = handle_inner_for_task
+                                    .consolidators
+                                    .get_mut(&key)
+                                {
+                                    cons_ref.value_mut().on_time(now)
+                                } else { None }
+                            };
+
+                            if let Some(tt_types::consolidators::ConsolidatedOut::Candle(c)) = out_opt {
+                                // Update marks and deliver to strategy
+                                pm.update_apply_last_price(sk.provider, &c.instrument, c.close);
+                                strategy_for_task.on_bar(&c, sk.provider);
+                            }
                         }
-                    }
-                    Response::InstrumentsMapResponse(imr) => {
-                        if let Some((_k, tx)) = pending.remove(&imr.corr_id) {
-                            let _ = tx.send(resp.clone());
-                            continue;
-                        }
-                    }
-                    Response::AccountInfoResponse(air) => {
-                        if let Some((_k, tx)) = pending.remove(&air.corr_id) {
-                            let _ = tx.send(Response::AccountInfoResponse(air.clone()));
-                            continue;
-                        }
-                    }
-                    Response::DbUpdateComplete { corr_id, .. } => {
-                        if let Some((_k, tx)) = pending.remove(corr_id) {
-                            let _ = tx.send(resp.clone());
-                            continue;
-                        }
-                    }
-                    _ => {}
-                }
-                match resp {
+                    },
+                    resp_opt = rx.recv() => {
+                        if let Some(resp) = resp_opt {
+                            // Fulfill engine-local correlated callbacks first
+                            match &resp {
+                                Response::InstrumentsResponse(ir) => {
+                                    if let Some((_k, tx)) = pending.remove(&ir.corr_id) {
+                                        let _ = tx.send(resp.clone());
+                                        continue;
+                                    }
+                                }
+                                Response::InstrumentsMapResponse(imr) => {
+                                    if let Some((_k, tx)) = pending.remove(&imr.corr_id) {
+                                        let _ = tx.send(resp.clone());
+                                        continue;
+                                    }
+                                }
+                                Response::AccountInfoResponse(air) => {
+                                    if let Some((_k, tx)) = pending.remove(&air.corr_id) {
+                                        let _ = tx.send(Response::AccountInfoResponse(air.clone()));
+                                        continue;
+                                    }
+                                }
+                                Response::DbUpdateComplete { corr_id, .. } => {
+                                    let cid: u64 = *corr_id;
+                                    if let Some((_k, tx)) = pending.remove(&cid) {
+                                        let _ = tx.send(resp.clone());
+                                        continue;
+                                    }
+                                }
+                                _ => {}
+                            }
+                            match resp {
                     Response::TickBatch(TickBatch {
                         ticks,
                         provider_kind,
@@ -935,6 +987,9 @@ impl EngineRuntime {
                     securities_by_provider_for_task.clone(),
                 )
                 .await;
+                        } else { break; }
+                    }
+                }
             }
 
             strategy_for_task.on_stop();
