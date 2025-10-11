@@ -370,29 +370,6 @@ impl Strategy for MyStrat {
 }
 ```
 
-
-## 📬 Data delivery to strategies
-
-- EngineRuntime delivers data to your Strategy via callbacks:
-  - on_tick, on_quote, on_mbp10 (Depth/OrderBook), on_bar
-  - on_orders_batch, on_positions_batch, on_account_delta_batch
-  - on_subscribe/on_unsubscribe for control acknowledgments
-- SHM-first for hot feeds:
-  - Hot market data (Ticks, Quotes, MBP10) is produced into per-(topic,key) SHM snapshots by the provider adapter.
-  - The Router emits Response::AnnounceShm for each (topic,key) once available.
-  - The engine, upon AnnounceShm, spawns a lightweight polling task that reads snapshots from SHM and invokes your callbacks. No duplicate UDS messages are sent for these topics while SHM is active.
-- UDS is still used for:
-  - Control-plane (subscribe/unsubscribe acks, pings, discovery), orders/positions/account events (lossless), bars/candles, and any topic not backed by SHM.
-- Fallback behavior:
-  - If SHM is not announced for a subscribed hot stream, the engine continues to receive the corresponding UDS batches and dispatches callbacks as before.
-- Strategy code does not change: you continue to implement the same callbacks; the engine selects the transport.
-
-Fire-and-forget commands + instant reads
-- subscribe_now(topic, key)
-- unsubscribe_now(topic, key)
-- place_now(place_spec) → returns EngineUuid (tag added into custom_tag for correlation)
-- is_long/is_short/is_flat(&Instrument)
-
 Async is still available (where it’s cold path)
 - Need discovery? Use handle.list_instruments().await.
 - Need account snapshots? EngineRuntime keeps last_* caches with async getters for tooling/UI.
@@ -421,6 +398,29 @@ impl Strategy for AsyncishStrat {
 
 // elsewhere: spawn the consumer task that can .await, debounce, do I/O, etc.
 ```
+
+
+## 📬 Data delivery to strategies
+
+- EngineRuntime delivers data to your Strategy via callbacks:
+  - on_tick, on_quote, on_mbp10 (Depth/OrderBook), on_bar
+  - on_orders_batch, on_positions_batch, on_account_delta_batch
+  - on_subscribe/on_unsubscribe for control acknowledgments
+- SHM-first for hot feeds:
+  - Hot market data (Ticks, Quotes, MBP10) is produced into per-(topic,key) SHM snapshots by the provider adapter.
+  - The Router emits Response::AnnounceShm for each (topic,key) once available.
+  - The engine, upon AnnounceShm, spawns a lightweight polling task that reads snapshots from SHM and invokes your callbacks. No duplicate UDS messages are sent for these topics while SHM is active.
+- UDS is still used for:
+  - Control-plane (subscribe/unsubscribe acks, pings, discovery), orders/positions/account events (lossless), bars/candles, and any topic not backed by SHM.
+- Fallback behavior:
+  - If SHM is not announced for a subscribed hot stream, the engine continues to receive the corresponding UDS batches and dispatches callbacks as before.
+- Strategy code does not change: you continue to implement the same callbacks; the engine selects the transport.
+
+Fire-and-forget commands + instant reads
+- subscribe_now(topic, key)
+- unsubscribe_now(topic, key)
+- place_now(place_spec) → returns EngineUuid (tag added into custom_tag for correlation)
+- is_long/is_short/is_flat(&Instrument)
 
 Migration notes (from older async Strategy)
 - Remove async from Strategy methods; they now take &T or &mut self by reference with no awaits.
