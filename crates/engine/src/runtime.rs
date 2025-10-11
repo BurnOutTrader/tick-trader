@@ -1,3 +1,4 @@
+use crate::backtest_clock::BacktestClock;
 use crate::engine::EngineAccountsState;
 use crate::handle::EngineHandle;
 use crate::models::{Command, DataTopic};
@@ -38,9 +39,15 @@ pub(crate) struct EngineRuntimeShared {
     // Consolidators shared with handle for registration
     pub(crate) consolidators:
         Arc<DashMap<(Topic, SymbolKey), Box<dyn tt_types::consolidators::Consolidator + Send>>>,
+    // When true, disable live-only behaviors (SHM, Kick, vendor timers)
+    pub(crate) backtest_mode: bool,
+    // Deterministic simulation clock (present in backtest mode)
+    pub(crate) backtest_clock: Option<Arc<BacktestClock>>,
 }
 
 pub struct EngineRuntime {
+    backtest_mode: bool,
+    backtest_clock: Option<Arc<BacktestClock>>,
     bus: Arc<ClientMessageBus>,
     sub_id: Option<ClientSubId>,
     rx: Option<mpsc::Receiver<Response>>,
@@ -151,7 +158,9 @@ impl EngineRuntime {
 
     pub async fn subscribe_symbol(&self, topic: Topic, key: SymbolKey) -> anyhow::Result<()> {
         // On first subscribe for this provider, start vendor securities refresh (hourly)
-        self.ensure_vendor_securities_watch(key.provider).await;
+        if !self.backtest_mode {
+            self.ensure_vendor_securities_watch(key.provider).await;
+        }
         // Forward to server
         self.bus
             .handle_request(
@@ -180,7 +189,9 @@ impl EngineRuntime {
     pub async fn subscribe_key(&self, data_topic: DataTopic, key: SymbolKey) -> anyhow::Result<()> {
         // Ensure vendor securities refresh is active for this provider
         let topic = data_topic.to_topic_or_err()?;
-        self.ensure_vendor_securities_watch(key.provider).await;
+        if !self.backtest_mode {
+            self.ensure_vendor_securities_watch(key.provider).await;
+        }
         self.bus
             .handle_request(
                 self.sub_id.as_ref().expect("engine started"),
@@ -393,6 +404,9 @@ impl EngineRuntime {
 
     /// Ensure that we fetch instruments from the vendor now and refresh every hour.
     async fn ensure_vendor_securities_watch(&self, provider: ProviderKind) {
+        if self.backtest_mode {
+            return;
+        }
         if self.watching_providers.contains_key(&provider) {
             return;
         }
@@ -497,6 +511,8 @@ impl EngineRuntime {
     pub fn new(bus: Arc<ClientMessageBus>, slow_spin: Option<u64>) -> Self {
         let instruments = Arc::new(DashMap::new());
         Self {
+            backtest_mode: false,
+            backtest_clock: None,
             bus,
             sub_id: None,
             rx: None,
@@ -518,6 +534,15 @@ impl EngineRuntime {
             slow_spin_ns: slow_spin,
             consolidators: Arc::new(DashMap::new()),
         }
+    }
+
+    /// Construct an EngineRuntime in Backtest mode.
+    /// Live-only features (SHM, Kick, vendor watch timers) are disabled.
+    pub fn new_backtest(bus: Arc<ClientMessageBus>, slow_spin: Option<u64>) -> Self {
+        let mut rt = Self::new(bus, slow_spin);
+        rt.backtest_mode = true;
+        rt.backtest_clock = Some(Arc::new(BacktestClock::new(0)));
+        rt
     }
 
     /// Start the engine processing loop and hand an EngineHandle to the strategy.
@@ -547,6 +572,8 @@ impl EngineRuntime {
             portfolio_manager: self.portfolio_manager.clone(),
             provider_order_ids: self.provider_order_ids.clone(),
             consolidators: self.consolidators.clone(),
+            backtest_mode: self.backtest_mode,
+            backtest_clock: self.backtest_clock.clone(),
         };
         let handle = EngineHandle {
             inner: Arc::new(shared),
@@ -588,6 +615,7 @@ impl EngineRuntime {
                 sub_id_for_task.clone(),
                 securities_watch_for_task.clone(),
                 securities_by_provider_for_task.clone(),
+                handle_inner_for_task.backtest_mode,
             )
             .await;
 
@@ -601,7 +629,8 @@ impl EngineRuntime {
                 let target_ns: u32 = 50_000_000; // 50ms after the whole second
                 let wait_ns: u64 = if sub_ns <= target_ns {
                     (target_ns - sub_ns) as u64
-                } else { 1_000_000_000u64 - (sub_ns as u64 - target_ns as u64)
+                } else {
+                    1_000_000_000u64 - (sub_ns as u64 - target_ns as u64)
                 };
                 let start = Instant::now() + Duration::from_nanos(wait_ns);
                 let mut iv = interval_at(start, Duration::from_secs(1));
@@ -614,29 +643,31 @@ impl EngineRuntime {
                     biased;
                     // Drive time-based consolidation first if due
                     _ = ticker.tick() => {
-                        let now = chrono::Utc::now();
-                        // Snapshot keys to avoid holding iterator while mutating entries
-                        let keys: Vec<(Topic, SymbolKey)> = handle_inner_for_task
-                            .consolidators
-                            .iter()
-                            .map(|kv| kv.key().clone())
-                            .collect();
-                        for (tpc, sk) in keys.into_iter() {
-                            // Short-lived mutable borrow to call on_time
-                            let out_opt = {
-                                let key = (tpc, sk.clone());
-                                if let Some(mut cons_ref) = handle_inner_for_task
-                                    .consolidators
-                                    .get_mut(&key)
-                                {
-                                    cons_ref.value_mut().on_time(now)
-                                } else { None }
-                            };
+                        if !handle_inner_for_task.backtest_mode {
+                            let now = chrono::Utc::now();
+                            // Snapshot keys to avoid holding iterator while mutating entries
+                            let keys: Vec<(Topic, SymbolKey)> = handle_inner_for_task
+                                .consolidators
+                                .iter()
+                                .map(|kv| kv.key().clone())
+                                .collect();
+                            for (tpc, sk) in keys.into_iter() {
+                                // Short-lived mutable borrow to call on_time
+                                let out_opt = {
+                                    let key = (tpc, sk.clone());
+                                    if let Some(mut cons_ref) = handle_inner_for_task
+                                        .consolidators
+                                        .get_mut(&key)
+                                    {
+                                        cons_ref.value_mut().on_time(now)
+                                    } else { None }
+                                };
 
-                            if let Some(tt_types::consolidators::ConsolidatedOut::Candle(c)) = out_opt {
-                                // Update marks and deliver to strategy
-                                pm.update_apply_last_price(sk.provider, &c.instrument, c.close);
-                                strategy_for_task.on_bar(&c, sk.provider);
+                                if let Some(tt_types::consolidators::ConsolidatedOut::Candle(c)) = out_opt {
+                                    // Update marks and deliver to strategy
+                                    pm.update_apply_last_price(sk.provider, &c.instrument, c.close);
+                                    strategy_for_task.on_bar(&c, sk.provider);
+                                }
                             }
                         }
                     },
@@ -835,6 +866,7 @@ impl EngineRuntime {
                         strategy_for_task.on_mbp10(&mbp10, provider_kind);
                     }
                     Response::AnnounceShm(ann) => {
+                        if handle_inner_for_task.backtest_mode { continue; }
                         use tokio::task::JoinHandle;
                         use tracing::error;
                         use tt_types::data::core::{Bbo, Tick};
@@ -978,6 +1010,33 @@ impl EngineRuntime {
                     | Response::AccountInfoResponse(_) => {}
                     Response::DbUpdateComplete { .. } => {}
                 }
+                // In backtest mode, advance the deterministic clock slightly and drive time-based consolidators once per event
+                if handle_inner_for_task.backtest_mode {
+                    if let Some(clock) = &handle_inner_for_task.backtest_clock {
+                        clock.bump_ns(1); // +1ns to total-order identical timestamps
+                        let now = clock.now_dt();
+                        let keys: Vec<(Topic, SymbolKey)> = handle_inner_for_task
+                            .consolidators
+                            .iter()
+                            .map(|kv| kv.key().clone())
+                            .collect();
+                        for (tpc, sk) in keys.into_iter() {
+                            let out_opt = {
+                                let key = (tpc, sk.clone());
+                                if let Some(mut cons_ref) = handle_inner_for_task
+                                    .consolidators
+                                    .get_mut(&key)
+                                {
+                                    cons_ref.value_mut().on_time(now)
+                                } else { None }
+                            };
+                            if let Some(tt_types::consolidators::ConsolidatedOut::Candle(c)) = out_opt {
+                                pm.update_apply_last_price(sk.provider, &c.instrument, c.close);
+                                strategy_for_task.on_bar(&c, sk.provider);
+                            }
+                        }
+                    }
+                }
                 // Flush any commands the strategy enqueued during this message
                 Self::drain_commands_for_task(
                     cmd_q_for_task.clone(),
@@ -985,6 +1044,7 @@ impl EngineRuntime {
                     sub_id_for_task.clone(),
                     securities_watch_for_task.clone(),
                     securities_by_provider_for_task.clone(),
+                    handle_inner_for_task.backtest_mode,
                 )
                 .await;
                         } else { break; }
@@ -1004,6 +1064,7 @@ impl EngineRuntime {
         sub_id: ClientSubId,
         securities_watch: Arc<DashMap<ProviderKind, ()>>,
         securities_by_provider: Arc<DashMap<ProviderKind, Vec<Instrument>>>,
+        backtest_mode: bool,
     ) {
         use tt_types::wire::{SubscribeKey, UnsubscribeKey};
 
@@ -1058,13 +1119,15 @@ impl EngineRuntime {
         while let Some(cmd) = cmd_q.pop() {
             match cmd {
                 Command::Subscribe { topic, key } => {
-                    ensure_vendor(
-                        bus.clone(),
-                        key.provider,
-                        securities_watch.clone(),
-                        securities_by_provider.clone(),
-                    )
-                    .await;
+                    if !backtest_mode {
+                        ensure_vendor(
+                            bus.clone(),
+                            key.provider,
+                            securities_watch.clone(),
+                            securities_by_provider.clone(),
+                        )
+                        .await;
+                    }
                     let _ = bus
                         .handle_request(
                             &sub_id,
@@ -1154,16 +1217,18 @@ impl EngineRuntime {
 
     pub async fn stop(&mut self) -> anyhow::Result<()> {
         info!("engine: stopping");
-        // Send Kick to bus; await to ensure delivery attempt before shutdown
-        self.bus
-            .handle_request(
-                self.sub_id.as_ref().expect("engine started"),
-                tt_types::wire::Request::Kick(Kick {
-                    reason: Some("Shutting Down".to_string()),
-                }),
-            )
-            .await
-            .ok();
+        // Send Kick to bus in live modes; skip in backtest
+        if !self.backtest_mode {
+            self.bus
+                .handle_request(
+                    self.sub_id.as_ref().expect("engine started"),
+                    tt_types::wire::Request::Kick(Kick {
+                        reason: Some("Shutting Down".to_string()),
+                    }),
+                )
+                .await
+                .ok();
+        }
         if let Some(handle) = self.task.take() {
             handle.abort();
         }

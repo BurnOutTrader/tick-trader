@@ -435,6 +435,9 @@ impl EngineHandle {
     }
 
     async fn ensure_vendor_securities_watch(&self, provider: ProviderKind) {
+        if self.inner.backtest_mode {
+            return;
+        }
         if self.inner.watching_providers.contains_key(&provider) {
             return;
         }
