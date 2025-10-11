@@ -286,6 +286,9 @@ pub struct EngineRuntime {
     // Map our EngineUuid -> provider's order id string (populated from order updates)
     provider_order_ids: Arc<DashMap<EngineUuid, String>>,
     slow_spin_ns: Option<u64>,
+    consolidators: Arc<
+        DashMap<(Topic, SymbolKey), Vec<Box<dyn tt_types::consolidators::Consolidator + Send>>>,
+    >,
 }
 
 // Shared view used by EngineHandle
@@ -488,6 +491,41 @@ impl EngineHandle {
         match timeout(Duration::from_secs(2), rx).await {
             Ok(Ok(WireResp::InstrumentsMapResponse(imr))) => Ok(imr.instruments),
             Ok(Ok(_)) | Ok(Err(_)) | Err(_) => Ok(vec![]),
+        }
+    }
+
+    pub async fn update_historical_latest_by_key_async(
+        &self,
+        provider: ProviderKind,
+        topic: Topic,
+        instrument: Instrument,
+    ) -> anyhow::Result<()> {
+        use tt_types::wire::{DbUpdateKeyLatest, Response as WireResp};
+        let instr_clone = instrument.clone();
+        let rx = self
+            .request_with_corr(|corr_id| {
+                Request::DbUpdateKeyLatest(DbUpdateKeyLatest {
+                    provider,
+                    instrument: instr_clone,
+                    topic,
+                    corr_id,
+                })
+            })
+            .await;
+        match rx.await {
+            Ok(WireResp::DbUpdateComplete {
+                success, error_msg, ..
+            }) => {
+                if success {
+                    Ok(())
+                } else {
+                    Err(anyhow!(
+                        error_msg.unwrap_or_else(|| "historical update failed".to_string())
+                    ))
+                }
+            }
+            Ok(other) => Err(anyhow!(format!("unexpected response: {:?}", other))),
+            Err(_canceled) => Err(anyhow!("engine response channel closed")),
         }
     }
 
@@ -1121,6 +1159,7 @@ impl EngineRuntime {
             cmd_q: Arc::new(ArrayQueue::new(4096)),
             provider_order_ids: Arc::new(DashMap::new()),
             slow_spin_ns: slow_spin,
+            consolidators: Arc::new(DashMap::new()),
         }
     }
 
@@ -1211,6 +1250,12 @@ impl EngineRuntime {
                     Response::AccountInfoResponse(air) => {
                         if let Some((_k, tx)) = pending.remove(&air.corr_id) {
                             let _ = tx.send(Response::AccountInfoResponse(air.clone()));
+                            continue;
+                        }
+                    }
+                    Response::DbUpdateComplete { corr_id, .. } => {
+                        if let Some((_k, tx)) = pending.remove(corr_id) {
+                            let _ = tx.send(resp.clone());
                             continue;
                         }
                     }
@@ -1518,8 +1563,8 @@ impl EngineRuntime {
                     | Response::InstrumentsMapResponse(_)
                     | Response::VendorData(_)
                     | Response::AccountInfoResponse(_) => {}
-                    Response::UpdateRangeComplete(_) => {}
-                    Response::UpdateToLatestComplete(_) => {}
+                    Response::DbUpdateComplete { .. } => {}
+                    Response::DownloadHistorical(_) => {}
                 }
                 // Flush any commands the strategy enqueued during this message
                 Self::drain_commands_for_task(
@@ -1639,6 +1684,54 @@ impl EngineRuntime {
                         .await;
                 }
             }
+        }
+    }
+
+    /// Trigger a historical DB update for the latest data for a given provider/topic/instrument.
+    /// This sends a DbUpdateKeyLatest request and blocks until the DbUpdateComplete response arrives.
+    /// Returns Ok(()) when the update completed successfully; otherwise returns Err with the server error message.
+    fn update_historical_latest_by_key(
+        &self,
+        provider: ProviderKind,
+        topic: Topic,
+        instrument: Instrument,
+    ) -> anyhow::Result<()> {
+        use tt_types::wire::{DbUpdateKeyLatest, Response as WireResp};
+        let fut = async {
+            let instr_clone = instrument.clone();
+            let rx = self
+                .request_with_corr(|corr_id| {
+                    Request::DbUpdateKeyLatest(DbUpdateKeyLatest {
+                        provider,
+                        instrument: instr_clone,
+                        topic,
+                        corr_id,
+                    })
+                })
+                .await;
+            match rx.await {
+                Ok(WireResp::DbUpdateComplete {
+                    success, error_msg, ..
+                }) => {
+                    if success {
+                        Ok(())
+                    } else {
+                        Err(anyhow!(
+                            error_msg.unwrap_or_else(|| "historical update failed".to_string())
+                        ))
+                    }
+                }
+                Ok(other) => Err(anyhow!(format!("unexpected response: {:?}", other))),
+                Err(_canceled) => Err(anyhow!("engine response channel closed")),
+            }
+        };
+        // Execute the async flow in a blocking manner
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            // Ensure we don't block the runtime reactor; run in a blocking section
+            tokio::task::block_in_place(|| handle.block_on(fut))
+        } else {
+            let rt = tokio::runtime::Runtime::new().map_err(|e| anyhow!(e))?;
+            rt.block_on(fut)
         }
     }
 

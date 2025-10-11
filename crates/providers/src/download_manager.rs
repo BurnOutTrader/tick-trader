@@ -342,7 +342,7 @@ async fn run_download(
         .await;
         let events = match fetch_res {
             Ok(Ok(ev)) => {
-                tracing::info!("received {} events", ev.len());
+                tracing::warn!("received {} events", ev.len());
                 ev
             }
             Ok(Err(e)) => {

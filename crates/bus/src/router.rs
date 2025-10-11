@@ -144,6 +144,12 @@ pub trait UpstreamManager: Send + Sync {
         req: HistoricalRangeRequest,
     ) -> anyhow::Result<Vec<HistoryEvent>>;
     async fn update_historical_database(&self, req: HistoricalRangeRequest) -> anyhow::Result<()>;
+    async fn update_historical_latest_by_key(
+        &self,
+        provider: tt_types::providers::ProviderKind,
+        topic: Topic,
+        instrument: tt_types::securities::symbols::Instrument,
+    ) -> anyhow::Result<()>;
 }
 
 impl Router {
@@ -553,6 +559,54 @@ impl Router {
                         corr_id: req_inst.corr_id,
                     };
                     let _ = self.send_to(id, Response::InstrumentsResponse(resp)).await;
+                }
+            }
+            Request::DbUpdateKeyLatest(req) => {
+                info!(sub_id = %id.0, provider = ?req.provider, instrument=%req.instrument.to_string(), topic=?req.topic, "router.db_update_key_latest");
+                if let Some(mgr) = self.backend.read().unwrap().as_ref().cloned() {
+                    let router = self.clone();
+                    let id2 = id.clone();
+                    tokio::spawn(async move {
+                        let corr = req.corr_id;
+                        let prov = req.provider;
+                        let instr = req.instrument.clone();
+                        let topic = req.topic;
+                        let res = mgr
+                            .update_historical_latest_by_key(prov, topic, instr.clone())
+                            .await;
+                        let (success, error_msg) = match res {
+                            Ok(_) => (true, None),
+                            Err(e) => (false, Some(e.to_string())),
+                        };
+                        let _ = router
+                            .send_to(
+                                &id2,
+                                Response::DbUpdateComplete {
+                                    provider: prov,
+                                    instrument: instr,
+                                    topic,
+                                    corr_id: corr,
+                                    success,
+                                    error_msg,
+                                },
+                            )
+                            .await;
+                    });
+                } else {
+                    warn!(sub_id = %id.0, "router.db_update_key_latest: no backend manager");
+                    let _ = self
+                        .send_to(
+                            id,
+                            Response::DbUpdateComplete {
+                                provider: req.provider,
+                                instrument: req.instrument,
+                                topic: req.topic,
+                                corr_id: req.corr_id,
+                                success: false,
+                                error_msg: Some("no backend manager".into()),
+                            },
+                        )
+                        .await;
                 }
             }
             Request::InstrumentsMapRequest(req_map) => {

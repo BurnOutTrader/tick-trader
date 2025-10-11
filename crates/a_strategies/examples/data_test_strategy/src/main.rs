@@ -8,7 +8,7 @@ use tt_engine::engine::{DataTopic, EngineHandle, EngineRuntime, Strategy};
 use tt_types::accounts::account::AccountName;
 use tt_types::accounts::events::AccountDelta;
 use tt_types::data::mbp10::Mbp10;
-use tt_types::keys::{AccountKey, SymbolKey};
+use tt_types::keys::{AccountKey, SymbolKey, Topic};
 use tt_types::providers::{ProjectXTenant, ProviderKind};
 use tt_types::securities::symbols::Instrument;
 use tt_types::wire;
@@ -22,6 +22,12 @@ struct DataTestStrategy {
 impl Strategy for DataTestStrategy {
     fn on_start(&mut self, h: EngineHandle) {
         info!("strategy start");
+
+        h.update_historical_latest_by_key_async(
+            ProviderKind::ProjectX(ProjectXTenant::Topstep),
+            Topic::Candles1s,
+            Instrument::from_str("MNQ.Z25").unwrap(),
+        );
         // Non-blocking subscribe via handle command queue, you can do this at run time from anywhere to subscribe or unsubscribe a custom universe
         h.subscribe_now(
             DataTopic::MBP10,

@@ -225,6 +225,64 @@ impl UpstreamManager for ProviderManager {
             req.provider_kind
         ))
     }
+
+    async fn update_historical_latest_by_key(
+        &self,
+        provider: ProviderKind,
+        topic: tt_types::keys::Topic,
+        instrument: tt_types::securities::symbols::Instrument,
+    ) -> anyhow::Result<()> {
+        // Ensure clients for this provider exist
+        self.ensure_clients(provider).await?;
+        // Find historical client
+        let client = if let Some(c) = self.hist.get(&provider) {
+            c.value().clone()
+        } else {
+            return Err(anyhow::anyhow!(
+                "Unsupported historical data provider: {:?}",
+                provider
+            ));
+        };
+        if !client.supports(topic) {
+            return Err(anyhow::anyhow!(
+                "Unsupported topic: {:?} for historical data provider: {:?}",
+                provider,
+                topic
+            ));
+        }
+        // Resolve exchange for this instrument using the provider's securities map
+        let securities = self.get_securities(provider).await.unwrap_or_default();
+        let exchange = if let Some(fc) = securities.iter().find(|c| c.instrument == instrument) {
+            fc.exchange
+        } else {
+            return Err(anyhow::anyhow!(
+                "exchange not found for instrument {} with provider {:?}",
+                instrument,
+                provider
+            ));
+        };
+        let now = chrono::Utc::now();
+        let req = HistoricalRangeRequest {
+            provider_kind: provider,
+            topic,
+            instrument: instrument.clone(),
+            exchange,
+            // The download manager computes the actual start time from DB latest; these are placeholders
+            start: now - chrono::Duration::days(1),
+            end: now,
+        };
+        let dm = &self.download_manager;
+        if let Some(handle) = dm.request_update(client.clone(), req.clone()).await? {
+            tracing::info!(task_id=%handle.id(), provider=?provider, instrument=%req.instrument, topic=?req.topic, "historical latest update already inflight");
+            handle.entry.notify.notified().await;
+            Ok(())
+        } else {
+            let started = dm.start_update(client.clone(), req.clone()).await?;
+            tracing::info!(task_id=%started.id(), provider=?provider, instrument=%req.instrument, topic=?req.topic, "historical latest update started");
+            started.entry.notify.notified().await;
+            Ok(())
+        }
+    }
 }
 
 #[allow(dead_code)]

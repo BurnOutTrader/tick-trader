@@ -58,6 +58,30 @@ fn floor_to(res: &Resolution, t: DateTime<Utc>) -> DateTime<Utc> {
 
 // ===================== Consolidators (pull-based) =====================
 
+// A unified output type for engine-facing consolidators
+#[derive(Debug, Clone)]
+pub enum ConsolidatedOut {
+    Candle(Candle),
+    TickBar(TickBar),
+}
+
+// An object-safe trait so different consolidators can be stored uniformly
+// and driven by the engine using the same interface.
+pub trait Consolidator: Send {
+    fn on_tick(&mut self, _tk: &Tick) -> Option<ConsolidatedOut> {
+        None
+    }
+    fn on_bbo(&mut self, _bbo: &Bbo) -> Option<ConsolidatedOut> {
+        None
+    }
+    fn on_candle(&mut self, _bar: &Candle) -> Option<ConsolidatedOut> {
+        None
+    }
+    fn on_time(&mut self, _t: DateTime<Utc>) -> Option<ConsolidatedOut> {
+        None
+    }
+}
+
 pub struct TicksToTickBarsConsolidator {
     ticks_per_bar: u32,
     out_symbol: String,
@@ -675,5 +699,36 @@ impl CandlesToCandlesConsolidator {
         self.ask_vol += bar.ask_volume;
         self.bid_vol += bar.bid_volume;
         None
+    }
+}
+
+// === Trait implementations for engine-unified handling ===
+impl Consolidator for TicksToTickBarsConsolidator {
+    fn on_tick(&mut self, tk: &Tick) -> Option<ConsolidatedOut> {
+        self.update_tick(tk).map(ConsolidatedOut::TickBar)
+    }
+}
+
+impl Consolidator for TicksToCandlesConsolidator {
+    fn on_tick(&mut self, tk: &Tick) -> Option<ConsolidatedOut> {
+        self.update_tick(tk).map(ConsolidatedOut::Candle)
+    }
+    fn on_time(&mut self, t: DateTime<Utc>) -> Option<ConsolidatedOut> {
+        self.update_time(t).map(ConsolidatedOut::Candle)
+    }
+}
+
+impl Consolidator for BboToCandlesConsolidator {
+    fn on_bbo(&mut self, b: &Bbo) -> Option<ConsolidatedOut> {
+        self.update_bbo(b).map(ConsolidatedOut::Candle)
+    }
+    fn on_time(&mut self, t: DateTime<Utc>) -> Option<ConsolidatedOut> {
+        self.update_time(t).map(ConsolidatedOut::Candle)
+    }
+}
+
+impl Consolidator for CandlesToCandlesConsolidator {
+    fn on_candle(&mut self, c: &Candle) -> Option<ConsolidatedOut> {
+        self.update_candle(c).map(ConsolidatedOut::Candle)
     }
 }

@@ -3,7 +3,7 @@ use crate::accounts::events::Side;
 use crate::data::core::{Bbo, Candle, Tick};
 use crate::data::mbp10::Mbp10;
 use crate::engine_id::EngineUuid;
-use crate::history::{HistoricalRangeRequest, HistoricalUpdateLatestRequest};
+use crate::history::HistoricalRangeRequest;
 use crate::keys::{SymbolKey, Topic};
 use crate::providers::ProviderKind;
 use crate::securities::security::FuturesContract;
@@ -483,6 +483,7 @@ pub struct DbUpdateKeyLatest {
     pub provider: ProviderKind,
     pub instrument: Instrument,
     pub topic: Topic,
+    pub corr_id: u64,
 }
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, PartialEq, Clone, Debug)]
@@ -510,8 +511,6 @@ pub enum Request {
     PlaceOrder(PlaceOrder),
     CancelOrder(CancelOrder),
     ReplaceOrder(ReplaceOrder),
-    UpdateData(HistoricalRangeRequest),
-    UpdateDataToLatest(HistoricalUpdateLatestRequest),
 }
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, PartialEq, Clone, Debug)]
@@ -545,6 +544,15 @@ pub enum Response {
         topic: Topic,
         instrument: Instrument,
     },
+    // Historical DB update completion notification (response to DbUpdateKeyLatest)
+    DbUpdateComplete {
+        provider: ProviderKind,
+        instrument: Instrument,
+        topic: Topic,
+        corr_id: u64,
+        success: bool,
+        error_msg: Option<String>,
+    },
     // Single items (for completeness; bus generally batches)
     Tick {
         tick: Tick,
@@ -562,8 +570,7 @@ pub enum Response {
         mbp10: Mbp10,
         provider_kind: ProviderKind,
     },
-    UpdateRangeComplete(HistoricalRangeRequest),
-    UpdateToLatestComplete(HistoricalUpdateLatestRequest),
+    DownloadHistorical(HistoricalRangeRequest),
 }
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, PartialEq, Clone, Debug)]
