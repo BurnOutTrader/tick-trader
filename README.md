@@ -205,6 +205,7 @@ TT_BUS_ADDR=/tmp/tick-trader.sock cargo run -p tt-server
 
 ### 3) Prepare .env with your provider credentials (ProjectX example):
 Warning: do not change db path unless you are experienced, It should remain a local address.
+If you change the db path for the main .env, you will also need to change the docker-compose.yml in tick-trader/pg
 ```env
 PX_TOPSTEP_USERNAME=your_user
 PX_TOPSTEP_APIKEY=your_key
