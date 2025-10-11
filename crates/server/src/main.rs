@@ -133,29 +133,6 @@ async fn main() -> anyhow::Result<()> {
     let router = Arc::new(Router::new(8));
     // Wire upstream manager (providers) into the router for first/last sub notifications
     let mgr = Arc::new(tt_providers::manager::ProviderManager::new(router.clone()));
-    /*let cs = mgr.get_securities(ProviderKind::ProjectX(ProjectXTenant::Topstep)).await?;
-    for c in cs {
-        let req = HistoricalRangeRequest {
-            provider_kind: ProviderKind::ProjectX(ProjectXTenant::Topstep),
-            topic: Topic::Candles1m,
-            instrument: c.instrument,
-            exchange: c.exchange,
-            start: Utc::now() - chrono::Duration::days(1500),
-            end: Utc::now(),
-        };
-        mgr.update_historical_database(req).await?;
-    }*/
-    /*
-    let req = HistoricalRangeRequest {
-        provider_kind: ProviderKind::ProjectX(ProjectXTenant::Topstep),
-        topic: Topic::Candles1m,
-        instrument: Instrument::from_str("MNQ.Z25").unwrap(),
-        exchange: Exchange::CME,
-        start: Utc::now() - chrono::Duration::days(1500),
-        end: Utc::now(),
-    };
-    mgr.update_historical_database(req).await?;*/
-
     router.set_backend(mgr);
 
     loop {
