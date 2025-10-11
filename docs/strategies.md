@@ -33,7 +33,7 @@ struct MyStrategy { engine: Option<EngineHandle> }
 impl Strategy for MyStrategy {
     fn on_start(&mut self, h: EngineHandle) {
         self.engine = Some(h.clone());
-        h.subscribe_key(
+        h.subscribe_now(
             DataTopic::Ticks,
             SymbolKey::new(
                 tt_types::securities::symbols::Instrument::from_str("MNQ.Z25").unwrap(),
@@ -44,7 +44,7 @@ impl Strategy for MyStrategy {
 
     fn on_mbp10(&mut self, d: &tt_types::data::mbp10::Mbp10, pk: ProviderKind) {
         if let Some(h) = &self.engine {
-            if h.is_flat(pk, &d.instrument) {
+            if h.is_flat_delta(&d.instrument) {
                 // decide → h.place_now(order_spec)
             }
         }
@@ -80,7 +80,7 @@ EngineRuntime (synchronous; returns Results)
   - Bulk init (names): `initialize_account_names(provider: ProviderKind, names: impl IntoIterator<Item = AccountName>) -> anyhow::Result<()>`
   - Cached snapshots: `last_orders() -> Option<OrdersBatch>`, `last_positions() -> Option<PositionsBatch>`, `last_accounts() -> Option<AccountDeltaBatch>`
   - Helpers: `find_position_delta(&Instrument) -> Option<PositionDelta>`, `orders_for_instrument(&Instrument) -> Vec<OrderUpdate>`
-  - Position booleans: `is_long/is_short/is_flat(&Instrument) -> bool`
+  - Position booleans (delta across accounts): `is_long_delta/is_short_delta/is_flat_delta(&Instrument) -> bool`
 - Other
   - `request_with_corr(|corr_id| -> Request) -> tokio::sync::oneshot::Receiver<Response>`: correlated single-response helper.
   - Historical latest refresh for a key: `update_historical_latest_by_key(provider: ProviderKind, topic: Topic, instrument: Instrument) -> anyhow::Result<()>`
@@ -98,10 +98,10 @@ EngineHandle (low-latency from callbacks)
   - `place_now(spec: PlaceOrder) -> EngineUuid`
   - Convenience: `place_order(account_name, key, side, qty, r#type, limit_price, stop_price, trail_price, custom_tag, stop_loss, take_profit) -> anyhow::Result<EngineUuid>`
 - Instant portfolio queries (thread-safe; internal RwLocks)
-  - `is_long/is_short/is_flat(&Instrument) -> bool`
+  - `is_long/is_short/is_flat(&AccountKey, &Instrument) -> bool`  // account-specific
+  - `is_long_delta/is_short_delta/is_flat_delta(&Instrument) -> bool`  // aggregated delta across accounts
   - `open_orders_for_instrument(&Instrument) -> Vec<OrderUpdate>`
   - `find_position_delta(&Instrument) -> Option<PositionDelta>`
-  - Delta booleans: `is_long_delta/is_short_delta/is_flat_delta(&Instrument) -> bool`
 - Reference data cache
   - `securities_for(provider: ProviderKind) -> Vec<Instrument>`
 
@@ -211,7 +211,7 @@ Key changes
 - Trait is sync. Methods take borrowed data: &Tick, &Bbo, &Candle, &Mbp10.
 - Engine owns your strategy by value: engine.start(MyStrat::default())
 - Non-blocking helpers via EngineHandle: subscribe_now, unsubscribe_now, place_now.
-- Instant getters via EngineHandle: is_long/is_short/is_flat(&Instrument).
+- Instant getters via EngineHandle: is_long/is_short/is_flat(&AccountKey, &Instrument) and delta variants is_long_delta/is_short_delta/is_flat_delta(&Instrument).
 
 Sync trait skeleton
 

@@ -92,16 +92,22 @@ impl EngineHandle {
 
     // === SYNC GETTERS (instant) ===
     #[inline]
-    pub fn is_long(&self, instr: &Instrument) -> bool {
-        self.inner.portfolio_manager.is_long(instr)
+    pub fn is_long(&self, account: &tt_types::keys::AccountKey, instr: &Instrument) -> bool {
+        self.inner
+            .portfolio_manager
+            .is_long_account(&account.provider, &account.account_name, instr)
     }
     #[inline]
-    pub fn is_short(&self, instr: &Instrument) -> bool {
-        self.inner.portfolio_manager.is_short(instr)
+    pub fn is_short(&self, account: &tt_types::keys::AccountKey, instr: &Instrument) -> bool {
+        self.inner
+            .portfolio_manager
+            .is_short_account(&account.provider, &account.account_name, instr)
     }
     #[inline]
-    pub fn is_flat(&self, instr: &Instrument) -> bool {
-        self.inner.portfolio_manager.is_flat(instr)
+    pub fn is_flat(&self, account: &tt_types::keys::AccountKey, instr: &Instrument) -> bool {
+        self.inner
+            .portfolio_manager
+            .is_flat_account(&account.provider, &account.account_name, instr)
     }
     #[inline]
     pub fn open_orders_for_instrument(
