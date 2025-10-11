@@ -1011,7 +1011,7 @@ pub async fn inject_contracts_map(
             // Skip existing instrument for this provider (append-only behavior)
             continue;
         }
-        let symbol_id = crate::schema::get_or_create_instrument_id(&conn, &sym).await?;
+        let symbol_id = crate::schema::get_or_create_instrument_id(conn, &sym).await?;
         // Serialize contract using rkyv
         let bytes = rkyv::to_bytes::<_, 256>(contract)?;
         // Insert only; if a concurrent insert happens, ignore via DO NOTHING.
@@ -1061,4 +1061,63 @@ pub async fn get_contracts_map(
         }
     }
     Ok(out)
+}
+
+/// Insert a single futures contract for (provider, instrument) in append-only mode.
+/// If a row already exists for this pair, it is left unchanged.
+pub async fn inject_contract(
+    conn: &crate::init::Connection,
+    provider: tt_types::providers::ProviderKind,
+    instrument: &tt_types::securities::symbols::Instrument,
+    contract: &FuturesContract,
+) -> anyhow::Result<()> {
+    let prov = crate::paths::provider_kind_to_db_string(provider);
+    let sym = instrument.to_string();
+    let symbol_id = crate::schema::get_or_create_instrument_id(conn, &sym).await?;
+
+    // Serialize using rkyv
+    let bytes = rkyv::to_bytes::<_, 256>(contract)?;
+
+    // Append-only insert
+    sqlx::query(
+        "INSERT INTO futures_contracts (provider, symbol_id, contract) VALUES ($1, $2, $3)
+         ON CONFLICT (provider, symbol_id) DO NOTHING",
+    )
+    .bind(&prov)
+    .bind(symbol_id)
+    .bind(bytes.as_slice())
+    .execute(conn)
+    .await?;
+
+    Ok(())
+}
+
+/// Retrieve a single futures contract for (provider, instrument).
+pub async fn get_contract(
+    conn: &crate::init::Connection,
+    provider: tt_types::providers::ProviderKind,
+    instrument: &tt_types::securities::symbols::Instrument,
+) -> anyhow::Result<Option<FuturesContract>> {
+    use sqlx::Row;
+
+    let prov = crate::paths::provider_kind_to_db_string(provider);
+    let sym = instrument.to_string();
+    let symbol_id = crate::schema::get_or_create_instrument_id(conn, &sym).await?;
+
+    let row = sqlx::query(
+        "SELECT contract FROM futures_contracts WHERE provider = $1 AND symbol_id = $2",
+    )
+    .bind(&prov)
+    .bind(symbol_id)
+    .fetch_optional(conn)
+    .await?;
+
+    if let Some(r) = row {
+        let bytes: Vec<u8> = r.get("contract");
+        let contract: FuturesContract =
+            rkyv::from_bytes(&bytes).map_err(|_e| anyhow::anyhow!("contracts decode failed"))?;
+        Ok(Some(contract))
+    } else {
+        Ok(None)
+    }
 }
