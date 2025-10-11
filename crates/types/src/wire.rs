@@ -578,7 +578,7 @@ impl Bytes<Self> for WireMessage {
         // tokio/bytes may yield slices with only 4-byte alignment.
         let mut aligned = AlignedVec::with_capacity(data.len());
         aligned.extend_from_slice(data);
-        
+
         match rkyv::from_bytes::<WireMessage>(&aligned) {
             Ok(response) => Ok(response),
             Err(e) => Err(anyhow::Error::msg(e.to_string())),

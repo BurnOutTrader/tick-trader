@@ -20,10 +20,6 @@ use tt_types::keys::Topic;
 use tt_types::providers::{ProjectXTenant, ProviderKind};
 #[allow(unused_imports)]
 use tt_types::securities::symbols::Instrument;
-#[allow(unused_imports)]
-use std::str::FromStr;
-#[allow(unused_imports)]
-use chrono::Utc;
 
 #[cfg(target_os = "linux")]
 pub fn bind_uds(path: &str) -> io::Result<UnixListener> {
@@ -134,30 +130,7 @@ async fn main() -> anyhow::Result<()> {
     // Wire upstream manager (providers) into the router for first/last sub notifications
     let mgr = Arc::new(tt_providers::manager::ProviderManager::new(router.clone()));
 
-    /*for (i, c) in cs {
-        let req = HistoricalRequest {
-            provider_kind: ProviderKind::ProjectX(ProjectXTenant::Topstep),
-            topic: Topic::Candles1m,
-            instrument: i,
-            exchange: c.exchange,
-            start: Utc::now() - chrono::Duration::days(1500),
-            end: Utc::now(),
-        };
-        mgr.update_historical_database(req).await?;
-    }*/
-
- /*   let req = HistoricalRequest {
-        provider_kind: ProviderKind::ProjectX(ProjectXTenant::Topstep),
-        topic: Topic::Candles1m,
-        instrument: Instrument::from_str("MNQ.Z25").unwrap(),
-        exchange: Exchange::CME,
-        start: Utc::now() - chrono::Duration::days(1500),
-        end: Utc::now(),
-    };
-    mgr.update_historical_database(req).await?;*/
-
     router.set_backend(mgr);
-
 
     loop {
         let (sock, _addr) = listener.accept().await?;
