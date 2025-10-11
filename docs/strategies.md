@@ -239,7 +239,7 @@ impl Strategy for MyStrat {
 
     fn on_mbp10(&mut self, d: &tt_types::data::mbp10::Mbp10, _pk: ProviderKind) {
         if let Some(h) = &self.engine {
-            if h.is_flat(&d.instrument) {
+            if h.is_flat_delta(&d.instrument) {
                 // decide: h.place_now(order)
             }
         }
