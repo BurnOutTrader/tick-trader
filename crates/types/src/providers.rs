@@ -73,7 +73,9 @@ impl ProjectXTenant {
         let s = binding.as_str();
         match s {
             "topstep" => ProjectXTenant::Topstep,
+            "topstepx" => ProjectXTenant::Topstep,
             "alphafutures" => ProjectXTenant::AlphaFutures,
+            "alphaticks" => ProjectXTenant::AlphaFutures,
             "demo" => ProjectXTenant::Demo,
             "blueguardianfutures" => ProjectXTenant::AquaFutures,
             "blusky" => ProjectXTenant::BlueGuardian,
