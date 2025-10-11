@@ -148,6 +148,124 @@ async fn test_upsert_latest_bar_and_query_latest() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_ingest_and_get_range_multi_res_candles() -> Result<()> {
+    if require_db().is_none() {
+        return Ok(());
+    }
+    let (pool, provider, inst) = setup().await?;
+    let t0 = Utc.with_ymd_and_hms(2024, 3, 1, 9, 30, 0).unwrap();
+
+    // 1-second candles
+    let mut sec_bars = Vec::new();
+    for i in 0..3 {
+        let start = t0 + Duration::seconds(i);
+        let end = start + Duration::seconds(1);
+        sec_bars.push(Candle {
+            symbol: inst.to_string(),
+            instrument: inst.clone(),
+            time_start: start,
+            time_end: end,
+            open: Decimal::from(10 + i),
+            high: Decimal::from(11 + i),
+            low: Decimal::from(9 + i),
+            close: Decimal::from(10 + i),
+            volume: Decimal::from(100 + i),
+            ask_volume: Decimal::from(60 + i),
+            bid_volume: Decimal::from(40 + i),
+            resolution: Resolution::Seconds(1),
+        });
+    }
+    ingest_candles(&pool, provider, &inst, sec_bars.clone()).await?;
+    let (resp_sec, _next_sec) = queries::get_range(
+        &pool,
+        provider,
+        &inst,
+        Topic::Candles1s,
+        t0,
+        t0 + Duration::seconds(10),
+        10,
+    )
+    .await?;
+    match &resp_sec[0] { tt_types::wire::Response::BarBatch(b) => assert_eq!(b.bars.len(), 3), _ => panic!("expected BarBatch") }
+
+    // 10-hour candles (fall under Candles1h family)
+    let mut hr_bars = Vec::new();
+    for i in 0..2 {
+        let start = t0 + Duration::hours(i as i64 * 10);
+        let end = start + Duration::hours(10);
+        hr_bars.push(Candle {
+            symbol: inst.to_string(),
+            instrument: inst.clone(),
+            time_start: start,
+            time_end: end,
+            open: Decimal::from(200 + i),
+            high: Decimal::from(201 + i),
+            low: Decimal::from(199 + i),
+            close: Decimal::from(200 + i),
+            volume: Decimal::from(2000 + i),
+            ask_volume: Decimal::from(1200 + i),
+            bid_volume: Decimal::from(800 + i),
+            resolution: Resolution::Hours(10),
+        });
+    }
+    ingest_candles(&pool, provider, &inst, hr_bars.clone()).await?;
+    let (resp_hr, _next_hr) = queries::get_range(
+        &pool,
+        provider,
+        &inst,
+        Topic::Candles1h,
+        t0,
+        t0 + Duration::days(1),
+        10,
+    )
+    .await?;
+    match &resp_hr[0] { tt_types::wire::Response::BarBatch(b) => assert_eq!(b.bars.len(), 2), _ => panic!("expected BarBatch") }
+
+    // Daily candles
+    let mut day_bars = Vec::new();
+    for i in 0..2 {
+        let start = t0 + Duration::days(i);
+        let end = start + Duration::days(1);
+        day_bars.push(Candle {
+            symbol: inst.to_string(),
+            instrument: inst.clone(),
+            time_start: start,
+            time_end: end,
+            open: Decimal::from(300 + i),
+            high: Decimal::from(301 + i),
+            low: Decimal::from(299 + i),
+            close: Decimal::from(300 + i),
+            volume: Decimal::from(3000 + i),
+            ask_volume: Decimal::from(1800 + i),
+            bid_volume: Decimal::from(1200 + i),
+            resolution: Resolution::Daily,
+        });
+    }
+    ingest_candles(&pool, provider, &inst, day_bars.clone()).await?;
+    let (resp_day, _next_day) = queries::get_range(
+        &pool,
+        provider,
+        &inst,
+        Topic::Candles1d,
+        t0,
+        t0 + Duration::days(3),
+        10,
+    )
+    .await?;
+    match &resp_day[0] { tt_types::wire::Response::BarBatch(b) => assert_eq!(b.bars.len(), 2), _ => panic!("expected BarBatch") }
+
+    // latest_data_time should return max per-topic
+    let latest_1s = queries::latest_data_time(&pool, provider, &inst, Topic::Candles1s).await?;
+    assert!(latest_1s.is_some());
+    let latest_1h = queries::latest_data_time(&pool, provider, &inst, Topic::Candles1h).await?;
+    assert!(latest_1h.is_some());
+    let latest_1d = queries::latest_data_time(&pool, provider, &inst, Topic::Candles1d).await?;
+    assert!(latest_1d.is_some());
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_ingest_and_get_range_bars_ticks_quotes() -> Result<()> {
     if require_db().is_none() {
         return Ok(());

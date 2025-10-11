@@ -144,7 +144,7 @@ pub async fn ingest_candles(
     // Bulk insert bars mapping Candle fields exactly
     let provider_code = crate::paths::provider_kind_to_db_string(provider);
     let mut qb = QueryBuilder::new(
-        "INSERT INTO bars_1m (provider, symbol_id, time_start, time_end, open, high, low, close, volume, ask_volume, bid_volume, resolution) ",
+        "INSERT INTO bars (provider, symbol_id, time_start, time_end, open, high, low, close, volume, ask_volume, bid_volume, resolution) ",
     );
     qb.push_values(rows.iter(), |mut b, r| {
         b.push_bind(&provider_code)
@@ -160,41 +160,48 @@ pub async fn ingest_candles(
             .push_bind(r.bid_volume)
             .push_bind(r.resolution.to_string());
     });
-    qb.push(" ON CONFLICT (provider, symbol_id, time_end) DO NOTHING ");
+    qb.push(" ON CONFLICT (provider, symbol_id, time_end, resolution) DO NOTHING ");
     let res = qb.build().execute(conn).await?;
 
-    // Update extent cache with min/max time_end for Candles1m
-    if let (Some(min_end), Some(max_end)) = (
-        rows.iter().map(|r| r.time_end).min(),
-        rows.iter().map(|r| r.time_end).max(),
-    ) {
-        upsert_series_extent(
-            conn,
-            &provider_code,
-            inst_id,
-            Topic::Candles1m as i16,
-            min_end,
-            max_end,
-        )
-        .await?;
+    // Update extent cache per topic based on each row's resolution (batch may mix resolutions)
+    use std::collections::HashMap;
+    let mut extent_map: HashMap<i16, (chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)> = HashMap::new();
+    for r in rows.iter() {
+        let topic_i16: i16 = match r.resolution {
+            tt_types::data::models::Resolution::Seconds(1) => Topic::Candles1s as i16,
+            tt_types::data::models::Resolution::Minutes(1) => Topic::Candles1m as i16,
+            tt_types::data::models::Resolution::Hours(_) => Topic::Candles1h as i16,
+            tt_types::data::models::Resolution::Daily => Topic::Candles1d as i16,
+            _ => Topic::Candles1m as i16,
+        };
+        let entry = extent_map.entry(topic_i16).or_insert((r.time_end, r.time_end));
+        if r.time_end < entry.0 { entry.0 = r.time_end; }
+        if r.time_end > entry.1 { entry.1 = r.time_end; }
+    }
+    for (topic_i16, (min_end, max_end)) in extent_map.into_iter() {
+        upsert_series_extent(conn, &provider_code, inst_id, topic_i16, min_end, max_end).await?;
     }
 
-    // Update latest cache with the max time_end row
-    if let Some(last) = rows.iter().max_by_key(|r| r.time_end) {
+    // Update latest cache with the max time_end among ONLY 1m bars
+    if let Some(last_1m) = rows
+        .iter()
+        .filter(|r| matches!(r.resolution, tt_types::data::models::Resolution::Minutes(1)))
+        .max_by_key(|r| r.time_end)
+    {
         upsert_latest_bar_1m(
             conn,
             &provider_code,
             inst_id,
-            last.time_start,
-            last.time_end,
-            last.open,
-            last.high,
-            last.low,
-            last.close,
-            last.volume,
-            last.ask_volume,
-            last.bid_volume,
-            &last.resolution.to_string(),
+            last_1m.time_start,
+            last_1m.time_end,
+            last_1m.open,
+            last_1m.high,
+            last_1m.low,
+            last_1m.close,
+            last_1m.volume,
+            last_1m.ask_volume,
+            last_1m.bid_volume,
+            &last_1m.resolution.to_string(),
         )
         .await?;
     }

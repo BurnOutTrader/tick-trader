@@ -13,8 +13,8 @@ pub async fn ensure_schema(pool: &Pool<Postgres>) -> Result<()> {
     "#;
 
     // Historical 1m bars (base table) representing tt-types::data::core::Candle exactly.
-    let create_bars_1m = r#"
-    CREATE TABLE IF NOT EXISTS bars_1m (
+    let create_bars = r#"
+    CREATE TABLE IF NOT EXISTS bars (
         provider   TEXT         NOT NULL,
         symbol_id  BIGINT       NOT NULL REFERENCES instrument(id),
         time_start TIMESTAMPTZ  NOT NULL,
@@ -27,7 +27,7 @@ pub async fn ensure_schema(pool: &Pool<Postgres>) -> Result<()> {
         ask_volume NUMERIC(18,9) NOT NULL,
         bid_volume NUMERIC(18,9) NOT NULL,
         resolution TEXT          NOT NULL,
-        PRIMARY KEY (provider, symbol_id, time_end)
+        PRIMARY KEY (provider, symbol_id, time_end, resolution)
     );
     "#;
 
@@ -144,7 +144,7 @@ pub async fn ensure_schema(pool: &Pool<Postgres>) -> Result<()> {
     "#;
 
     pool.execute(create_instrument).await?;
-    pool.execute(create_bars_1m).await?;
+    pool.execute(create_bars).await?;
     pool.execute(create_latest).await?;
     pool.execute(create_ticks).await?;
     pool.execute(create_bbo).await?;
