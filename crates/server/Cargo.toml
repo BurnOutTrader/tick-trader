@@ -6,7 +6,6 @@ license.workspace = true
 
 [dependencies]
 tt-types = { path = "../types" }
-tt-database = { path = "../database" }
 tt-bus = {path = "../bus", features = ["server"]}
 tt-providers = { path = "../providers" }
 anyhow = { workspace = true }
@@ -16,8 +15,6 @@ tokio = { workspace = true }
 tracing = {workspace = true}
 tracing-subscriber = { workspace = true }
 chrono = {workspace = true}
-async-trait = { workspace = true }
-sqlx = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

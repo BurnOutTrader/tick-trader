@@ -2884,7 +2884,6 @@ dependencies = [
  "chrono-tz",
  "dashmap",
  "dotenv",
- "rust_decimal",
  "sqlx",
  "tokio",
  "tracing",
@@ -2900,16 +2899,13 @@ name = "tt-server"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-trait",
  "chrono",
  "dotenvy",
  "libc",
- "sqlx",
  "tokio",
  "tracing",
  "tracing-subscriber",
  "tt-bus",
- "tt-database",
  "tt-providers",
  "tt-types",
 ]

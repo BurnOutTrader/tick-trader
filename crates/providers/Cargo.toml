@@ -16,6 +16,5 @@ tt-database = { path = "../database" }
 tokio = { workspace = true }
 chrono = { workspace = true }
 chrono-tz = { workspace = true }
-rust_decimal = { workspace = true }
 dotenv =  {workspace = true}
 sqlx = { workspace = true }
