@@ -12,6 +12,13 @@ pub enum SubState {
     Error,
 }
 
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub enum StrategyMode {
+    Backtest,
+    LivePaper,
+    Live,
+}
+
 #[derive(Debug, Clone)]
 pub struct EngineConfig {
     // health thresholds (defaults; env override)
@@ -98,4 +105,51 @@ pub struct BarRec {
 pub struct DepthDeltaRec {
     pub ts_ns: i64,
     pub bytes: usize,
+}
+
+#[derive(Clone, Debug, Copy, Hash, PartialEq, Eq)]
+pub enum DataTopic {
+    Ticks,
+    Quotes,
+    MBP10,
+    Candles1s,
+    Candles1m,
+    Candles1h,
+    Candles1d,
+}
+
+impl DataTopic {
+    pub(crate) fn to_topic_or_err(self) -> anyhow::Result<Topic> {
+        match self {
+            DataTopic::Ticks => Ok(Topic::Ticks),
+            DataTopic::Quotes => Ok(Topic::Quotes),
+            DataTopic::MBP10 => Ok(Topic::MBP10),
+            DataTopic::Candles1s => Ok(Topic::Candles1s),
+            DataTopic::Candles1m => Ok(Topic::Candles1m),
+            DataTopic::Candles1h => Ok(Topic::Candles1h),
+            DataTopic::Candles1d => Ok(Topic::Candles1d),
+        }
+    }
+
+    pub fn from(topic: Topic) -> Self {
+        match topic {
+            Topic::Ticks => DataTopic::Ticks,
+            Topic::Quotes => DataTopic::Quotes,
+            Topic::MBP10 => DataTopic::MBP10,
+            Topic::Candles1s => DataTopic::Candles1s,
+            Topic::Candles1m => DataTopic::Candles1m,
+            Topic::Candles1h => DataTopic::Candles1h,
+            Topic::Candles1d => DataTopic::Candles1d,
+            _ => unimplemented!("Topic: {} not added to engine handling", topic),
+        }
+    }
+}
+
+// Non-blocking commands enqueued by the strategy/handle and drained by the engine task
+pub enum Command {
+    Subscribe { topic: Topic, key: SymbolKey },
+    Unsubscribe { topic: Topic, key: SymbolKey },
+    Place(tt_types::wire::PlaceOrder),
+    Cancel(tt_types::wire::CancelOrder),
+    Replace(tt_types::wire::ReplaceOrder),
 }

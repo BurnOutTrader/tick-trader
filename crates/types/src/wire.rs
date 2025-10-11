@@ -3,7 +3,6 @@ use crate::accounts::events::Side;
 use crate::data::core::{Bbo, Candle, Tick};
 use crate::data::mbp10::Mbp10;
 use crate::engine_id::EngineUuid;
-use crate::history::HistoricalRangeRequest;
 use crate::keys::{SymbolKey, Topic};
 use crate::providers::ProviderKind;
 use crate::securities::security::FuturesContract;
@@ -570,7 +569,6 @@ pub enum Response {
         mbp10: Mbp10,
         provider_kind: ProviderKind,
     },
-    DownloadHistorical(HistoricalRangeRequest),
 }
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, PartialEq, Clone, Debug)]

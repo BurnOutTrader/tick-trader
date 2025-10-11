@@ -2,7 +2,7 @@ use ahash::AHashMap;
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use rust_decimal::Decimal;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 use tt_types::accounts::account::AccountName;
 use tt_types::accounts::events::{
     AccountDelta, OrderUpdate, PositionDelta, PositionSide, ProviderOrderId,
@@ -53,13 +53,13 @@ pub struct PortfolioManager {
     // All currently open orders (keyed by instrument + best available order id)
     open_orders: DashMap<OrderKey, OrderUpdate>,
     // Completed (closed/filled) orders kept for later reference
-    completed_orders: Mutex<AHashMap<OrderKey, OrderUpdate>>,
+    completed_orders: RwLock<AHashMap<OrderKey, OrderUpdate>>,
     // Closed trades (from provider/execution layer)
     closed_trades: RwLock<Vec<Trade>>,
     // Optional last snapshots (for pass-through APIs and debugging)
-    last_orders: Mutex<Option<OrdersBatch>>,
-    last_positions: Mutex<Option<PositionsBatch>>,
-    last_accounts: Mutex<Option<AccountDeltaBatch>>,
+    last_orders: RwLock<Option<OrdersBatch>>,
+    last_positions: RwLock<Option<PositionsBatch>>,
+    last_accounts: RwLock<Option<AccountDeltaBatch>>,
     // Vendor securities cache
     #[allow(dead_code)]
     securities_by_provider: Arc<DashMap<ProviderKind, Vec<Instrument>>>,
@@ -148,12 +148,12 @@ impl PortfolioManager {
                 } else {
                     // Order completed: move from open -> completed store
                     self.open_orders.remove(&key);
-                    let mut comp = self.completed_orders.lock().expect("poisoned");
+                    let mut comp = self.completed_orders.write().expect("poisoned");
                     comp.insert(key, o.clone());
                 }
             }
         }
-        *self.last_orders.lock().expect("poisoned") = Some(batch);
+        *self.last_orders.write().expect("poisoned") = Some(batch);
     }
 
     /// Apply a PositionsBatch (aggregated update; no account identity). We adjust open_pnl using last prices when available
@@ -171,7 +171,7 @@ impl PortfolioManager {
             }
             self.positions_total_delta.insert(pd.instrument.clone(), pd);
         }
-        *self.last_positions.lock().expect("poisoned") = Some(batch);
+        *self.last_positions.write().expect("poisoned") = Some(batch);
     }
 
     /// Apply a PositionsBatch scoped to a specific provider+account (when account attribution is available).
@@ -209,7 +209,7 @@ impl PortfolioManager {
         for instr in touched.iter() {
             self.recompute_synthetic_for(instr);
         }
-        *self.last_positions.lock().expect("poisoned") = Some(batch);
+        *self.last_positions.write().expect("poisoned") = Some(batch);
     }
 
     /// Apply AccountDeltaBatch updates (keyed by provider + account name).
@@ -218,7 +218,7 @@ impl PortfolioManager {
             self.accounts_by_name
                 .insert((a.provider_kind, a.name.clone()), a.clone());
         }
-        *self.last_accounts.lock().expect("poisoned") = Some(batch);
+        *self.last_accounts.write().expect("poisoned") = Some(batch);
     }
 
     // Queries - positions (aggregated by instrument)
@@ -367,13 +367,13 @@ impl PortfolioManager {
 
     // Snapshots
     pub fn last_orders(&self) -> Option<OrdersBatch> {
-        self.last_orders.lock().expect("poisoned").clone()
+        self.last_orders.read().expect("poisoned").clone()
     }
     pub fn last_positions(&self) -> Option<PositionsBatch> {
-        self.last_positions.lock().expect("poisoned").clone()
+        self.last_positions.read().expect("poisoned").clone()
     }
     pub fn last_accounts(&self) -> Option<AccountDeltaBatch> {
-        self.last_accounts.lock().expect("poisoned").clone()
+        self.last_accounts.read().expect("poisoned").clone()
     }
 
     /// Adjust a PositionsBatch by recomputing open_pnl using last known marks in the portfolio.

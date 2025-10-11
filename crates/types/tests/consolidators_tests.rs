@@ -79,6 +79,34 @@ fn candle(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn candle_with_res(
+    sym: &str,
+    start: chrono::DateTime<Utc>,
+    secs: i64,
+    o: i64,
+    h: i64,
+    l: i64,
+    c: i64,
+    vol: i64,
+    res: Resolution,
+) -> Candle {
+    Candle {
+        symbol: sym.to_string(),
+        instrument: Instrument::from_str(sym).unwrap(),
+        time_start: start,
+        time_end: start + Duration::seconds(secs) - Duration::nanoseconds(1),
+        open: d(o),
+        high: d(h),
+        low: d(l),
+        close: d(c),
+        volume: d(vol),
+        ask_volume: d(0),
+        bid_volume: d(0),
+        resolution: res,
+    }
+}
+
 #[test]
 fn ticks_to_m1_single_bar() {
     let symbol = "MNQ.Z25";
@@ -318,4 +346,77 @@ fn candles_to_m5_no_feedback_duplicate() {
 
     // Ensure no immediate second 5 m bar is emitted due to feedback
     assert!(cons.update_candle(&c_next).is_none());
+}
+
+#[test]
+fn candles_to_m5_reject_equal_and_coarser() {
+    let symbol = "MNQ.Z25";
+    let mut cons = CandlesToCandlesConsolidator::new(
+        Resolution::Minutes(5),
+        symbol.to_string(),
+        None,
+        Instrument::from_str(symbol).unwrap(),
+    );
+
+    let start = Utc.with_ymd_and_hms(2025, 9, 21, 10, 0, 0).unwrap();
+
+    // Equal resolution 5m candle should be ignored
+    let c_5m = candle_with_res(
+        symbol,
+        start,
+        300,
+        100,
+        105,
+        95,
+        102,
+        10,
+        Resolution::Minutes(5),
+    );
+    assert!(cons.update_candle(&c_5m).is_none());
+
+    // Coarser resolution 15m candle should be ignored
+    let c_15m = candle_with_res(
+        symbol,
+        start,
+        900,
+        200,
+        210,
+        190,
+        205,
+        20,
+        Resolution::Minutes(15),
+    );
+    assert!(cons.update_candle(&c_15m).is_none());
+
+    // Finer 1m candles should still accumulate and produce a 5m bar after 5 inputs
+    for i in 0..5 {
+        let c_1m = candle_with_res(
+            symbol,
+            start + Duration::minutes(i),
+            60,
+            300 + i,
+            305 + i,
+            295 + i,
+            302 + i,
+            5,
+            Resolution::Minutes(1),
+        );
+        assert!(cons.update_candle(&c_1m).is_none());
+    }
+    let next_1m = candle_with_res(
+        symbol,
+        start + Duration::minutes(5),
+        60,
+        400,
+        405,
+        395,
+        402,
+        5,
+        Resolution::Minutes(1),
+    );
+    let out = cons
+        .update_candle(&next_1m)
+        .expect("expected 5m bar after 5 x 1m");
+    assert_eq!(out.resolution, Resolution::Minutes(5));
+    assert_eq!(out.time_start, start);
 }

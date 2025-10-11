@@ -1,267 +1,44 @@
-use crate::models::{
-    BarRec, DepthDeltaRec, EngineConfig, InterestEntry, StreamKey, StreamMetrics, SubState, TickRec,
-};
+use crate::engine_inner::EngineAccountsState;
+use crate::handle::EngineHandle;
+use crate::models::{Command, DataTopic};
 use crate::portfolio::PortfolioManager;
-use anyhow::anyhow;
+use crate::traits::Strategy;
 use chrono::Utc;
+use crossbeam::queue::ArrayQueue;
 use dashmap::DashMap;
 use rust_decimal::prelude::ToPrimitive;
-use std::collections::{HashMap, VecDeque};
-// use std::path::Path;
-use sqlx::{Pool, Postgres};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
-use tokio::sync::{Mutex, mpsc, oneshot};
-use tracing::trace;
-use tracing::{error, info};
+use std::sync::{Arc, RwLock};
+use std::time::Duration;
+use tokio::sync::{mpsc, oneshot};
+use tracing::info;
 use tt_bus::{ClientMessageBus, ClientSubId};
-use tt_types::accounts::account::AccountName;
-use tt_types::accounts::events::{AccountDelta, PositionSide};
-use tt_types::data::core::{Bbo, Candle, Tick};
-use tt_types::data::mbp10::Mbp10;
+use tt_types::accounts::events::PositionSide;
 use tt_types::engine_id::EngineUuid;
 use tt_types::keys::{AccountKey, SymbolKey, Topic};
 use tt_types::providers::ProviderKind;
 use tt_types::securities::security::FuturesContract;
 use tt_types::securities::symbols::Instrument;
-use tt_types::server_side::traits::{MarketDataProvider, ProbeStatus, ProviderParams};
 use tt_types::wire::{
     AccountDeltaBatch, BarBatch, Kick, OrdersBatch, PositionsBatch, QuoteBatch, Request, Response,
-    TickBatch, Trade,
+    TickBatch,
 };
-// SHM snapshots
-use tt_shm;
-// Bytes trait for rkyv deserialization of individual items
-use crossbeam::queue::ArrayQueue;
-use tt_types::wire::Bytes as WireBytes;
 
-#[derive(Default)]
-pub struct Caches {
-    pub ticks: HashMap<StreamKey, VecDeque<TickRec>>, // bounded by secs window
-    pub bars: HashMap<StreamKey, VecDeque<BarRec>>,   // sized per resolution
-    pub depth_ring: HashMap<StreamKey, VecDeque<DepthDeltaRec>>, // ~2–5s ring
-}
-
-pub struct Engine<P: MarketDataProvider + 'static> {
-    provider: Arc<P>,
-    cfg: EngineConfig,
-    inner: Arc<Mutex<EngineInner>>,
-}
-
-struct EngineInner {
-    interest: HashMap<StreamKey, InterestEntry>,
-    metrics: HashMap<StreamKey, StreamMetrics>,
-    #[allow(dead_code)]
-    db: Pool<Postgres>,
-    caches: Caches,
-}
-
-impl<P: MarketDataProvider + 'static> Engine<P> {
-    pub fn new(provider: Arc<P>, cfg: EngineConfig) -> anyhow::Result<Self> {
-        // Initialize Postgres connection pool lazily (non-async) using sqlx
-        // Prefer env var DATABASE_URL; fallback to cfg.db_path if it looks like a URL.
-        let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| cfg.db_path.clone());
-        if db_url.is_empty() {
-            return Err(anyhow!(
-                "DATABASE_URL is not set and cfg.db_path is empty; cannot initialize Postgres pool"
-            ));
-        }
-        // Use a small default pool; strategies typically run few concurrent queries.
-        let pool = sqlx::postgres::PgPoolOptions::new()
-            .max_connections(8)
-            .connect_lazy(&db_url)?;
-        Ok(Self {
-            provider,
-            cfg,
-            inner: Arc::new(Mutex::new(EngineInner {
-                interest: HashMap::new(),
-                metrics: HashMap::new(),
-                caches: Caches::default(),
-                db: pool,
-            })),
-        })
-    }
-
-    pub async fn interest_delta(
-        &self,
-        topic: Topic,
-        key: SymbolKey,
-        delta: i32,
-        params: Option<ProviderParams>,
-    ) -> anyhow::Result<()> {
-        let sk = StreamKey {
-            topic,
-            key: key.clone(),
-        };
-        let mut inner = self.inner.lock().await;
-        let ent = inner.interest.entry(sk.clone()).or_insert(InterestEntry {
-            downstream_count: 0,
-            state: SubState::Unsubscribed,
-            params: params.clone(),
-            last_upstream_data_at: None,
-        });
-        // Update params if provided (persist for resubscribe)
-        if let Some(p) = params {
-            ent.params = Some(p);
-        }
-        if delta > 0 {
-            let prev = ent.downstream_count;
-            ent.downstream_count = ent.downstream_count.saturating_add(delta as u32);
-            if prev == 0 {
-                drop(inner);
-                info!(?sk, "upstream subscribe start");
-                // idempotency: only call if not already Subscribed/Subscribing
-                let _ = self.provider.subscribe_md(topic, &key).await;
-                let mut inner2 = self.inner.lock().await;
-                if let Some(ent2) = inner2.interest.get_mut(&sk) {
-                    ent2.state = SubState::Subscribed;
-                }
-            }
-        } else if delta < 0 {
-            let prev = ent.downstream_count;
-            ent.downstream_count = ent.downstream_count.saturating_sub((-delta) as u32);
-            if prev > 0 && ent.downstream_count == 0 {
-                drop(inner);
-                info!(?sk, "upstream unsubscribe start (downstream=0)");
-                self.provider.unsubscribe_md(topic, &key).await?;
-                let mut inner2 = self.inner.lock().await;
-                if let Some(ent2) = inner2.interest.get_mut(&sk) {
-                    ent2.state = SubState::Unsubscribed;
-                }
-            }
-        }
-        Ok(())
-    }
-
-    pub async fn probe_stream(&self, topic: Topic, _key: &SymbolKey) -> ProbeStatus {
-        self.provider.supports(topic); // hint; no-op for now
-        // delegate to provider if it has a probe (not in trait for streams), so return Ok(0)
-        ProbeStatus::Ok(0)
-    }
-
-    // Provider → Engine data callbacks (skeletons for caches)
-    pub async fn on_tick_batch(
-        &self,
-        topic: Topic,
-        key: &SymbolKey,
-        now: Instant,
-        batch_bytes: usize,
-    ) {
-        let mut inner = self.inner.lock().await;
-        let sk = StreamKey {
-            topic,
-            key: key.clone(),
-        };
-        let m = inner.metrics.entry(sk.clone()).or_default();
-        m.frames += 1;
-        m.bytes += batch_bytes as u64;
-        m.last_upstream_data_at = Some(now);
-        let q = inner.caches.ticks.entry(sk).or_default();
-        q.push_back(TickRec {
-            ts_ns: now.elapsed().as_nanos() as i64,
-            bytes: batch_bytes,
-        });
-        // Evict by time window
-        let window = Duration::from_secs(self.cfg.ticks_replay_secs);
-        let nowi = Instant::now();
-        while let Some(_front) = q.front() {
-            // Here we used now elapsed placeholder; in real we would compare to message ts
-            if nowi.duration_since(now) > window {
-                q.pop_front();
-            } else {
-                break;
-            }
-        }
-    }
-
-    pub async fn on_depth_delta(&self, topic: Topic, key: &SymbolKey, now: Instant, bytes: usize) {
-        let mut inner = self.inner.lock().await;
-        let sk = StreamKey {
-            topic,
-            key: key.clone(),
-        };
-        let m = inner.metrics.entry(sk.clone()).or_default();
-        m.frames += 1;
-        m.bytes += bytes as u64;
-        m.last_upstream_data_at = Some(now);
-        let ring = inner.caches.depth_ring.entry(sk).or_default();
-        ring.push_back(DepthDeltaRec {
-            ts_ns: now.elapsed().as_nanos() as i64,
-            bytes,
-        });
-        // Cap by approximate time: keep last N entries within depth_ring_secs (simplified)
-        while ring.len() > 1024 {
-            ring.pop_front();
-        }
-    }
-}
-
-pub trait Strategy: Send + 'static {
-    fn on_start(&mut self, _h: EngineHandle) {}
-    fn on_stop(&mut self) {}
-
-    fn on_tick(&mut self, _t: &Tick, _provider_kind: ProviderKind) {}
-    fn on_quote(&mut self, _q: &Bbo, _provider_kind: ProviderKind) {}
-    fn on_bar(&mut self, _b: &Candle, _provider_kind: ProviderKind) {}
-    fn on_mbp10(&mut self, _d: &Mbp10, _provider_kind: ProviderKind) {}
-
-    fn on_orders_batch(&mut self, _b: &OrdersBatch) {}
-    fn on_positions_batch(&mut self, _b: &PositionsBatch) {}
-    fn on_account_delta(&mut self, _accounts: &[AccountDelta]) {}
-
-    fn on_trades_closed(&mut self, _trades: Vec<Trade>) {}
-
-    fn on_subscribe(&mut self, _instrument: Instrument, _data_topic: DataTopic, _success: bool) {}
-    fn on_unsubscribe(&mut self, _instrument: Instrument, _data_topic: DataTopic) {}
-
-    fn accounts(&self) -> Vec<AccountKey> {
-        Vec::new()
-    }
-}
-
-#[derive(Clone, Debug, Copy)]
-pub enum DataTopic {
-    Ticks,
-    Quotes,
-    MBP10,
-    Candles1s,
-    Candles1m,
-    Candles1h,
-    Candles1d,
-}
-
-impl DataTopic {
-    pub(crate) fn to_topic_or_err(self) -> anyhow::Result<Topic> {
-        match self {
-            DataTopic::Ticks => Ok(Topic::Ticks),
-            DataTopic::Quotes => Ok(Topic::Quotes),
-            DataTopic::MBP10 => Ok(Topic::MBP10),
-            DataTopic::Candles1s => Ok(Topic::Candles1s),
-            DataTopic::Candles1m => Ok(Topic::Candles1m),
-            DataTopic::Candles1h => Ok(Topic::Candles1h),
-            DataTopic::Candles1d => Ok(Topic::Candles1d),
-        }
-    }
-
-    pub fn from(topic: Topic) -> Self {
-        match topic {
-            Topic::Ticks => DataTopic::Ticks,
-            Topic::Quotes => DataTopic::Quotes,
-            Topic::MBP10 => DataTopic::MBP10,
-            Topic::Candles1s => DataTopic::Candles1s,
-            Topic::Candles1m => DataTopic::Candles1m,
-            Topic::Candles1h => DataTopic::Candles1h,
-            Topic::Candles1d => DataTopic::Candles1d,
-            _ => unimplemented!("Topic: {} not added to engine handling", topic),
-        }
-    }
-}
-
-struct EngineAccountsState {
-    last_orders: Option<OrdersBatch>,
-    last_positions: Option<PositionsBatch>,
-    last_accounts: Option<AccountDeltaBatch>,
+// Shared view used by EngineHandle
+pub(crate) struct EngineRuntimeShared {
+    pub(crate) bus: Arc<ClientMessageBus>,
+    pub(crate) sub_id: ClientSubId,
+    pub(crate) next_corr_id: Arc<AtomicU64>,
+    pub(crate) pending: Arc<DashMap<u64, oneshot::Sender<Response>>>,
+    pub(crate) securities_by_provider: Arc<DashMap<ProviderKind, Vec<Instrument>>>,
+    pub(crate) watching_providers: Arc<DashMap<ProviderKind, ()>>,
+    pub(crate) state: Arc<EngineAccountsState>,
+    pub(crate) portfolio_manager: Arc<PortfolioManager>,
+    // Map our EngineUuid -> provider's order id string (populated from order updates)
+    pub(crate) provider_order_ids: Arc<DashMap<EngineUuid, String>>,
+    // Consolidators shared with handle for registration
+    pub(crate) consolidators:
+        Arc<DashMap<(Topic, SymbolKey), Box<dyn tt_types::consolidators::Consolidator + Send>>>,
 }
 
 pub struct EngineRuntime {
@@ -269,7 +46,7 @@ pub struct EngineRuntime {
     sub_id: Option<ClientSubId>,
     rx: Option<mpsc::Receiver<Response>>,
     task: Option<tokio::task::JoinHandle<()>>,
-    state: Arc<Mutex<EngineAccountsState>>,
+    state: Arc<EngineAccountsState>,
     // Correlated request/response callbacks (engine-local)
     next_corr_id: Arc<AtomicU64>,
     pending: Arc<DashMap<u64, oneshot::Sender<Response>>>,
@@ -286,456 +63,8 @@ pub struct EngineRuntime {
     // Map our EngineUuid -> provider's order id string (populated from order updates)
     provider_order_ids: Arc<DashMap<EngineUuid, String>>,
     slow_spin_ns: Option<u64>,
-    consolidators: Arc<
-        DashMap<(Topic, SymbolKey), Vec<Box<dyn tt_types::consolidators::Consolidator + Send>>>,
-    >,
-}
-
-// Shared view used by EngineHandle
-pub(crate) struct EngineRuntimeShared {
-    bus: Arc<ClientMessageBus>,
-    sub_id: ClientSubId,
-    next_corr_id: Arc<AtomicU64>,
-    pending: Arc<DashMap<u64, oneshot::Sender<Response>>>,
-    securities_by_provider: Arc<DashMap<ProviderKind, Vec<Instrument>>>,
-    watching_providers: Arc<DashMap<ProviderKind, ()>>,
-    state: Arc<Mutex<EngineAccountsState>>,
-    portfolio_manager: Arc<PortfolioManager>,
-    // Map our EngineUuid -> provider's order id string (populated from order updates)
-    provider_order_ids: Arc<DashMap<EngineUuid, String>>,
-}
-
-// Non-blocking commands enqueued by the strategy/handle and drained by the engine task
-enum Command {
-    Subscribe { topic: Topic, key: SymbolKey },
-    Unsubscribe { topic: Topic, key: SymbolKey },
-    Place(tt_types::wire::PlaceOrder),
-    Cancel(tt_types::wire::CancelOrder),
-    Replace(tt_types::wire::ReplaceOrder),
-}
-
-#[derive(Clone)]
-pub struct EngineHandle {
-    inner: Arc<EngineRuntimeShared>,
-    cmd_q: Arc<ArrayQueue<Command>>,
-}
-
-impl EngineHandle {
-    // === FIRE-AND-FORGET ===
-    /// Enqueue a subscribe request to be handled by the engine task.
-    ///
-    /// Parameters:
-    /// - topic: Logical data stream to subscribe to (e.g., Ticks, Quotes, MBP10, Candles).
-    /// - key: SymbolKey including instrument and provider.
-    #[inline]
-    pub fn subscribe_now(&self, topic: DataTopic, key: SymbolKey) {
-        let _ = self.cmd_q.push(Command::Subscribe {
-            topic: topic.to_topic_or_err().unwrap(),
-            key,
-        });
-    }
-    /// Enqueue an unsubscribe request for a previously subscribed stream.
-    ///
-    /// Parameters:
-    /// - topic: Logical data stream to unsubscribe from.
-    /// - key: SymbolKey including instrument and provider.
-    #[inline]
-    pub fn unsubscribe_now(&self, topic: DataTopic, key: SymbolKey) {
-        let _ = self.cmd_q.push(Command::Unsubscribe {
-            topic: topic.to_topic_or_err().unwrap(),
-            key,
-        });
-    }
-    /// Enqueue a new order for asynchronous placement and return its EngineUuid immediately.
-    ///
-    /// Parameters:
-    /// - spec: Complete order specification (account, key, side, qty, type, prices, etc.).
-    ///
-    /// Returns: EngineUuid assigned locally for correlation with subsequent order updates.
-    #[inline]
-    pub fn place_now(&self, mut spec: tt_types::wire::PlaceOrder) -> EngineUuid {
-        let id = EngineUuid::new();
-        spec.custom_tag = Some(EngineUuid::append_engine_tag(spec.custom_tag.take(), id));
-        let _ = self.cmd_q.push(Command::Place(spec));
-        id
-    }
-
-    // === SYNC GETTERS (instant) ===
-    #[inline]
-    pub fn is_long(&self, instr: &Instrument) -> bool {
-        self.inner.portfolio_manager.is_long(instr)
-    }
-    #[inline]
-    pub fn is_short(&self, instr: &Instrument) -> bool {
-        self.inner.portfolio_manager.is_short(instr)
-    }
-    #[inline]
-    pub fn is_flat(&self, instr: &Instrument) -> bool {
-        self.inner.portfolio_manager.is_flat(instr)
-    }
-    #[inline]
-    pub fn open_orders_for_instrument(
-        &self,
-        instr: &Instrument,
-    ) -> Vec<tt_types::accounts::events::OrderUpdate> {
-        self.inner
-            .portfolio_manager
-            .open_orders_for_instrument(instr)
-    }
-
-    async fn request_with_corr<F>(&self, make: F) -> oneshot::Receiver<Response>
-    where
-        F: FnOnce(u64) -> Request,
-    {
-        let corr_id = self.inner.next_corr_id.fetch_add(1, Ordering::SeqCst);
-        let (tx, rx) = oneshot::channel();
-        self.inner.pending.insert(corr_id, tx);
-        let req = make(corr_id);
-        // forward and ignore the result here; the response path uses corr_id
-        self.inner
-            .bus
-            .handle_request(&self.inner.sub_id, req)
-            .await
-            .ok();
-        rx
-    }
-
-    // Market data
-    /// Subscribe to a market data stream for a specific instrument and provider.
-    ///
-    /// Parameters:
-    /// - data_topic: Logical stream to subscribe to (Ticks, Quotes, MBP10, Candles).
-    /// - key: SymbolKey composed of instrument and provider.
-    ///
-    /// On success, a SubscribeResponse will be delivered to the strategy via on_subscribe.
-    pub async fn subscribe_key(&self, data_topic: DataTopic, key: SymbolKey) -> anyhow::Result<()> {
-        let topic = data_topic.to_topic_or_err()?;
-        // Ensure vendor watch is running for this provider
-        self.ensure_vendor_securities_watch(key.provider).await;
-        self.inner
-            .bus
-            .handle_request(
-                &self.inner.sub_id,
-                Request::SubscribeKey(tt_types::wire::SubscribeKey {
-                    topic,
-                    key,
-                    latest_only: false,
-                    from_seq: 0,
-                }),
-            )
-            .await?;
-        Ok(())
-    }
-
-    /// Unsubscribe from a market data stream previously requested with subscribe_key.
-    ///
-    /// Parameters:
-    /// - data_topic: Logical stream to unsubscribe from.
-    /// - key: SymbolKey composed of instrument and provider.
-    pub async fn unsubscribe_key(
-        &self,
-        data_topic: DataTopic,
-        key: SymbolKey,
-    ) -> anyhow::Result<()> {
-        let topic = data_topic.to_topic_or_err()?;
-        self.inner
-            .bus
-            .handle_request(
-                &self.inner.sub_id,
-                Request::UnsubscribeKey(tt_types::wire::UnsubscribeKey { topic, key }),
-            )
-            .await?;
-        Ok(())
-    }
-
-    /// List instruments for a provider, optionally filtered by a pattern understood by the server.
-    ///
-    /// Parameters:
-    /// - provider: Data provider to query.
-    /// - pattern: Optional filter string (provider-specific; None returns all).
-    ///
-    /// Returns: Vec of instruments or empty vec on timeout/unsupported response.
-    pub async fn list_instruments(
-        &self,
-        provider: ProviderKind,
-        pattern: Option<String>,
-    ) -> anyhow::Result<Vec<Instrument>> {
-        use tokio::time::timeout;
-        use tt_types::wire::{InstrumentsRequest, Response as WireResp};
-        let rx = self
-            .request_with_corr(|corr_id| {
-                Request::InstrumentsRequest(InstrumentsRequest {
-                    provider,
-                    pattern,
-                    corr_id,
-                })
-            })
-            .await;
-        match timeout(Duration::from_millis(750), rx).await {
-            Ok(Ok(WireResp::InstrumentsResponse(ir))) => Ok(ir.instruments),
-            Ok(Ok(_)) | Ok(Err(_)) | Err(_) => Ok(vec![]),
-        }
-    }
-
-    pub async fn get_instruments_map(
-        &self,
-        provider: ProviderKind,
-    ) -> anyhow::Result<Vec<FuturesContract>> {
-        use tokio::time::timeout;
-        use tt_types::wire::{InstrumentsMapRequest, Response as WireResp};
-        let rx = self
-            .request_with_corr(|corr_id| {
-                Request::InstrumentsMapRequest(InstrumentsMapRequest { provider, corr_id })
-            })
-            .await;
-        match timeout(Duration::from_secs(2), rx).await {
-            Ok(Ok(WireResp::InstrumentsMapResponse(imr))) => Ok(imr.instruments),
-            Ok(Ok(_)) | Ok(Err(_)) | Err(_) => Ok(vec![]),
-        }
-    }
-
-    pub async fn update_historical_latest_by_key_async(
-        &self,
-        provider: ProviderKind,
-        topic: Topic,
-        instrument: Instrument,
-    ) -> anyhow::Result<()> {
-        use tt_types::wire::{DbUpdateKeyLatest, Response as WireResp};
-        let instr_clone = instrument.clone();
-        let rx = self
-            .request_with_corr(|corr_id| {
-                Request::DbUpdateKeyLatest(DbUpdateKeyLatest {
-                    provider,
-                    instrument: instr_clone,
-                    topic,
-                    corr_id,
-                })
-            })
-            .await;
-        match rx.await {
-            Ok(WireResp::DbUpdateComplete {
-                success, error_msg, ..
-            }) => {
-                if success {
-                    Ok(())
-                } else {
-                    Err(anyhow!(
-                        error_msg.unwrap_or_else(|| "historical update failed".to_string())
-                    ))
-                }
-            }
-            Ok(other) => Err(anyhow!(format!("unexpected response: {:?}", other))),
-            Err(_canceled) => Err(anyhow!("engine response channel closed")),
-        }
-    }
-
-    // Fire-and-forget: enqueue cancel; engine task performs I/O
-    pub fn cancel_order(
-        &self,
-        _provider_kind: ProviderKind,
-        account_name: AccountName,
-        order_id: EngineUuid,
-    ) -> anyhow::Result<()> {
-        // Look up provider order ID from map populated by order updates
-        if let Some(pid) = self.inner.provider_order_ids.get(&order_id) {
-            let spec = tt_types::wire::CancelOrder {
-                account_name,
-                provider_order_id: pid.value().clone(),
-            };
-            let _ = self.cmd_q.push(Command::Cancel(spec));
-            Ok(())
-        } else {
-            Err(anyhow!(
-                "provider_order_id not known for engine order {}",
-                order_id
-            ))
-        }
-    }
-    // Fire-and-forget: enqueue replace; engine task performs I/O
-    pub fn replace_order(
-        &self,
-        _provider_kind: ProviderKind,
-        account_name: AccountName,
-        incoming: tt_types::wire::ReplaceOrder,
-        order_id: EngineUuid,
-    ) -> anyhow::Result<()> {
-        if let Some(pid) = self.inner.provider_order_ids.get(&order_id) {
-            let spec = tt_types::wire::ReplaceOrder {
-                account_name,
-                provider_order_id: pid.value().clone(),
-                new_qty: incoming.new_qty,
-                new_limit_price: incoming.new_limit_price,
-                new_stop_price: incoming.new_stop_price,
-                new_trail_price: incoming.new_trail_price,
-            };
-            let _ = self.cmd_q.push(Command::Replace(spec));
-            Ok(())
-        } else {
-            Err(anyhow!(
-                "provider_order_id not known for engine order {}",
-                order_id
-            ))
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    /// Convenience: construct a `PlaceOrder` from parameters and enqueue it.
-    /// This keeps strategies from having to allocate and own a full `PlaceOrder` struct.
-    /// Do not use +oId: as part of your order's custom tag, it is reserved for internal order management
-    pub fn place_order(
-        &self,
-        account_name: tt_types::accounts::account::AccountName,
-        key: tt_types::keys::SymbolKey,
-        side: tt_types::accounts::events::Side,
-        qty: i64,
-        r#type: tt_types::wire::OrderType,
-        limit_price: Option<rust_decimal::Decimal>,
-        stop_price: Option<rust_decimal::Decimal>,
-        trail_price: Option<rust_decimal::Decimal>,
-        custom_tag: Option<String>,
-        stop_loss: Option<tt_types::wire::BracketWire>,
-        take_profit: Option<tt_types::wire::BracketWire>,
-    ) -> anyhow::Result<EngineUuid> {
-        let engine_uuid = EngineUuid::new();
-        let tag = EngineUuid::append_engine_tag(custom_tag, engine_uuid);
-        let spec = tt_types::wire::PlaceOrder {
-            account_name,
-            key,
-            side,
-            qty,
-            r#type,
-            limit_price: limit_price.and_then(|d| d.to_f64()),
-            stop_price: stop_price.and_then(|d| d.to_f64()),
-            trail_price: trail_price.and_then(|d| d.to_f64()),
-            custom_tag: Some(tag),
-            stop_loss,
-            take_profit,
-        };
-        // Fire-and-forget: enqueue; engine task will send to execution provider
-        let _ = self.cmd_q.push(Command::Place(spec));
-        Ok(engine_uuid)
-    }
-
-    // Accounts/positions (cached snapshots)
-    pub async fn last_orders(&self) -> Option<OrdersBatch> {
-        let st = self.inner.state.lock().await;
-        st.last_orders.clone()
-    }
-    pub async fn last_positions(&self) -> Option<PositionsBatch> {
-        let st = self.inner.state.lock().await;
-        st.last_positions.clone()
-    }
-    pub async fn last_accounts(&self) -> Option<AccountDeltaBatch> {
-        let st = self.inner.state.lock().await;
-        st.last_accounts.clone()
-    }
-    pub async fn orders_for_instrument(
-        &self,
-        instr: &Instrument,
-    ) -> Vec<tt_types::accounts::events::OrderUpdate> {
-        let st = self.inner.state.lock().await;
-        st.last_orders
-            .as_ref()
-            .map(|ob| {
-                ob.orders
-                    .iter()
-                    .filter(|o| &o.instrument == instr)
-                    .cloned()
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-    pub async fn find_position_delta(
-        &self,
-        instr: &Instrument,
-    ) -> Option<tt_types::accounts::events::PositionDelta> {
-        let st = self.inner.state.lock().await;
-        st.last_positions.as_ref().and_then(|pb| {
-            pb.positions
-                .iter()
-                .find(|p| &p.instrument == instr)
-                .cloned()
-        })
-    }
-    pub async fn position_state(
-        &self,
-        _account_name: &AccountName,
-        _instr: &Instrument,
-    ) -> PositionSide {
-        todo!()
-    }
-    pub async fn position_state_delta(&self, _instr: &Instrument) -> PositionSide {
-        todo!()
-    }
-
-    pub async fn is_long_delta(&self, instr: &Instrument) -> bool {
-        self.find_position_delta(instr)
-            .await
-            .map(|p| p.net_qty > rust_decimal::Decimal::ZERO)
-            .unwrap_or(false)
-    }
-    pub async fn is_short_delta(&self, instr: &Instrument) -> bool {
-        self.find_position_delta(instr)
-            .await
-            .map(|p| p.net_qty < rust_decimal::Decimal::ZERO)
-            .unwrap_or(false)
-    }
-    pub async fn is_flat_delta(&self, instr: &Instrument) -> bool {
-        self.find_position_delta(instr)
-            .await
-            .map(|p| p.net_qty == rust_decimal::Decimal::ZERO)
-            .unwrap_or(true)
-    }
-
-    // Reference data cache access
-    pub fn securities_for(&self, provider: ProviderKind) -> Vec<Instrument> {
-        self.inner
-            .securities_by_provider
-            .get(&provider)
-            .map(|v| v.value().clone())
-            .unwrap_or_default()
-    }
-
-    async fn ensure_vendor_securities_watch(&self, provider: ProviderKind) {
-        if self.inner.watching_providers.contains_key(&provider) {
-            return;
-        }
-        self.inner.watching_providers.insert(provider, ());
-        // Immediate fetch using the client bus correlation helper
-        let bus = self.inner.bus.clone();
-        let sec_map = self.inner.securities_by_provider.clone();
-
-        async fn fetch_into(
-            bus: Arc<ClientMessageBus>,
-            provider: ProviderKind,
-            sec_map: Arc<DashMap<ProviderKind, Vec<Instrument>>>,
-        ) {
-            use tokio::time::timeout;
-            use tt_types::wire::{InstrumentsRequest, Request as WireReq, Response as WireResp};
-            let rx = bus
-                .request_with_corr(|corr_id| {
-                    WireReq::InstrumentsRequest(InstrumentsRequest {
-                        provider,
-                        pattern: None,
-                        corr_id,
-                    })
-                })
-                .await;
-            if let Ok(Ok(WireResp::InstrumentsResponse(ir))) =
-                timeout(Duration::from_secs(3), rx).await
-            {
-                sec_map.insert(provider, ir.instruments);
-            }
-        }
-        fetch_into(bus.clone(), provider, sec_map.clone()).await;
-        tokio::spawn(async move {
-            let mut tick = tokio::time::interval(Duration::from_secs(3600));
-            loop {
-                tick.tick().await;
-                fetch_into(bus.clone(), provider, sec_map.clone()).await;
-            }
-        });
-    }
+    consolidators:
+        Arc<DashMap<(Topic, SymbolKey), Box<dyn tt_types::consolidators::Consolidator + Send>>>,
 }
 
 impl EngineRuntime {
@@ -761,6 +90,7 @@ impl EngineRuntime {
         provider: ProviderKind,
         pattern: Option<String>,
     ) -> anyhow::Result<Vec<Instrument>> {
+        use std::time::Duration;
         use tokio::time::timeout;
         use tt_types::wire::{InstrumentsRequest, Response as WireResp};
         let rx = self
@@ -784,6 +114,7 @@ impl EngineRuntime {
         &self,
         provider: ProviderKind,
     ) -> anyhow::Result<Vec<FuturesContract>> {
+        use std::time::Duration;
         use tokio::time::timeout;
         use tt_types::wire::{InstrumentsMapRequest, Response as WireResp};
         let rx = self
@@ -802,6 +133,7 @@ impl EngineRuntime {
         &self,
         provider: ProviderKind,
     ) -> anyhow::Result<tt_types::wire::AccountInfoResponse> {
+        use std::time::Duration;
         use tokio::time::timeout;
         use tt_types::wire::{AccountInfoRequest, Response as WireResp};
         let rx = self
@@ -998,36 +330,49 @@ impl EngineRuntime {
     }
 
     // Portfolio helpers
-    pub async fn last_orders(&self) -> Option<tt_types::wire::OrdersBatch> {
-        let st = self.state.lock().await;
-        st.last_orders.clone()
+    pub fn last_orders(&self) -> Option<tt_types::wire::OrdersBatch> {
+        self.state
+            .last_orders
+            .read()
+            .expect("orders lock poisoned")
+            .clone()
     }
-    pub async fn last_positions(&self) -> Option<tt_types::wire::PositionsBatch> {
-        let st = self.state.lock().await;
-        st.last_positions.clone()
+    pub fn last_positions(&self) -> Option<tt_types::wire::PositionsBatch> {
+        self.state
+            .last_positions
+            .read()
+            .expect("positions lock poisoned")
+            .clone()
     }
-    pub async fn last_accounts(&self) -> Option<tt_types::wire::AccountDeltaBatch> {
-        let st = self.state.lock().await;
-        st.last_accounts.clone()
+    pub fn last_accounts(&self) -> Option<tt_types::wire::AccountDeltaBatch> {
+        self.state
+            .last_accounts
+            .read()
+            .expect("accounts lock poisoned")
+            .clone()
     }
-    pub async fn find_position_delta(
+    pub fn find_position_delta(
         &self,
         instrument: &tt_types::securities::symbols::Instrument,
     ) -> Option<tt_types::accounts::events::PositionDelta> {
-        let st = self.state.lock().await;
-        st.last_positions.as_ref().and_then(|pb| {
+        let guard = self
+            .state
+            .last_positions
+            .read()
+            .expect("positions lock poisoned");
+        guard.as_ref().and_then(|pb| {
             pb.positions
                 .iter()
                 .find(|p| &p.instrument == instrument)
                 .cloned()
         })
     }
-    pub async fn orders_for_instrument(
+    pub fn orders_for_instrument(
         &self,
         instrument: &tt_types::securities::symbols::Instrument,
     ) -> Vec<tt_types::accounts::events::OrderUpdate> {
-        let st = self.state.lock().await;
-        st.last_orders
+        let guard = self.state.last_orders.read().expect("orders lock poisoned");
+        guard
             .as_ref()
             .map(|ob| {
                 ob.orders
@@ -1062,6 +407,7 @@ impl EngineRuntime {
             provider: ProviderKind,
             sec_map: Arc<DashMap<ProviderKind, Vec<Instrument>>>,
         ) {
+            use std::time::Duration;
             use tokio::time::timeout;
             use tt_types::wire::{InstrumentsRequest, Request as WireReq, Response as WireResp};
             // Use bus-level correlation to avoid depending on EngineRuntime internals
@@ -1092,39 +438,51 @@ impl EngineRuntime {
     }
 
     // Position helpers (account currently ignored; model aggregates by instrument)
-    pub async fn is_long(
+    pub fn is_long(
         &self,
         _account: Option<tt_types::accounts::account::AccountName>,
         instrument: &Instrument,
     ) -> bool {
-        let st = self.state.lock().await;
-        if let Some(pb) = &st.last_positions
+        let guard = self
+            .state
+            .last_positions
+            .read()
+            .expect("positions lock poisoned");
+        if let Some(pb) = &*guard
             && let Some(p) = pb.positions.iter().find(|p| &p.instrument == instrument)
         {
             return p.side == PositionSide::Long;
         }
         false
     }
-    pub async fn is_short(
+    pub fn is_short(
         &self,
         _account: Option<tt_types::accounts::account::AccountName>,
         instrument: &Instrument,
     ) -> bool {
-        let st = self.state.lock().await;
-        if let Some(pb) = &st.last_positions
+        let guard = self
+            .state
+            .last_positions
+            .read()
+            .expect("positions lock poisoned");
+        if let Some(pb) = &*guard
             && let Some(p) = pb.positions.iter().find(|p| &p.instrument == instrument)
         {
             return p.side == PositionSide::Short;
         }
         false
     }
-    pub async fn is_flat(
+    pub fn is_flat(
         &self,
         _account: Option<tt_types::accounts::account::AccountName>,
         instrument: &Instrument,
     ) -> bool {
-        let st = self.state.lock().await;
-        if let Some(pb) = &st.last_positions
+        let guard = self
+            .state
+            .last_positions
+            .read()
+            .expect("positions lock poisoned");
+        if let Some(pb) = &*guard
             && pb.positions.iter().any(|p| &p.instrument == instrument)
         {
             return false;
@@ -1144,11 +502,11 @@ impl EngineRuntime {
             sub_id: None,
             rx: None,
             task: None,
-            state: Arc::new(Mutex::new(EngineAccountsState {
-                last_orders: None,
-                last_positions: None,
-                last_accounts: None,
-            })),
+            state: Arc::new(EngineAccountsState {
+                last_orders: Arc::new(RwLock::new(None)),
+                last_positions: Arc::new(RwLock::new(None)),
+                last_accounts: Arc::new(RwLock::new(None)),
+            }),
             next_corr_id: Arc::new(AtomicU64::new(1)),
             pending: Arc::new(DashMap::new()),
             securities_by_provider: instruments.clone(),
@@ -1189,6 +547,7 @@ impl EngineRuntime {
             state: self.state.clone(),
             portfolio_manager: self.portfolio_manager.clone(),
             provider_order_ids: self.provider_order_ids.clone(),
+            consolidators: self.consolidators.clone(),
         };
         let handle = EngineHandle {
             inner: Arc::new(shared),
@@ -1272,6 +631,19 @@ impl EngineRuntime {
                             // Update portfolio marks then deliver to strategy
                             pm.update_apply_last_price(pk, &t.instrument, t.price);
                             strategy_for_task.on_tick(&t, provider_kind);
+                            // Drive any consolidators registered for ticks on this key
+                            let sk = SymbolKey::new(t.instrument.clone(), pk);
+                            if let Some(mut cons) = handle_inner_for_task
+                                .consolidators
+                                .get_mut(&(Topic::Ticks, sk))
+                            {
+                                if let Some(out) = cons.on_tick(&t) {
+                                    if let tt_types::consolidators::ConsolidatedOut::Candle(c) = out
+                                    {
+                                        strategy_for_task.on_bar(&c, provider_kind);
+                                    }
+                                }
+                            }
                         }
                     }
                     Response::QuoteBatch(QuoteBatch {
@@ -1284,8 +656,21 @@ impl EngineRuntime {
                             // Use mid-price as mark
                             let mid = (q.bid + q.ask) / rust_decimal::Decimal::from(2);
                             pm.update_apply_last_price(pk, &q.instrument, mid);
-                            trace!(instrument = %q.instrument, provider = ?provider_kind, "strategy.on_quote");
+                            // Drive consolidators for quotes (BBO)
                             strategy_for_task.on_quote(&q, provider_kind);
+                            let sk = SymbolKey::new(q.instrument.clone(), pk);
+                            if let Some(mut cons) = handle_inner_for_task
+                                .consolidators
+                                .get_mut(&(Topic::Quotes, sk))
+                            {
+                                if let Some(out) = cons.on_bbo(&q) {
+                                    if let tt_types::consolidators::ConsolidatedOut::Candle(c) = out
+                                    {
+                                        strategy_for_task.on_bar(&c, provider_kind);
+                                    }
+                                }
+                            }
+                            //trace!(instrument = %q.instrument, provider = ?provider_kind, "strategy.on_quote");
                         }
                     }
                     Response::BarBatch(BarBatch {
@@ -1298,6 +683,26 @@ impl EngineRuntime {
                             // Use close as mark
                             pm.update_apply_last_price(pk, &b.instrument, b.close);
                             strategy_for_task.on_bar(&b, provider_kind);
+                            // Drive consolidators for incoming candles (candle-to-candle)
+                            let sk = SymbolKey::new(b.instrument.clone(), pk);
+                            let tpc = match b.resolution {
+                                tt_types::data::models::Resolution::Seconds(1) => Topic::Candles1s,
+                                tt_types::data::models::Resolution::Minutes(1) => Topic::Candles1m,
+                                tt_types::data::models::Resolution::Hours(1) => Topic::Candles1h,
+                                tt_types::data::models::Resolution::Daily => Topic::Candles1d,
+                                tt_types::data::models::Resolution::Weekly => Topic::Candles1d,
+                                _ => Topic::Candles1m,
+                            };
+                            if let Some(mut cons) =
+                                handle_inner_for_task.consolidators.get_mut(&(tpc, sk))
+                            {
+                                if let Some(out) = cons.on_candle(&b) {
+                                    if let tt_types::consolidators::ConsolidatedOut::Candle(c) = out
+                                    {
+                                        strategy_for_task.on_bar(&c, provider_kind);
+                                    }
+                                }
+                            }
                         }
                     }
                     Response::MBP10Batch(ob) => {
@@ -1322,8 +727,8 @@ impl EngineRuntime {
                             pm.apply_orders_batch(ob.clone());
                         }
                         {
-                            let mut st = state.lock().await;
-                            st.last_orders = Some(ob.clone());
+                            let mut g = state.last_orders.write().expect("orders lock poisoned");
+                            *g = Some(ob.clone());
                         }
                         {
                             // Populate provider order ID map from updates
@@ -1341,17 +746,23 @@ impl EngineRuntime {
                     }
                     Response::PositionsBatch(mut pb) => {
                         {
-                            let mut st = state.lock().await;
                             // Adjust open_pnl via portfolio manager's last prices before delivering
                             let adj = pm.adjust_positions_batch_open_pnl(pb.clone());
-                            st.last_positions = Some(adj.clone());
+                            let mut g = state
+                                .last_positions
+                                .write()
+                                .expect("positions lock poisoned");
+                            *g = Some(adj.clone());
                         }
                         {
                             // Deliver adjusted positions batch to strategy (by-ref, sync)
-                            let st = state.lock().await;
+                            let g = state
+                                .last_positions
+                                .read()
+                                .expect("positions lock poisoned");
                             for p in pb.positions.iter_mut() {
                                 if p.open_pnl == rust_decimal::Decimal::ZERO
-                                    && let Some(ep) = st.last_positions.as_ref()
+                                    && let Some(ep) = g.as_ref()
                                 {
                                     for ep in ep.positions.iter() {
                                         if p.provider_kind == ep.provider_kind
@@ -1387,8 +798,9 @@ impl EngineRuntime {
                             }
                         }
                         {
-                            let mut st = state.lock().await;
-                            st.last_accounts = Some(ab.clone());
+                            let mut g =
+                                state.last_accounts.write().expect("accounts lock poisoned");
+                            *g = Some(ab.clone());
                         }
                         {
                             strategy_for_task.on_account_delta(&ab.accounts);
@@ -1427,6 +839,10 @@ impl EngineRuntime {
                     }
                     Response::AnnounceShm(ann) => {
                         use tokio::task::JoinHandle;
+                        use tracing::error;
+                        use tt_types::data::core::{Bbo, Tick};
+                        use tt_types::data::mbp10::Mbp10;
+                        use tt_types::wire::Bytes;
                         let topic = ann.topic;
                         let key = ann.key.clone();
                         // If this (topic,key) was blacklisted due to SHM errors, skip spawning reader
@@ -1564,7 +980,6 @@ impl EngineRuntime {
                     | Response::VendorData(_)
                     | Response::AccountInfoResponse(_) => {}
                     Response::DbUpdateComplete { .. } => {}
-                    Response::DownloadHistorical(_) => {}
                 }
                 // Flush any commands the strategy enqueued during this message
                 Self::drain_commands_for_task(
@@ -1687,6 +1102,7 @@ impl EngineRuntime {
         }
     }
 
+    #[allow(dead_code)]
     /// Trigger a historical DB update for the latest data for a given provider/topic/instrument.
     /// This sends a DbUpdateKeyLatest request and blocks until the DbUpdateComplete response arrives.
     /// Returns Ok(()) when the update completed successfully; otherwise returns Err with the server error message.
@@ -1696,6 +1112,7 @@ impl EngineRuntime {
         topic: Topic,
         instrument: Instrument,
     ) -> anyhow::Result<()> {
+        use anyhow::anyhow;
         use tt_types::wire::{DbUpdateKeyLatest, Response as WireResp};
         let fut = async {
             let instr_clone = instrument.clone();
@@ -1759,25 +1176,40 @@ impl EngineRuntime {
     }
 
     // Account state getters
-    pub async fn last_orders_batch(&self) -> Option<OrdersBatch> {
-        let st = self.state.lock().await;
-        st.last_orders.clone()
+    pub fn last_orders_batch(&self) -> Option<OrdersBatch> {
+        self.state
+            .last_orders
+            .read()
+            .expect("orders lock poisoned")
+            .clone()
     }
-    pub async fn last_positions_batch(&self) -> Option<PositionsBatch> {
-        let st = self.state.lock().await;
-        st.last_positions.clone()
+    pub fn last_positions_batch(&self) -> Option<PositionsBatch> {
+        self.state
+            .last_positions
+            .read()
+            .expect("positions lock poisoned")
+            .clone()
     }
-    pub async fn last_account_delta_batch(&self) -> Option<AccountDeltaBatch> {
-        let st = self.state.lock().await;
-        st.last_accounts.clone()
+    pub fn last_account_delta_batch(&self) -> Option<AccountDeltaBatch> {
+        self.state
+            .last_accounts
+            .read()
+            .expect("accounts lock poisoned")
+            .clone()
     }
 }
 
 #[cfg(test)]
 mod engine_shm_tests {
-    use super::*;
+    use crate::runtime::EngineRuntime;
+    use crate::traits::Strategy;
     use std::str::FromStr;
     use tokio::time::{Duration, sleep};
+    use tt_bus::ClientMessageBus;
+    use tt_types::keys::{SymbolKey, Topic};
+    use tt_types::providers::ProviderKind;
+    use tt_types::securities::symbols::Instrument;
+    use tt_types::wire::Response;
 
     struct NopStrategy;
     impl Strategy for NopStrategy {}

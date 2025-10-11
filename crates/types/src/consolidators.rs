@@ -67,7 +67,7 @@ pub enum ConsolidatedOut {
 
 // An object-safe trait so different consolidators can be stored uniformly
 // and driven by the engine using the same interface.
-pub trait Consolidator: Send {
+pub trait Consolidator: Send + Sync {
     fn on_tick(&mut self, _tk: &Tick) -> Option<ConsolidatedOut> {
         None
     }
@@ -662,9 +662,19 @@ impl CandlesToCandlesConsolidator {
     }
 
     pub fn update_candle(&mut self, bar: &Candle) -> Option<Candle> {
+        // Reject same or coarser/equal resolutions; only accept strictly finer inputs
         if bar.resolution == self.dst {
             return None;
         }
+        if let (Some(src_k), Some(dst_k)) =
+            (resolution_key(&bar.resolution), resolution_key(&self.dst))
+        {
+            // If source is not strictly finer than destination, ignore
+            if src_k >= dst_k {
+                return None;
+            }
+        }
+
         let ts = bar.time_start;
         if self.win.is_none() {
             self.win = Some(self.init_win(ts));
