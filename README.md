@@ -18,8 +18,6 @@
 
 > Note: This project is experimental and under active development. Interfaces may change and breaking updates can occur without notice. Use at your own risk.
 
-> Note: The first `cargo build` will take a while as tick-trader is using an integrated duck database.
-
 ## Live trading status and near‑term roadmap
 
 The engine can place live orders and is intended strictly for testing and evaluation. Do not use in production.
