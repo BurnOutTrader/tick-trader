@@ -11,7 +11,6 @@ use tt_types::keys::{Topic};
 use tt_types::providers::{ProjectXTenant, ProviderKind};
 use tt_types::securities::symbols::Instrument;
 use tt_types::wire::{AccountDeltaBatch,  OrdersBatch, PositionsBatch, Response, Trade};
-
 use tt_engine::runtime::EngineRuntime;
 use tt_engine::traits::Strategy;
 
