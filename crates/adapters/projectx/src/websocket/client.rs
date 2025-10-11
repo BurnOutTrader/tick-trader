@@ -1461,7 +1461,9 @@ impl PxWebSocketClient {
                                             error!(target: "projectx.ws", "No account found for trade update");
                                         }
                                     }
-                                    if !out.is_empty() && let Err(e) = self.bus.publish_closed_trades(out).await {
+                                    if !out.is_empty()
+                                        && let Err(e) = self.bus.publish_closed_trades(out).await
+                                    {
                                         error!(target: "projectx.ws", "failed to publish ClosedTrades: {:?}", e);
                                     }
                                 }
