@@ -253,7 +253,7 @@ pub async fn get_extent(
         }
         _ => (None, None),
     };
-    return Ok((e, l));
+    Ok((e, l))
 }
 
 pub enum TopicDataEnum {
