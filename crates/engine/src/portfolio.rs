@@ -233,30 +233,38 @@ impl PortfolioManager {
         account: AccountName,
         batch: PositionsBatch,
     ) {
-        let acc_key = (provider_kind, account.clone());
-        let entry = self.positions_by_account.entry(acc_key).or_default();
-
         // Track which instruments changed to recompute synthetic totals afterward
         let mut touched: ahash::AHashSet<Instrument> = ahash::AHashSet::new();
 
-        for p in &batch.positions {
-            let mut pd = p.clone();
-            // Ensure provider_kind is consistent
-            pd.provider_kind = provider_kind;
-            // Update open pnl if we have a last price
-            if let Some(new_open) =
-                self.compute_open_pnl(&provider_kind, &pd.instrument, pd.average_price, pd.net_qty)
-            {
-                pd.open_pnl = new_open;
+        {
+            // Limit the lifetime of the entry guard to this block to avoid deadlocks
+            let acc_key = (provider_kind, account.clone());
+            let entry = self.positions_by_account.entry(acc_key).or_default();
+
+            for p in &batch.positions {
+                let mut pd = p.clone();
+                // Ensure provider_kind is consistent
+                pd.provider_kind = provider_kind;
+                // Update open pnl if we have a last price
+                if let Some(new_open) = self.compute_open_pnl(
+                    &provider_kind,
+                    &pd.instrument,
+                    pd.average_price,
+                    pd.net_qty,
+                ) {
+                    pd.open_pnl = new_open;
+                }
+                touched.insert(pd.instrument.clone());
+                if pd.net_qty == Decimal::ZERO {
+                    entry.remove(&pd.instrument);
+                } else {
+                    entry.insert(pd.instrument.clone(), pd);
+                }
             }
-            touched.insert(pd.instrument.clone());
-            if pd.net_qty == Decimal::ZERO {
-                entry.remove(&pd.instrument);
-            } else {
-                entry.insert(pd.instrument.clone(), pd);
-            }
+            // entry guard dropped here
         }
-        // Recompute synthetic totals for changed instruments
+
+        // Recompute synthetic totals for changed instruments (no entry guard held now)
         for instr in touched.iter() {
             self.recompute_synthetic_for(instr);
         }
@@ -540,7 +548,7 @@ mod tests {
     #[test]
     fn long_short_flat_detection() {
         let pm = PortfolioManager::new(Arc::new(DashMap::new()));
-        let provider = ProviderKind::ProjectX(ProjectXTenant::Topstep);
+        let provider = ProviderKind::ProjectX(ProjectXTenant::Demo);
         let account = AccountName::new("TEST-ACCT".to_string());
         let long = pd("ES.Z25", 5, &account);
         let short = pd("NQ.Z25", -3, &account);
@@ -569,7 +577,7 @@ mod tests {
     #[ignore]
     fn account_open_pnl_and_day_realized() {
         let pm = PortfolioManager::new(Arc::new(DashMap::new()));
-        let provider = ProviderKind::ProjectX(ProjectXTenant::Topstep);
+        let provider = ProviderKind::ProjectX(ProjectXTenant::Demo);
         let account = AccountName::new("TEST-ACCT".to_string());
         // Seed a per-account position with open_pnl
         let instr = Instrument::validate_len("ES.Z25").unwrap();
