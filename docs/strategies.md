@@ -151,21 +151,21 @@ async fn main() -> anyhow::Result<()> {
 
 ---
 
-## Historical data and catalog (current vs planned)
+## Historical data (server-managed) and Postgres queries
 
 Current
-- The server side (providers + download manager + database) can fetch historical data and catalog it as Parquet with DuckDB metadata.
-- Strategies benefit passively: when you subscribe to bars (e.g., Candles1m), the system consolidates live data and you can query the same Parquet/DuckDB from external tools.
+- The server side (providers + download manager + database) fetches historical data and writes directly to PostgreSQL using tt_database::ingest::*.
+- Strategies benefit passively: when you subscribe to bars (e.g., Candles1m), the system consolidates live data; you can also query Postgres directly via tt_database::queries::* for time windows.
 
 Planned engine-side helpers
 - Historical update request:
   - `request_historical_update(req: HistoricalRequest) -> TaskHandle` (non-blocking; deduplicates identical inflight requests and returns a stable id; engine can `wait()` or poll status).
 - Historical pull:
   - `fetch_historical(req: HistoricalRequest) -> Vec<HistoryEvent>` or a streaming channel for large windows.
-- Catalog queries:
-  - `query_candles(symbol, res, start, end) -> Vec<CandleRow>`
-  - `query_ticks(symbol, start, end) -> Vec<TickRow>`
-  - These will use the engine’s existing DuckDB connection under the hood.
+- Query helpers (strategy side):
+  - `query_candles(symbol, res, start, end)`
+  - `query_ticks(symbol, start, end)`
+  - These will delegate to tt_database::queries over sqlx.
 
 Why: so strategies can warm caches, run pre-trade checks, and do hybrid live+historical studies without leaving the engine.
 
