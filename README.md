@@ -42,7 +42,7 @@ The engine can place live orders and is intended strictly for testing and evalua
 - 🛅 PostgreSQL + Docker Database for storage and query of historical data by strategies and the server. 
 
 ### Strategies are straight forward
-[Example Strategy](crates/a_strategies/examples/data_test_strategy)
+[Example Strategy](crates/a_strategies/examples/data_test_strategy/src/main.rs)
 
 Just implement the strategy trait
 ```rust
