@@ -260,14 +260,14 @@ docker compose down
 
 ## 🧾 Wire serialization and alignment (current)
 
-- We use rkyv for all wire frames (`WireMessage::{Request, Response}`) with length-delimited framing (max 8 MiB).
+- rkyv for all wire frames (`WireMessage::{Request, Response}`) with length-delimited framing (max 8 MiB).
 - Writers now produce `rkyv::AlignedVec` and then move it into a `Vec<u8>`/`bytes::Bytes` for transport. This ensures the producer side is always correctly aligned for rkyv.
 - Readers must not assume alignment of the incoming slice. The client and router copy the frame bytes into an `AlignedVec` before calling `rkyv::from_bytes` to avoid "archive underaligned" errors.
 - SHM snapshots also store rkyv bytes; see [docs/SHM-layout.md](docs/SHM-layout.md) for alignment notes when reading from shared memory.
 
 ## 🛣️ Roadmap: zero-copy rkyv in the engine
 
-We plan to progressively enable zero-copy processing inside the client engine by:
+Plans to progressively enable zero-copy processing inside the client engine by:
 - Retaining incoming frame buffers and accessing `rkyv::Archived<T>` views directly where safe, avoiding deserialize/copy for hot paths.
 - Teaching the engine to prefer archived views for batches (e.g., MBP10, ticks, quotes) and only materialize owned structs when strategies need to mutate or persist.
 - Exposing optional archived references in callbacks or via alternate channels, preserving the current owned-struct callbacks for ease of use.
