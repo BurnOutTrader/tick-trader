@@ -1,4 +1,5 @@
 pub(crate) mod backtest_clock;
+pub mod backtest_feeder;
 pub(crate) mod engine;
 pub mod handle;
 pub(crate) mod helpers;
