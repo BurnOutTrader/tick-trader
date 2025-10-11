@@ -705,7 +705,6 @@ impl EngineRuntime {
                         ..
                     }) => {
                         for t in ticks {
-
                             // Update portfolio marks then deliver to strategy
                             pm.update_apply_last_price(provider_kind, &t.instrument, t.price);
                             strategy_for_task.on_tick(&t, provider_kind);
@@ -728,6 +727,7 @@ impl EngineRuntime {
                     }) => {
                         for q in quotes {
                             // Drive consolidators for quotes (BBO)
+                            pm.update_apply_last_price(provider_kind, &q.instrument, q.bid);
                             strategy_for_task.on_quote(&q, provider_kind);
                             let key = ConsolidatorKey::new(q.instrument.clone(), provider_kind, Topic::Quotes);
                             if let Some(mut cons) = handle_inner_for_task
