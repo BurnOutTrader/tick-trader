@@ -972,7 +972,7 @@ pub async fn latest_bars_1m(
 }
 
 // === Futures contracts map storage ===
-use std::collections::HashMap as StdHashMap;
+use ahash::AHashMap;
 use tt_types::securities::security::FuturesContract;
 
 /// Append-only insert for a provider's contracts map: only insert instruments that
@@ -980,7 +980,7 @@ use tt_types::securities::security::FuturesContract;
 pub async fn inject_contracts_map(
     conn: &crate::init::Connection,
     provider: tt_types::providers::ProviderKind,
-    contracts: &StdHashMap<tt_types::securities::symbols::Instrument, FuturesContract>,
+    contracts: &AHashMap<tt_types::securities::symbols::Instrument, FuturesContract>,
 ) -> anyhow::Result<()> {
     use std::collections::HashSet;
 
@@ -1034,7 +1034,7 @@ pub async fn inject_contracts_map(
 pub async fn get_contracts_map(
     conn: &crate::init::Connection,
     provider: tt_types::providers::ProviderKind,
-) -> anyhow::Result<StdHashMap<tt_types::securities::symbols::Instrument, FuturesContract>> {
+) -> anyhow::Result<AHashMap<tt_types::securities::symbols::Instrument, FuturesContract>> {
     use std::str::FromStr;
 
     let prov = crate::paths::provider_kind_to_db_string(provider);
@@ -1048,8 +1048,8 @@ pub async fn get_contracts_map(
     .fetch_all(conn)
     .await?;
 
-    let mut out: StdHashMap<tt_types::securities::symbols::Instrument, FuturesContract> =
-        StdHashMap::with_capacity(rows.len());
+    let mut out: AHashMap<tt_types::securities::symbols::Instrument, FuturesContract> =
+        AHashMap::with_capacity(rows.len());
     for r in rows.iter() {
         let sym: String = r.get("sym");
         if let Ok(instr) = tt_types::securities::symbols::Instrument::from_str(&sym) {
