@@ -34,7 +34,7 @@ impl Strategy for MyStrategy {
     fn on_start(&mut self, h: EngineHandle) {
         self.engine = Some(h.clone());
         h.subscribe_now(
-            DataTopic::MBP10,
+            DataTopic::Ticks,
             SymbolKey::new(
                 tt_types::securities::symbols::Instrument::from_str("MNQ.Z25").unwrap(),
                 ProviderKind::ProjectX(ProjectXTenant::Topstep),
@@ -198,16 +198,6 @@ Why: so strategies can warm caches, run pre-trade checks, and do hybrid live+his
 
 ---
 
-## Best practices
-
-- Prefer `subscribe_key` to get only what you need; unsubscribe when done to free upstream.
-- Use `list_instruments`/`get_instruments_map` to validate symbols before subscribing or placing orders.
-- Call `activate_account_interest` on startup to receive orders/positions/account events.
-- Use correlation (`request_with_corr`) for one-shot server queries; add a timeout on the receiver.
-- Keep `on_*` callbacks light; offload heavy logic to background tasks if needed.
-
----
-
 ## Roadmap (selected)
 
 - Historical helpers (request/pull) and catalog query APIs directly from strategies.
@@ -269,7 +259,7 @@ impl Strategy for MyStrat {
     fn on_start(&mut self, h: EngineHandle) {
         self.engine = Some(h.clone());
         h.subscribe_now(
-            DataTopic::MBP10,
+            DataTopic::Ticks,
             SymbolKey::new(
                 tt_types::securities::symbols::Instrument::from_str("MNQ.Z25").unwrap(),
                 ProviderKind::ProjectX(ProjectXTenant::Topstep),
