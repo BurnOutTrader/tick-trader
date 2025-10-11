@@ -10,12 +10,13 @@ use tt_types::accounts::events::{
 use tt_types::engine_id::EngineUuid;
 use tt_types::providers::ProviderKind;
 use tt_types::securities::symbols::Instrument;
-use tt_types::wire::{AccountDeltaBatch, OrdersBatch, PositionsBatch, Trade};
+use tt_types::wire::{AccountDeltaBatch, OrdersBatch, PositionsBatch, Response, Trade};
 
 /// Key for tracking an order in the open orders map
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum OrderKeyId {
     Client(EngineUuid),
+    #[allow(dead_code)]
     Provider(ProviderOrderId),
 }
 
@@ -32,12 +33,6 @@ impl OrderKey {
             id: OrderKeyId::Client(o.order_id),
         })
     }
-}
-
-pub enum Result {
-    Win,
-    Loss,
-    BreakEven,
 }
 
 /// Aggregates the latest portfolio state as seen by the engine.
@@ -68,6 +63,7 @@ pub struct PortfolioManager {
     last_price: DashMap<(ProviderKind, Instrument), Decimal>,
 }
 
+#[allow(dead_code)]
 impl PortfolioManager {
     pub fn new(securities_by_provider: Arc<DashMap<ProviderKind, Vec<Instrument>>>) -> Self {
         Self {
@@ -76,7 +72,77 @@ impl PortfolioManager {
         }
     }
 
+    /// Centralized pre-strategy processing of incoming responses.
+    /// This applies portfolio updates and returns a possibly adjusted response
+    /// (e.g., with recalculated open_pnl for positions or filled PnL fields for accounts).
+    pub fn process_response(&self, resp: Response) -> Response {
+        match resp {
+            Response::MBP10Batch(ob) => {
+                let ev = &ob.event;
+                let mark = if let Some(book) = &ev.book {
+                    if let (Some(b0), Some(a0)) = (book.bid_px.first(), book.ask_px.first()) {
+                        (*b0 + *a0) / Decimal::from(2)
+                    } else {
+                        ev.price
+                    }
+                } else {
+                    ev.price
+                };
+                self.update_apply_last_price(ob.provider_kind, &ev.instrument, mark);
+                Response::MBP10Batch(ob)
+            }
+            Response::OrdersBatch(ob) => {
+                self.apply_orders_batch(ob.clone());
+                Response::OrdersBatch(ob)
+            }
+            Response::PositionsBatch(pb) => {
+                // Group by (provider, account) and apply per-account
+                let mut by_acct: AHashMap<(ProviderKind, AccountName), Vec<PositionDelta>> =
+                    AHashMap::new();
+                for p in &pb.positions {
+                    by_acct
+                        .entry((p.provider_kind, p.account_name.clone()))
+                        .or_default()
+                        .push(p.clone());
+                }
+                for ((provider, account), positions) in by_acct.into_iter() {
+                    let batch = PositionsBatch {
+                        topic: pb.topic,
+                        seq: pb.seq,
+                        positions,
+                    };
+                    self.apply_positions_batch_for(provider, account, batch);
+                }
+                // Return adjusted open_pnl values based on last_price
+                let adj = self.adjust_positions_batch_open_pnl(pb.clone());
+                Response::PositionsBatch(adj)
+            }
+            Response::AccountDeltaBatch(mut ab) => {
+                self.apply_account_delta_batch(ab.clone());
+                for a in ab.accounts.iter_mut() {
+                    if a.day_realized_pnl.is_zero() && a.open_pnl.is_zero() {
+                        let open = self.account_open_pnl_sum(&a.provider_kind, &a.name);
+                        let day = self.account_day_realized_pnl_utc(
+                            &a.provider_kind,
+                            &a.name,
+                            Utc::now(),
+                        );
+                        a.open_pnl = open;
+                        a.day_realized_pnl = day;
+                    }
+                }
+                Response::AccountDeltaBatch(ab)
+            }
+            Response::ClosedTrades(trades) => {
+                self.apply_closed_trades(trades.clone());
+                Response::ClosedTrades(trades)
+            }
+            other => other,
+        }
+    }
+
     // Helper: compute open PnL from last_price for a given position
+    #[allow(dead_code)]
     fn compute_open_pnl(
         &self,
         provider: &ProviderKind,
@@ -89,6 +155,7 @@ impl PortfolioManager {
             .map(|p| (*p - avg_px) * qty)
     }
 
+    #[allow(dead_code)]
     // Helper: recompute synthetic totals for one instrument across all accounts/providers
     fn recompute_synthetic_for(&self, instrument: &Instrument) {
         let mut sum_qty = Decimal::ZERO;
@@ -126,6 +193,7 @@ impl PortfolioManager {
         };
         let pd = PositionDelta {
             instrument: instrument.clone(),
+            account_name: AccountName::new("ALL".to_string()),
             provider_kind: any_provider.unwrap_or(ProviderKind::ProjectX(
                 tt_types::providers::ProjectXTenant::Topstep,
             )),
@@ -138,6 +206,7 @@ impl PortfolioManager {
         self.positions_total_delta.insert(instrument.clone(), pd);
     }
 
+    #[allow(dead_code)]
     /// Apply an OrdersBatch to update the open orders map.
     /// Heuristic: if leaves > 0 we consider the order open; otherwise remove it if present.
     pub fn apply_orders_batch(&self, batch: OrdersBatch) {
@@ -156,27 +225,9 @@ impl PortfolioManager {
         *self.last_orders.write().expect("poisoned") = Some(batch);
     }
 
-    /// Apply a PositionsBatch (aggregated update; no account identity). We adjust open_pnl using last prices when available
-    /// and store as synthetic per-instrument deltas.
-    pub fn apply_positions_batch(&self, batch: PositionsBatch) {
-        for p in &batch.positions {
-            let mut pd = p.clone();
-            if let Some(new_open) = self.compute_open_pnl(
-                &pd.provider_kind,
-                &pd.instrument,
-                pd.average_price,
-                pd.net_qty,
-            ) {
-                pd.open_pnl = new_open;
-            }
-            self.positions_total_delta.insert(pd.instrument.clone(), pd);
-        }
-        *self.last_positions.write().expect("poisoned") = Some(batch);
-    }
-
     /// Apply a PositionsBatch scoped to a specific provider+account (when account attribution is available).
     /// We recompute open_pnl from last_price, update the per-account map, and then recompute the synthetic totals.
-    pub fn apply_positions_batch_for_account(
+    pub fn apply_positions_batch_for(
         &self,
         provider_kind: ProviderKind,
         account: AccountName,
@@ -327,6 +378,7 @@ impl PortfolioManager {
             .unwrap_or(true)
     }
 
+    #[allow(dead_code)]
     // Queries - accounts
     pub fn account_delta(
         &self,
@@ -337,9 +389,11 @@ impl PortfolioManager {
             .get(&(*provider_kind, name.clone()))
             .map(|r| r.value().clone())
     }
+    #[allow(dead_code)]
     pub fn can_trade(&self, provider_kind: &ProviderKind, name: &AccountName) -> Option<bool> {
         self.account_delta(provider_kind, name).map(|a| a.can_trade)
     }
+    #[allow(dead_code)]
     pub fn equity(
         &self,
         provider_kind: &ProviderKind,
@@ -347,11 +401,12 @@ impl PortfolioManager {
     ) -> Option<rust_decimal::Decimal> {
         self.account_delta(provider_kind, name).map(|a| a.equity)
     }
-
+    #[allow(dead_code)]
     // Queries - open orders
     pub fn open_order_count(&self) -> usize {
         self.open_orders.len()
     }
+    #[allow(dead_code)]
     pub fn open_orders_for_instrument(&self, instrument: &Instrument) -> Vec<OrderUpdate> {
         self.open_orders
             .iter()
@@ -360,22 +415,27 @@ impl PortfolioManager {
             .collect()
     }
 
+    #[allow(dead_code)]
     // Queries - closed positions: no longer stored; use trades instead
     pub fn closed_for_instrument(&self, _instrument: &Instrument) -> Vec<PositionDelta> {
         Vec::new()
     }
 
+    #[allow(dead_code)]
     // Snapshots
     pub fn last_orders(&self) -> Option<OrdersBatch> {
         self.last_orders.read().expect("poisoned").clone()
     }
+    #[allow(dead_code)]
     pub fn last_positions(&self) -> Option<PositionsBatch> {
         self.last_positions.read().expect("poisoned").clone()
     }
+    #[allow(dead_code)]
     pub fn last_accounts(&self) -> Option<AccountDeltaBatch> {
         self.last_accounts.read().expect("poisoned").clone()
     }
 
+    #[allow(dead_code)]
     /// Adjust a PositionsBatch by recomputing open_pnl using last known marks in the portfolio.
     /// Does not mutate internal state; purely transforms the batch for downstream consumers.
     pub fn adjust_positions_batch_open_pnl(&self, mut batch: PositionsBatch) -> PositionsBatch {
@@ -387,12 +447,6 @@ impl PortfolioManager {
                 // open_pnl = (mark - avg_entry) * signed_qty
                 p.open_pnl = (*mark - p.average_price) * p.net_qty;
             }
-            // Ensure side remains consistent with net_qty sign
-            p.side = if p.net_qty >= Decimal::ZERO {
-                PositionSide::Long
-            } else {
-                PositionSide::Short
-            };
         }
         batch
     }
@@ -457,10 +511,11 @@ mod tests {
     use tt_types::providers::ProjectXTenant;
     use tt_types::wire::PositionsBatch;
 
-    fn pd(instr: &str, qty: i64) -> PositionDelta {
+    fn pd(instr: &str, qty: i64, acct: &AccountName) -> PositionDelta {
         PositionDelta {
             provider_kind: ProviderKind::ProjectX(ProjectXTenant::Topstep),
             instrument: Instrument::validate_len(instr).unwrap(),
+            account_name: acct.clone(),
             net_qty: Decimal::from(qty),
             average_price: Decimal::from(100),
             open_pnl: Decimal::ZERO,
@@ -485,15 +540,17 @@ mod tests {
     #[test]
     fn long_short_flat_detection() {
         let pm = PortfolioManager::new(Arc::new(DashMap::new()));
-        let long = pd("ES.Z25", 5);
-        let short = pd("NQ.Z25", -3);
-        let flat = pd("YM.Z25", 0);
+        let provider = ProviderKind::ProjectX(ProjectXTenant::Topstep);
+        let account = AccountName::new("TEST-ACCT".to_string());
+        let long = pd("ES.Z25", 5, &account);
+        let short = pd("NQ.Z25", -3, &account);
+        let flat = pd("YM.Z25", 0, &account);
         let batch = PositionsBatch {
             topic: tt_types::keys::Topic::Positions,
             seq: 1,
             positions: vec![long.clone(), short.clone(), flat.clone()],
         };
-        pm.apply_positions_batch(batch);
+        pm.apply_positions_batch_for(provider, account.clone(), batch);
 
         assert!(pm.is_long(&long.instrument));
         assert!(!pm.is_short(&long.instrument));
@@ -518,6 +575,7 @@ mod tests {
         let instr = Instrument::validate_len("ES.Z25").unwrap();
         let pd = PositionDelta {
             instrument: instr.clone(),
+            account_name: account.clone(),
             provider_kind: provider,
             net_qty: Decimal::from(2),
             average_price: Decimal::from(100),
@@ -525,7 +583,7 @@ mod tests {
             time: Utc::now(),
             side: PositionSide::Long,
         };
-        pm.apply_positions_batch_for_account(
+        pm.apply_positions_batch_for(
             provider,
             account.clone(),
             PositionsBatch {

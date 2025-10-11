@@ -1,10 +1,10 @@
 use crate::models::{
     BarRec, DepthDeltaRec, EngineConfig, InterestEntry, StreamKey, StreamMetrics, SubState, TickRec,
 };
+use ahash::AHashMap;
 use anyhow::anyhow;
-use std::collections::{HashMap, VecDeque};
-// use std::path::Path;
 use sqlx::{Pool, Postgres};
+use std::collections::VecDeque;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
@@ -13,28 +13,31 @@ use tt_types::keys::{SymbolKey, Topic};
 use tt_types::server_side::traits::{MarketDataProvider, ProbeStatus, ProviderParams};
 use tt_types::wire::{AccountDeltaBatch, OrdersBatch, PositionsBatch};
 
+#[allow(dead_code)]
 #[derive(Default)]
 pub struct Caches {
-    pub ticks: HashMap<StreamKey, VecDeque<TickRec>>, // bounded by secs window
-    pub bars: HashMap<StreamKey, VecDeque<BarRec>>,   // sized per resolution
-    pub depth_ring: HashMap<StreamKey, VecDeque<DepthDeltaRec>>, // ~2–5s ring
+    pub ticks: AHashMap<StreamKey, VecDeque<TickRec>>, // bounded by secs window
+    pub bars: AHashMap<StreamKey, VecDeque<BarRec>>,   // sized per resolution
+    pub depth_ring: AHashMap<StreamKey, VecDeque<DepthDeltaRec>>, // ~2–5s ring
 }
 
+#[allow(dead_code)]
 pub struct Engine<P: MarketDataProvider + 'static> {
     provider: Arc<P>,
     cfg: EngineConfig,
     inner: Arc<Mutex<EngineInner>>,
 }
-
+#[allow(dead_code)]
 struct EngineInner {
-    interest: HashMap<StreamKey, InterestEntry>,
-    metrics: HashMap<StreamKey, StreamMetrics>,
+    interest: AHashMap<StreamKey, InterestEntry>,
+    metrics: AHashMap<StreamKey, StreamMetrics>,
     #[allow(dead_code)]
     db: Pool<Postgres>,
     caches: Caches,
 }
 
 impl<P: MarketDataProvider + 'static> Engine<P> {
+    #[allow(dead_code)]
     pub fn new(provider: Arc<P>, cfg: EngineConfig) -> anyhow::Result<Self> {
         // Initialize Postgres connection pool lazily (non-async) using sqlx
         // Prefer env var DATABASE_URL; fallback to cfg.db_path if it looks like a URL.
@@ -52,14 +55,14 @@ impl<P: MarketDataProvider + 'static> Engine<P> {
             provider,
             cfg,
             inner: Arc::new(Mutex::new(EngineInner {
-                interest: HashMap::new(),
-                metrics: HashMap::new(),
+                interest: AHashMap::new(),
+                metrics: AHashMap::new(),
                 caches: Caches::default(),
                 db: pool,
             })),
         })
     }
-
+    #[allow(dead_code)]
     pub async fn interest_delta(
         &self,
         topic: Topic,
@@ -110,13 +113,13 @@ impl<P: MarketDataProvider + 'static> Engine<P> {
         }
         Ok(())
     }
-
+    #[allow(dead_code)]
     pub async fn probe_stream(&self, topic: Topic, _key: &SymbolKey) -> ProbeStatus {
         self.provider.supports(topic); // hint; no-op for now
         // delegate to provider if it has a probe (not in trait for streams), so return Ok(0)
         ProbeStatus::Ok(0)
     }
-
+    #[allow(dead_code)]
     // Provider → Engine data callbacks (skeletons for caches)
     pub async fn on_tick_batch(
         &self,
@@ -151,7 +154,7 @@ impl<P: MarketDataProvider + 'static> Engine<P> {
             }
         }
     }
-
+    #[allow(dead_code)]
     pub async fn on_depth_delta(&self, topic: Topic, key: &SymbolKey, now: Instant, bytes: usize) {
         let mut inner = self.inner.lock().await;
         let sk = StreamKey {

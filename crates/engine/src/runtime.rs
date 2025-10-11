@@ -3,7 +3,6 @@ use crate::handle::EngineHandle;
 use crate::models::{Command, DataTopic};
 use crate::portfolio::PortfolioManager;
 use crate::traits::Strategy;
-use chrono::Utc;
 use crossbeam::queue::ArrayQueue;
 use dashmap::DashMap;
 use rust_decimal::prelude::ToPrimitive;
@@ -636,13 +635,10 @@ impl EngineRuntime {
                             if let Some(mut cons) = handle_inner_for_task
                                 .consolidators
                                 .get_mut(&(Topic::Ticks, sk))
+                                && let Some(out) = cons.on_tick(&t)
+                                && let tt_types::consolidators::ConsolidatedOut::Candle(c) = out
                             {
-                                if let Some(out) = cons.on_tick(&t) {
-                                    if let tt_types::consolidators::ConsolidatedOut::Candle(c) = out
-                                    {
-                                        strategy_for_task.on_bar(&c, provider_kind);
-                                    }
-                                }
+                                strategy_for_task.on_bar(&c, provider_kind);
                             }
                         }
                     }
@@ -662,15 +658,11 @@ impl EngineRuntime {
                             if let Some(mut cons) = handle_inner_for_task
                                 .consolidators
                                 .get_mut(&(Topic::Quotes, sk))
+                                && let Some(out) = cons.on_bbo(&q)
+                                && let tt_types::consolidators::ConsolidatedOut::Candle(c) = out
                             {
-                                if let Some(out) = cons.on_bbo(&q) {
-                                    if let tt_types::consolidators::ConsolidatedOut::Candle(c) = out
-                                    {
-                                        strategy_for_task.on_bar(&c, provider_kind);
-                                    }
-                                }
+                                strategy_for_task.on_bar(&c, provider_kind);
                             }
-                            //trace!(instrument = %q.instrument, provider = ?provider_kind, "strategy.on_quote");
                         }
                     }
                     Response::BarBatch(BarBatch {
@@ -695,121 +687,74 @@ impl EngineRuntime {
                             };
                             if let Some(mut cons) =
                                 handle_inner_for_task.consolidators.get_mut(&(tpc, sk))
+                                && let Some(out) = cons.on_candle(&b)
+                                && let tt_types::consolidators::ConsolidatedOut::Candle(c) = out
                             {
-                                if let Some(out) = cons.on_candle(&b) {
-                                    if let tt_types::consolidators::ConsolidatedOut::Candle(c) = out
-                                    {
-                                        strategy_for_task.on_bar(&c, provider_kind);
-                                    }
-                                }
+                                strategy_for_task.on_bar(&c, provider_kind);
                             }
                         }
                     }
                     Response::MBP10Batch(ob) => {
-                        // Derive a mark from MBP10: prefer mid from level 0 if present, else event.price
-                        let ev = &ob.event;
-                        let mark = if let Some(book) = &ev.book {
-                            if let (Some(b0), Some(a0)) = (book.bid_px.first(), book.ask_px.first())
-                            {
-                                (*b0 + *a0) / rust_decimal::Decimal::from(2)
-                            } else {
-                                ev.price
-                            }
-                        } else {
-                            ev.price
-                        };
-                        pm.update_apply_last_price(ob.provider_kind, &ev.instrument, mark);
-                        strategy_for_task.on_mbp10(&ob.event, ob.provider_kind);
+                        let resp2 =
+                            pm.process_response(tt_types::wire::Response::MBP10Batch(ob.clone()));
+                        if let tt_types::wire::Response::MBP10Batch(ob2) = resp2 {
+                            strategy_for_task.on_mbp10(&ob2.event, ob2.provider_kind);
+                        }
                     }
                     Response::OrdersBatch(ob) => {
-                        {
-                            // Update portfolio open orders view
-                            pm.apply_orders_batch(ob.clone());
-                        }
-                        {
-                            let mut g = state.last_orders.write().expect("orders lock poisoned");
-                            *g = Some(ob.clone());
-                        }
-                        {
-                            // Populate provider order ID map from updates
-                            for o in ob.orders.iter() {
-                                if let Some(pid) = &o.provider_order_id {
-                                    handle_inner_for_task
-                                        .provider_order_ids
-                                        .insert(o.order_id, pid.0.clone());
-                                }
+                        let resp2 =
+                            pm.process_response(tt_types::wire::Response::OrdersBatch(ob.clone()));
+                        if let tt_types::wire::Response::OrdersBatch(ob2) = resp2 {
+                            {
+                                let mut g =
+                                    state.last_orders.write().expect("orders lock poisoned");
+                                *g = Some(ob2.clone());
                             }
-                        }
-                        {
-                            strategy_for_task.on_orders_batch(&ob);
-                        }
-                    }
-                    Response::PositionsBatch(mut pb) => {
-                        {
-                            // Adjust open_pnl via portfolio manager's last prices before delivering
-                            let adj = pm.adjust_positions_batch_open_pnl(pb.clone());
-                            let mut g = state
-                                .last_positions
-                                .write()
-                                .expect("positions lock poisoned");
-                            *g = Some(adj.clone());
-                        }
-                        {
-                            // Deliver adjusted positions batch to strategy (by-ref, sync)
-                            let g = state
-                                .last_positions
-                                .read()
-                                .expect("positions lock poisoned");
-                            for p in pb.positions.iter_mut() {
-                                if p.open_pnl == rust_decimal::Decimal::ZERO
-                                    && let Some(ep) = g.as_ref()
-                                {
-                                    for ep in ep.positions.iter() {
-                                        if p.provider_kind == ep.provider_kind
-                                            && p.instrument == ep.instrument
-                                            && p.side == ep.side
-                                        {
-                                            p.open_pnl = ep.open_pnl;
-                                        }
+                            {
+                                for o in ob2.orders.iter() {
+                                    if let Some(pid) = &o.provider_order_id {
+                                        handle_inner_for_task
+                                            .provider_order_ids
+                                            .insert(o.order_id, pid.0.clone());
                                     }
                                 }
                             }
-                            strategy_for_task.on_positions_batch(&pb);
+                            strategy_for_task.on_orders_batch(&ob2);
                         }
                     }
-                    Response::AccountDeltaBatch(mut ab) => {
-                        {
-                            // Update portfolio manager with latest account deltas
-                            pm.apply_account_delta_batch(ab.clone());
-                        }
-                        {
-                            // If provider returned zeros for both fields, compute from our portfolio view
-                            for a in ab.accounts.iter_mut() {
-                                if a.day_realized_pnl.is_zero() && a.open_pnl.is_zero() {
-                                    let open = pm.account_open_pnl_sum(&a.provider_kind, &a.name);
-                                    let day = pm.account_day_realized_pnl_utc(
-                                        &a.provider_kind,
-                                        &a.name,
-                                        Utc::now(),
-                                    );
-                                    a.open_pnl = open;
-                                    a.day_realized_pnl = day;
-                                }
+                    Response::PositionsBatch(pb) => {
+                        let resp2 = pm
+                            .process_response(tt_types::wire::Response::PositionsBatch(pb.clone()));
+                        if let tt_types::wire::Response::PositionsBatch(pb2) = resp2 {
+                            {
+                                let mut g = state
+                                    .last_positions
+                                    .write()
+                                    .expect("positions lock poisoned");
+                                *g = Some(pb2.clone());
                             }
+                            strategy_for_task.on_positions_batch(&pb2);
                         }
-                        {
-                            let mut g =
-                                state.last_accounts.write().expect("accounts lock poisoned");
-                            *g = Some(ab.clone());
-                        }
-                        {
-                            strategy_for_task.on_account_delta(&ab.accounts);
+                    }
+                    Response::AccountDeltaBatch(ab) => {
+                        let resp2 = pm.process_response(
+                            tt_types::wire::Response::AccountDeltaBatch(ab.clone()),
+                        );
+                        if let tt_types::wire::Response::AccountDeltaBatch(ab2) = resp2 {
+                            {
+                                let mut g =
+                                    state.last_accounts.write().expect("accounts lock poisoned");
+                                *g = Some(ab2.clone());
+                            }
+                            strategy_for_task.on_account_delta(&ab2.accounts);
                         }
                     }
                     Response::ClosedTrades(t) => {
-                        // Record closed trades for realized PnL computation
-                        pm.apply_closed_trades(t.clone());
-                        strategy_for_task.on_trades_closed(t);
+                        let resp2 =
+                            pm.process_response(tt_types::wire::Response::ClosedTrades(t.clone()));
+                        if let tt_types::wire::Response::ClosedTrades(t2) = resp2 {
+                            strategy_for_task.on_trades_closed(t2);
+                        }
                     }
                     Response::Tick {
                         tick,

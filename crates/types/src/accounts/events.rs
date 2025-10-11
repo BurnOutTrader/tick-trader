@@ -131,6 +131,7 @@ impl Bytes<Self> for AccountEvent {
 #[derive(Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize)]
 #[archive(check_bytes)]
 pub struct OrderUpdate {
+    pub name: AccountName,
     pub instrument: Instrument,
     pub provider_kind: ProviderKind,
     pub provider_order_id: Option<ProviderOrderId>,
@@ -154,6 +155,7 @@ pub enum PositionSide {
 #[archive(check_bytes)]
 pub struct PositionDelta {
     pub instrument: Instrument,
+    pub account_name: AccountName,
     pub provider_kind: ProviderKind,
     pub net_qty: Decimal,
     pub average_price: Decimal,
@@ -166,6 +168,7 @@ pub struct PositionDelta {
 #[archive(check_bytes)]
 pub struct AccountDelta {
     pub provider_kind: ProviderKind,
+
     pub name: AccountName,
 
     pub equity: Decimal,

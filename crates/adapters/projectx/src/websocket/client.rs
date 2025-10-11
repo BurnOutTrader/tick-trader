@@ -104,7 +104,7 @@ pub struct PxWebSocketClient {
     pending_orders: Arc<DashMap<Instrument, GatewayUserOrder>>,
 
     // ---- Accounts ----
-    accounts_by_id: Arc<DashMap<i64, String>>,
+    accounts_by_id: Arc<DashMap<i64, AccountName>>,
 
     trades: Arc<DashMap<Instrument, Vec<GatewayUserTrade>>>,
 }
@@ -1148,8 +1148,10 @@ impl PxWebSocketClient {
 
                                     for account in items.into_iter() {
                                         // Store account id -> name for later trade mapping
-                                        self.accounts_by_id
-                                            .insert(account.id, account.name.clone());
+                                        self.accounts_by_id.insert(
+                                            account.id,
+                                            AccountName::new(account.name.clone()),
+                                        );
                                         let balance = match Decimal::from_f64(account.balance) {
                                             Some(b) => b,
                                             None => {
@@ -1217,6 +1219,11 @@ impl PxWebSocketClient {
                                     if orders.is_empty() {
                                         return;
                                     }
+                                    let mut batch = OrdersBatch {
+                                        topic: tt_types::keys::Topic::Orders,
+                                        seq: 0,
+                                        orders: vec![],
+                                    };
                                     for order in orders.into_iter() {
                                         let instrument = match Instrument::try_parse_dotted(
                                             order.contract_id.as_str(),
@@ -1246,29 +1253,29 @@ impl PxWebSocketClient {
                                             EngineUuid::derive_engine_tag(
                                                 order.custom_tag.as_deref(),
                                             );
-
-                                        let ou = OrderUpdate {
-                                            provider_kind: self.provider_kind,
-                                            instrument,
-                                            provider_order_id: Some(ProviderOrderId(
-                                                order.id.to_string(),
-                                            )),
-                                            order_id: engine_uuid,
-                                            state: state_code,
-                                            leaves,
-                                            cum_qty,
-                                            avg_fill_px: avg_px,
-                                            tag: sanitized_user_tag,
-                                            time: ts_dt,
-                                        };
-                                        let batch = OrdersBatch {
-                                            topic: tt_types::keys::Topic::Orders,
-                                            seq: 0,
-                                            orders: vec![ou],
-                                        };
-                                        if let Err(e) = self.bus.publish_orders_batch(batch).await {
-                                            error!(target: "projectx.ws", "failed to publish OrderUpdate: {:?}", e);
+                                        if let Some(account_name) =
+                                            self.accounts_by_id.get(&order.account_id)
+                                        {
+                                            let ou = OrderUpdate {
+                                                name: account_name.clone(),
+                                                provider_kind: self.provider_kind,
+                                                instrument,
+                                                provider_order_id: Some(ProviderOrderId(
+                                                    order.id.to_string(),
+                                                )),
+                                                order_id: engine_uuid,
+                                                state: state_code,
+                                                leaves,
+                                                cum_qty,
+                                                avg_fill_px: avg_px,
+                                                tag: sanitized_user_tag,
+                                                time: ts_dt,
+                                            };
+                                            batch.orders.push(ou);
                                         }
+                                    }
+                                    if let Err(e) = self.bus.publish_orders_batch(batch).await {
+                                        error!(target: "projectx.ws", "failed to publish OrderUpdate: {:?}", e);
                                     }
                                 }
                             }
@@ -1312,6 +1319,11 @@ impl PxWebSocketClient {
                                     if positions.is_empty() {
                                         return;
                                     }
+                                    let mut batch = PositionsBatch {
+                                        topic: tt_types::keys::Topic::Positions,
+                                        seq: 0,
+                                        positions: vec![],
+                                    };
                                     for position in positions.into_iter() {
                                         let instrument_id = match Instrument::from_str(
                                             &parse_px_instrument(position.contract_id.as_str()),
@@ -1340,25 +1352,26 @@ impl PxWebSocketClient {
                                                 None => return,
                                                 Some(p) => p,
                                             };
-                                        let pd = PositionDelta {
-                                            provider_kind: self.provider_kind,
-                                            instrument: instrument_id,
-                                            net_qty: net,
-                                            average_price,
-                                            open_pnl: dec!(0),
-                                            time: ts_ns,
-                                            side,
-                                        };
-                                        let batch = PositionsBatch {
-                                            topic: tt_types::keys::Topic::Positions,
-                                            seq: 0,
-                                            positions: vec![pd],
-                                        };
-                                        if let Err(e) =
-                                            self.bus.publish_positions_batch(batch).await
+                                        if let Some(account_name) =
+                                            self.accounts_by_id.get(&position.account_id)
                                         {
-                                            error!(target: "projectx.ws", "failed to publish PositionDelta: {:?}", e);
+                                            let pd = PositionDelta {
+                                                provider_kind: self.provider_kind,
+                                                instrument: instrument_id,
+                                                net_qty: net,
+                                                average_price,
+                                                open_pnl: dec!(0),
+                                                time: ts_ns,
+                                                side,
+                                                account_name: account_name.clone(),
+                                            };
+                                            batch.positions.push(pd);
+                                        } else {
+                                            error!(target: "projectx.ws", "No account found for position update");
                                         }
+                                    }
+                                    if let Err(e) = self.bus.publish_positions_batch(batch).await {
+                                        error!(target: "projectx.ws", "failed to publish PositionDelta: {:?}", e);
                                     }
                                 }
                             }
@@ -1426,34 +1439,29 @@ impl PxWebSocketClient {
                                             1 => Side::Sell,
                                             _ => Side::Buy,
                                         };
-                                        let account_name = if let Some(name) = self
-                                            .accounts_by_id
-                                            .get(&t.account_id)
-                                            .map(|e| e.value().clone())
+                                        if let Some(account_name) =
+                                            self.accounts_by_id.get(&t.account_id)
                                         {
-                                            AccountName::new(name)
+                                            let trade = Trade {
+                                                id: EngineUuid::new(),
+                                                provider: self.provider_kind,
+                                                account_name: account_name.clone(),
+                                                instrument,
+                                                creation_time,
+                                                price,
+                                                profit_and_loss: pnl,
+                                                fees,
+                                                side,
+                                                size,
+                                                voided: t.voided,
+                                                order_id: t.order_id.to_string(),
+                                            };
+                                            out.push(trade);
                                         } else {
-                                            AccountName::new(t.account_id.to_string())
-                                        };
-                                        let trade = Trade {
-                                            id: EngineUuid::new(),
-                                            provider: self.provider_kind,
-                                            account_name,
-                                            instrument,
-                                            creation_time,
-                                            price,
-                                            profit_and_loss: pnl,
-                                            fees,
-                                            side,
-                                            size,
-                                            voided: t.voided,
-                                            order_id: t.order_id.to_string(),
-                                        };
-                                        out.push(trade);
+                                            error!(target: "projectx.ws", "No account found for trade update");
+                                        }
                                     }
-                                    if !out.is_empty()
-                                        && let Err(e) = self.bus.publish_closed_trades(out).await
-                                    {
+                                    if !out.is_empty() && let Err(e) = self.bus.publish_closed_trades(out).await {
                                         error!(target: "projectx.ws", "failed to publish ClosedTrades: {:?}", e);
                                     }
                                 }
