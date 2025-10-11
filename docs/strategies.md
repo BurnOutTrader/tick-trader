@@ -11,16 +11,19 @@ This guide shows how to write strategies on top of the engine, what helper APIs 
 
 Implement the Strategy trait to receive data and lifecycle events. The trait is synchronous: no async/await inside callbacks. The engine is the only task that calls your strategy, in a single-threaded, deterministic loop.
 
-Key callbacks (subset):
+Key callbacks (as implemented today):
 - Lifecycle: on_start(&mut self, EngineHandle), on_stop(&mut self)
 - Market data: on_tick(&mut self, &Tick, ProviderKind), on_quote(&mut self, &Bbo, ProviderKind), on_bar(&mut self, &Candle, ProviderKind), on_mbp10(&mut self, &Mbp10, ProviderKind)
 - Portfolio: on_orders_batch(&mut self, &OrdersBatch), on_positions_batch(&mut self, &PositionsBatch), on_account_delta(&mut self, &[AccountDelta])
+- Trades: on_trades_closed(&mut self, Vec<Trade>)
 - Control: on_subscribe(&mut self, Instrument, DataTopic, bool), on_unsubscribe(&mut self, Instrument, DataTopic)
 
 Minimal skeleton (sync):
 
 ```rust
-use tt_engine::engine::{Strategy, EngineHandle, DataTopic};
+use tt_engine::traits::Strategy;
+use tt_engine::handle::EngineHandle;
+use tt_engine::models::DataTopic;
 use tt_types::{keys::SymbolKey, providers::{ProviderKind, ProjectXTenant}};
 use std::str::FromStr;
 
@@ -63,44 +66,61 @@ impl Strategy for MyStrategy {
 - Fallback:
   - If SHM is not announced for a hot stream, the engine consumes UDS batches for that stream and your callbacks still fire.
 
-## EngineRuntime helpers (current)
+## Engine runtime and helpers (current)
 
-The `EngineRuntime` exposes a set of async helper methods to interact with the server over UDS via the client message bus.
+The runtime and handle expose synchronous helper methods. Use EngineHandle inside callbacks for low-latency fire-and-forget actions; use EngineRuntime outside callbacks (setup, tools, discovery, batch operations).
 
-Subscriptions
-- `subscribe_key(topic, key)` / `unsubscribe_key(topic, key)`: start/stop a specific stream.
-- `subscribe_symbol(topic, key)` / `unsubscribe_symbol(topic, key)`: equivalent convenience APIs.
-- Vendor securities auto-refresh: the engine will automatically refresh the vendor’s instruments list hourly the first time you subscribe for that provider.
+EngineRuntime (synchronous; returns Results)
+- Subscriptions
+  - `subscribe_key(data_topic: DataTopic, key: SymbolKey) -> anyhow::Result<()>`
+  - `unsubscribe_key(data_topic: DataTopic, key: SymbolKey) -> anyhow::Result<()>`
+  - `subscribe_symbol(topic: Topic, key: SymbolKey) -> anyhow::Result<()>`
+  - `unsubscribe_symbol(topic: Topic, key: SymbolKey) -> anyhow::Result<()>`
+  - Vendor securities auto-refresh: first subscribe per provider triggers an hourly background refresh of instruments.
+- Instruments and reference data
+  - `list_instruments(provider: ProviderKind, pattern: Option<String>) -> anyhow::Result<Vec<Instrument>>`
+  - `get_instruments_map(provider: ProviderKind) -> anyhow::Result<Vec<FuturesContract>>`
+  - `get_account_info(provider: ProviderKind) -> anyhow::Result<tt_types::wire::AccountInfoResponse>`
+- Orders
+  - `send_order_for_execution(spec: PlaceOrder) -> anyhow::Result<()>`
+  - `cancel_order(spec: CancelOrder) -> anyhow::Result<()>`
+  - `replace_order(spec: ReplaceOrder) -> anyhow::Result<()>`
+  - Convenience: `place_order_with(account_name, key, side, qty, r#type, limit_price, stop_price, trail_price, custom_tag, stop_loss, take_profit) -> anyhow::Result<()>`
+- Accounts and portfolio
+  - Activate streams: `activate_account_interest(key: AccountKey) -> anyhow::Result<()>`
+  - Deactivate: `deactivate_account_interest(key: AccountKey) -> anyhow::Result<()>`
+  - Bulk init: `initialize_accounts(iter: impl IntoIterator<Item = AccountKey>) -> anyhow::Result<()>`
+  - Bulk init (names): `initialize_account_names(provider: ProviderKind, names: impl IntoIterator<Item = AccountName>) -> anyhow::Result<()>`
+  - Cached snapshots: `last_orders() -> Option<OrdersBatch>`, `last_positions() -> Option<PositionsBatch>`, `last_accounts() -> Option<AccountDeltaBatch>`
+  - Helpers: `find_position_delta(&Instrument) -> Option<PositionDelta>`, `orders_for_instrument(&Instrument) -> Vec<OrderUpdate>`
+  - Position booleans: `is_long/is_short/is_flat(&Instrument) -> bool`
+- Other
+  - `request_with_corr(|corr_id| -> Request) -> tokio::sync::oneshot::Receiver<Response>`: correlated single-response helper.
+  - Historical latest refresh for a key: `update_historical_latest_by_key(provider: ProviderKind, topic: Topic, instrument: Instrument) -> anyhow::Result<()>`
+- Lifecycle
+  - `start(strategy: S) -> anyhow::Result<EngineHandle>` where `S: Strategy` — invokes on_start synchronously, runs engine loop.
+  - `stop() -> anyhow::Result<()>` — stops engine, detaches tasks.
 
-Instruments and reference data
-- `list_instruments(provider, pattern: Option<String>) -> Vec<Instrument>`: quick filtered list (short timeout).
-- `get_instruments_map(provider) -> Vec<(Instrument, FuturesContractWire)>`: contracts map (futures example).
-- `get_account_info(provider) -> AccountInfoResponse`: account metadata snapshot (corr_id matched).
+EngineHandle (low-latency from callbacks)
+- Consolidators
+  - `add_consolidator(from: DataTopic, for_key: SymbolKey, cons: Box<dyn Consolidator + Send>)`
+  - `remove_consolidator(from: DataTopic, for_key: SymbolKey)`
+- Fire-and-forget commands
+  - `subscribe_now(topic: DataTopic, key: SymbolKey)`
+  - `unsubscribe_now(topic: DataTopic, key: SymbolKey)`
+  - `place_now(spec: PlaceOrder) -> EngineUuid`
+  - Convenience: `place_order(account_name, key, side, qty, r#type, limit_price, stop_price, trail_price, custom_tag, stop_loss, take_profit) -> anyhow::Result<EngineUuid>`
+- Instant portfolio queries (thread-safe; internal RwLocks)
+  - `is_long/is_short/is_flat(&Instrument) -> bool`
+  - `open_orders_for_instrument(&Instrument) -> Vec<OrderUpdate>`
+  - `find_position_delta(&Instrument) -> Option<PositionDelta>`
+  - Delta booleans: `is_long_delta/is_short_delta/is_flat_delta(&Instrument) -> bool`
+- Reference data cache
+  - `securities_for(provider: ProviderKind) -> Vec<Instrument>`
 
-Orders
-- `place_order(spec: PlaceOrder)`
-- `cancel_order(spec: CancelOrder)`
-- `replace_order(spec: ReplaceOrder)`
-
-Accounts and portfolio
-- Activate streams: `activate_account_interest(account_key)` / `deactivate_account_interest(account_key)`
-- Bulk init: `initialize_accounts(iter)` / `initialize_account_names(provider, names)`
-- Cached snapshots: `last_orders()`, `last_positions()`, `last_accounts()`
-- Helpers:
-  - `find_position_delta(instrument)`
-  - `orders_for_instrument(instrument)`
-  - `is_long/is_short/is_flat(instrument)`
-
-Correlation helper
-- `request_with_corr(|corr_id| -> Request) -> oneshot::Receiver<Response>`: send a correlated Request and await a single Response. This is the basis for custom request/response patterns.
-
-Start/stop
-- `start(strategy: S)` where S: Strategy — engine owns your strategy by value; it invokes on_start synchronously, then runs the engine loop.
-- `stop()` cancels the task and detaches.
-
-Fire-and-forget vs async helpers
-- From callbacks, use EngineHandle::{subscribe_now, unsubscribe_now, place_now} to enqueue commands instantly.
-- For cold paths (discovery, tooling), async helpers remain: list_instruments().await, subscribe_key().await, etc.
+Notes
+- All helpers above are synchronous. Use EngineRuntime for operations that return Results; EngineHandle methods that enqueue work never block.
+- Snapshot getters are consistent and cheap due to internal RwLock-protected caches.
 
 ---
 
@@ -229,14 +249,16 @@ Your strategy runs on a single engine task. No async/await inside callbacks; no 
 
 Key changes
 - Trait is sync. Methods take borrowed data: &Tick, &Bbo, &Candle, &Mbp10.
-- Engine owns your strategy by value: engine.start(MyStrat::default()).await?
+- Engine owns your strategy by value: engine.start(MyStrat::default())
 - Non-blocking helpers via EngineHandle: subscribe_now, unsubscribe_now, place_now.
 - Instant getters via EngineHandle: is_long/is_short/is_flat(&Instrument).
 
 Sync trait skeleton
 
 ```rust
-use tt_engine::engine::{Strategy, EngineHandle, DataTopic};
+use tt_engine::traits::Strategy;
+use tt_engine::handle::EngineHandle;
+use tt_engine::models::DataTopic;
 use tt_types::{keys::SymbolKey, providers::{ProviderKind, ProjectXTenant}};
 use std::str::FromStr;
 
