@@ -33,7 +33,7 @@ struct MyStrategy { engine: Option<EngineHandle> }
 impl Strategy for MyStrategy {
     fn on_start(&mut self, h: EngineHandle) {
         self.engine = Some(h.clone());
-        h.subscribe_now(
+        h.subscribe_key(
             DataTopic::Ticks,
             SymbolKey::new(
                 tt_types::securities::symbols::Instrument::from_str("MNQ.Z25").unwrap(),
@@ -42,9 +42,9 @@ impl Strategy for MyStrategy {
         );
     }
 
-    fn on_mbp10(&mut self, d: &tt_types::data::mbp10::Mbp10, _pk: ProviderKind) {
+    fn on_mbp10(&mut self, d: &tt_types::data::mbp10::Mbp10, pk: ProviderKind) {
         if let Some(h) = &self.engine {
-            if h.is_flat(&d.instrument) {
+            if h.is_flat(pk, &d.instrument) {
                 // decide → h.place_now(order_spec)
             }
         }
@@ -53,19 +53,6 @@ impl Strategy for MyStrategy {
 ```
 
 ---
-
-## How data arrives (SHM vs UDS)
-
-- You do not need to choose between SHM and UDS in your strategy. The engine selects the transport.
-- Hot feeds (Ticks, Quotes, MBP10):
-  - Provider adapters write snapshots to SHM and the Router emits Response::AnnounceShm.
-  - The engine starts a per-(topic,key) SHM reader upon AnnounceShm and invokes your callbacks from SHM data.
-  - While SHM is active, the system does not send duplicate UDS batches for these topics.
-- Other topics and control:
-  - Orders/Positions/Account events, bars/candles, discovery, pings, and subscribe acks are carried over UDS.
-- Fallback:
-  - If SHM is not announced for a hot stream, the engine consumes UDS batches for that stream and your callbacks still fire.
-
 ## Engine runtime and helpers (current)
 
 The runtime and handle expose synchronous helper methods. Use EngineHandle inside callbacks for low-latency fire-and-forget actions; use EngineRuntime outside callbacks (setup, tools, discovery, batch operations).
@@ -214,23 +201,6 @@ Why: so strategies can warm caches, run pre-trade checks, and do hybrid live+his
 - Missing portfolio events: call `activate_account_interest` with your account key(s).
 - Slow or missing response to a one-shot request: increase your timeout around `request_with_corr()` and check server logs.
 
-
-
----
-
-## Zero-copy roadmap for strategies
-
-We are planning to introduce optional zero-copy data paths in the engine to reduce allocations and improve latency on high-rate feeds:
-
-- Archived views: The engine will retain incoming rkyv frames and expose `rkyv::Archived<T>` views internally, avoiding deserialize/copy where possible.
-- Dual APIs during transition: Strategy callbacks will continue to receive owned Rust structs for simplicity. Advanced users will be able to opt into alternate handlers or pull archived references for ultra-low latency paths.
-- SHM integration: For hot feeds with SHM snapshots, we will provide helpers to read aligned, memory-mapped snapshots and work with archived views without extra copies.
-- Safety and ergonomics: The existing owned-struct API remains supported; zero-copy will be additive and opt-in.
-
-Benefits: fewer allocations, less memcpy, lower CPU for tick/quote/depth bursts.
-
-
-
 ---
 
 ## 🌟 2025-10 Update: Strategies are now synchronous
@@ -307,3 +277,15 @@ Tips
 - Keep callbacks light; enqueue commands and let the engine perform I/O.
 - Size bursts: the internal command queue is bounded (4096 by default). For ultra-bursty strategies, consider pacing your enqueues.
 - Use handle.list_instruments().await or other async helpers on cold paths (e.g., startup, discovery).
+
+## How data arrives (SHM vs UDS)
+
+- You do not need to choose between SHM and UDS in your strategy. The engine selects the transport.
+- Hot feeds (Ticks, Quotes, MBP10):
+  - Provider adapters write snapshots to SHM and the Router emits Response::AnnounceShm.
+  - The engine starts a per-(topic,key) SHM reader upon AnnounceShm and invokes your callbacks from SHM data.
+  - While SHM is active, the system does not send duplicate UDS batches for these topics.
+- Other topics and control:
+  - Orders/Positions/Account events, bars/candles, discovery, pings, and subscribe acks are carried over UDS.
+- Fallback:
+  - If SHM is not announced for a hot stream, the engine consumes UDS batches for that stream and your callbacks still fire.
