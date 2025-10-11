@@ -26,18 +26,18 @@ struct Probe {
 
 struct ProbeStrategy(Probe);
 impl Strategy for ProbeStrategy {
-    fn on_positions_batch(&mut self, b: &PositionsBatch) {
-        *self.0.last_positions.lock().unwrap() = Some(b.clone());
+    fn on_bar(&mut self, _b: &Candle, _provider: ProviderKind) {
+        let mut c = self.0.on_bar_count.lock().unwrap();
+        *c += 1;
     }
     fn on_orders_batch(&mut self, b: &OrdersBatch) {
         *self.0.last_orders.lock().unwrap() = Some(b.clone());
     }
+    fn on_positions_batch(&mut self, b: &PositionsBatch) {
+        *self.0.last_positions.lock().unwrap() = Some(b.clone());
+    }
     fn on_account_delta(&mut self, a: &[AccountDelta]) {
         *self.0.last_accounts.lock().unwrap() = a.to_vec();
-    }
-    fn on_bar(&mut self, _b: &Candle, _provider: ProviderKind) {
-        let mut c = self.0.on_bar_count.lock().unwrap();
-        *c += 1;
     }
 }
 
