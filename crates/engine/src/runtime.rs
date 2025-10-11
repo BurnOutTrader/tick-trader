@@ -7,6 +7,7 @@ use crate::traits::Strategy;
 use crossbeam::queue::ArrayQueue;
 use dashmap::DashMap;
 use rust_decimal::prelude::ToPrimitive;
+use smallvec::SmallVec;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -15,6 +16,7 @@ use tracing::info;
 use tt_bus::{ClientMessageBus, ClientSubId};
 use tt_types::accounts::events::PositionSide;
 use tt_types::consolidators::ConsolidatorKey;
+use tt_types::data::core::Candle;
 use tt_types::engine_id::EngineUuid;
 use tt_types::keys::{AccountKey, SymbolKey, Topic};
 use tt_types::providers::ProviderKind;
@@ -645,25 +647,26 @@ impl EngineRuntime {
                     biased;
                     // Drive time-based consolidation first if due
                     _ = ticker.tick() => {
-                        if !handle_inner_for_task.backtest_mode {
+                        if !handle_inner_for_task.backtest_mode && !handle_inner_for_task.consolidators.is_empty() {
                             let now = chrono::Utc::now();
-                            // Snapshot keys to avoid holding iterator while mutating entries
 
-                            for kvp in handle_inner_for_task.consolidators.iter() {
-                                // Short-lived mutable borrow to call on_time
-                                let out_opt = {
-                                    if let Some(mut cons_ref) = handle_inner_for_task
-                                        .consolidators
-                                        .get_mut(kvp.key())
-                                    {
-                                        cons_ref.value_mut().on_time(now)
-                                    } else { None }
-                                };
-                                if let Some(tt_types::consolidators::ConsolidatedOut::Candle(c)) = out_opt {
-                                    // Update marks and deliver to strategy
-                                    pm.update_apply_last_price(kvp.key().provider, &c.instrument, c.close);
-                                    strategy_for_task.on_bar(&c, kvp.key().provider);
+                            // 1) Walk consolidators mutably and collect outputs.
+                            //    We *don't* call strategy while holding any shard lock.
+                            let mut outs: SmallVec<[(ProviderKind, Candle); 16]> = SmallVec::new();
+
+                            for mut entry in handle_inner_for_task.consolidators.iter_mut() {
+                                let provider = entry.key().provider;        // read key (cheap)
+                                if let Some(tt_types::consolidators::ConsolidatedOut::Candle(c)) =
+                                    entry.value_mut().on_time(now)
+                                {
+                                    outs.push((provider, c));
                                 }
+                            } // all MapRefMut guards dropped here; no locks held
+
+                            // 2) Now do marks + callbacks outside of DashMap locks.
+                            for (prov, c) in outs {
+                                pm.update_apply_last_price(prov, &c.instrument, c.close);
+                                strategy_for_task.on_bar(&c, prov);
                             }
                         }
                     },
