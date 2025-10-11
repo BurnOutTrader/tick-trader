@@ -12,7 +12,19 @@ use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 #[archive(check_bytes)]
 pub struct TopicId(pub u8);
 
-#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, PartialEq, Clone, Copy, Eq, Hash)]
+#[derive(
+    Archive,
+    RkyvDeserialize,
+    RkyvSerialize,
+    Debug,
+    PartialEq,
+    Clone,
+    Copy,
+    Eq,
+    Hash,
+    Ord,
+    PartialOrd,
+)]
 #[archive(check_bytes)]
 pub enum Topic {
     Ticks = 1,
@@ -139,7 +151,9 @@ pub fn resolve_key(id: KeyId) -> Option<String> {
     g.resolve(id).map(|s| s.to_string())
 }
 
-#[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(
+    Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd,
+)]
 #[archive(check_bytes)]
 pub struct SymbolKey {
     pub instrument: Instrument, // UPPER

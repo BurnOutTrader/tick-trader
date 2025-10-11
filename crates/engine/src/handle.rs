@@ -11,6 +11,7 @@ use tokio::sync::oneshot;
 use tt_bus::ClientMessageBus;
 use tt_types::accounts::account::AccountName;
 use tt_types::accounts::events::PositionSide;
+use tt_types::consolidators::ConsolidatorKey;
 use tt_types::engine_id::EngineUuid;
 use tt_types::keys::{SymbolKey, Topic};
 use tt_types::providers::ProviderKind;
@@ -37,18 +38,16 @@ impl EngineHandle {
         cons: Box<dyn tt_types::consolidators::Consolidator + Send>,
     ) {
         let topic = from_data_topic.to_topic_or_err().unwrap();
-        let map = &self.inner.consolidators;
-        let map_key = (topic, for_key.clone());
-        map.insert(map_key, cons);
+        let key = ConsolidatorKey::new(for_key.instrument, for_key.provider, topic);
+        self.inner.consolidators.insert(key, cons);
     }
 
     // === Removal ===
     /// Remove a consolidator bring driven by the engine.
     pub fn remove_consolidator(&self, from_data_topic: DataTopic, for_key: SymbolKey) {
-        let map = &self.inner.consolidators;
         let topic = from_data_topic.to_topic_or_err().unwrap();
-        let map_key = (topic, for_key);
-        map.remove(&map_key);
+        let key = ConsolidatorKey::new(for_key.instrument, for_key.provider, topic);
+        self.inner.consolidators.remove(&key);
     }
 
     // === FIRE-AND-FORGET ===

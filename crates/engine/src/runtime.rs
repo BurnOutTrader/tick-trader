@@ -14,6 +14,7 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::info;
 use tt_bus::{ClientMessageBus, ClientSubId};
 use tt_types::accounts::events::PositionSide;
+use tt_types::consolidators::ConsolidatorKey;
 use tt_types::engine_id::EngineUuid;
 use tt_types::keys::{AccountKey, SymbolKey, Topic};
 use tt_types::providers::ProviderKind;
@@ -38,10 +39,11 @@ pub(crate) struct EngineRuntimeShared {
     pub(crate) provider_order_ids: Arc<DashMap<EngineUuid, String>>,
     // Consolidators shared with handle for registration
     pub(crate) consolidators:
-        Arc<DashMap<(Topic, SymbolKey), Box<dyn tt_types::consolidators::Consolidator + Send>>>,
+        Arc<DashMap<ConsolidatorKey, Box<dyn tt_types::consolidators::Consolidator + Send>>>,
     // When true, disable live-only behaviors (SHM, Kick, vendor timers)
     pub(crate) backtest_mode: bool,
     // Deterministic simulation clock (present in backtest mode)
+    #[allow(dead_code)]
     pub(crate) backtest_clock: Option<Arc<BacktestClock>>,
 }
 
@@ -70,7 +72,7 @@ pub struct EngineRuntime {
     provider_order_ids: Arc<DashMap<EngineUuid, String>>,
     slow_spin_ns: Option<u64>,
     consolidators:
-        Arc<DashMap<(Topic, SymbolKey), Box<dyn tt_types::consolidators::Consolidator + Send>>>,
+        Arc<DashMap<ConsolidatorKey, Box<dyn tt_types::consolidators::Consolidator + Send>>>,
 }
 
 impl EngineRuntime {
@@ -646,27 +648,21 @@ impl EngineRuntime {
                         if !handle_inner_for_task.backtest_mode {
                             let now = chrono::Utc::now();
                             // Snapshot keys to avoid holding iterator while mutating entries
-                            let keys: Vec<(Topic, SymbolKey)> = handle_inner_for_task
-                                .consolidators
-                                .iter()
-                                .map(|kv| kv.key().clone())
-                                .collect();
-                            for (tpc, sk) in keys.into_iter() {
+
+                            for kvp in handle_inner_for_task.consolidators.iter() {
                                 // Short-lived mutable borrow to call on_time
                                 let out_opt = {
-                                    let key = (tpc, sk.clone());
                                     if let Some(mut cons_ref) = handle_inner_for_task
                                         .consolidators
-                                        .get_mut(&key)
+                                        .get_mut(kvp.key())
                                     {
                                         cons_ref.value_mut().on_time(now)
                                     } else { None }
                                 };
-
                                 if let Some(tt_types::consolidators::ConsolidatedOut::Candle(c)) = out_opt {
                                     // Update marks and deliver to strategy
-                                    pm.update_apply_last_price(sk.provider, &c.instrument, c.close);
-                                    strategy_for_task.on_bar(&c, sk.provider);
+                                    pm.update_apply_last_price(kvp.key().provider, &c.instrument, c.close);
+                                    strategy_for_task.on_bar(&c, kvp.key().provider);
                                 }
                             }
                         }
@@ -708,16 +704,16 @@ impl EngineRuntime {
                         provider_kind,
                         ..
                     }) => {
-                        let pk = provider_kind;
                         for t in ticks {
+
                             // Update portfolio marks then deliver to strategy
-                            pm.update_apply_last_price(pk, &t.instrument, t.price);
+                            pm.update_apply_last_price(provider_kind, &t.instrument, t.price);
                             strategy_for_task.on_tick(&t, provider_kind);
                             // Drive any consolidators registered for ticks on this key
-                            let sk = SymbolKey::new(t.instrument.clone(), pk);
+                            let key = ConsolidatorKey::new(t.instrument.clone(), provider_kind, Topic::Ticks);
                             if let Some(mut cons) = handle_inner_for_task
                                 .consolidators
-                                .get_mut(&(Topic::Ticks, sk))
+                                .get_mut(&key)
                                 && let Some(out) = cons.on_tick(&t)
                                 && let tt_types::consolidators::ConsolidatedOut::Candle(c) = out
                             {
@@ -730,17 +726,13 @@ impl EngineRuntime {
                         provider_kind,
                         ..
                     }) => {
-                        let pk = provider_kind;
                         for q in quotes {
-                            // Use mid-price as mark
-                            let mid = (q.bid + q.ask) / rust_decimal::Decimal::from(2);
-                            pm.update_apply_last_price(pk, &q.instrument, mid);
                             // Drive consolidators for quotes (BBO)
                             strategy_for_task.on_quote(&q, provider_kind);
-                            let sk = SymbolKey::new(q.instrument.clone(), pk);
+                            let key = ConsolidatorKey::new(q.instrument.clone(), provider_kind, Topic::Quotes);
                             if let Some(mut cons) = handle_inner_for_task
                                 .consolidators
-                                .get_mut(&(Topic::Quotes, sk))
+                                .get_mut(&key)
                                 && let Some(out) = cons.on_bbo(&q)
                                 && let tt_types::consolidators::ConsolidatedOut::Candle(c) = out
                             {
@@ -753,23 +745,22 @@ impl EngineRuntime {
                         provider_kind,
                         ..
                     }) => {
-                        let pk = provider_kind;
                         for b in bars {
                             // Use close as mark
-                            pm.update_apply_last_price(pk, &b.instrument, b.close);
+                            pm.update_apply_last_price(provider_kind, &b.instrument, b.close);
                             strategy_for_task.on_bar(&b, provider_kind);
                             // Drive consolidators for incoming candles (candle-to-candle)
-                            let sk = SymbolKey::new(b.instrument.clone(), pk);
                             let tpc = match b.resolution {
                                 tt_types::data::models::Resolution::Seconds(1) => Topic::Candles1s,
                                 tt_types::data::models::Resolution::Minutes(1) => Topic::Candles1m,
                                 tt_types::data::models::Resolution::Hours(1) => Topic::Candles1h,
                                 tt_types::data::models::Resolution::Daily => Topic::Candles1d,
                                 tt_types::data::models::Resolution::Weekly => Topic::Candles1d,
-                                _ => Topic::Candles1m,
+                                _ => Topic::Candles1d,
                             };
+                            let key = ConsolidatorKey::new(b.instrument.clone(), provider_kind, tpc);
                             if let Some(mut cons) =
-                                handle_inner_for_task.consolidators.get_mut(&(tpc, sk))
+                                handle_inner_for_task.consolidators.get_mut(&key)
                                 && let Some(out) = cons.on_candle(&b)
                                 && let tt_types::consolidators::ConsolidatedOut::Candle(c) = out
                             {
@@ -1009,31 +1000,6 @@ impl EngineRuntime {
                     | Response::VendorData(_)
                     | Response::AccountInfoResponse(_) => {}
                     Response::DbUpdateComplete { .. } => {}
-                }
-                // In backtest mode, advance the deterministic clock slightly and drive time-based consolidators once per event
-                if handle_inner_for_task.backtest_mode && let Some(clock) = &handle_inner_for_task.backtest_clock {
-                    clock.bump_ns(1); // +1ns to total-order identical timestamps
-                    let now = clock.now_dt();
-                    let keys: Vec<(Topic, SymbolKey)> = handle_inner_for_task
-                        .consolidators
-                        .iter()
-                        .map(|kv| kv.key().clone())
-                        .collect();
-                    for (tpc, sk) in keys.into_iter() {
-                        let out_opt = {
-                            let key = (tpc, sk.clone());
-                            if let Some(mut cons_ref) = handle_inner_for_task
-                                .consolidators
-                                .get_mut(&key)
-                            {
-                                cons_ref.value_mut().on_time(now)
-                            } else { None }
-                        };
-                        if let Some(tt_types::consolidators::ConsolidatedOut::Candle(c)) = out_opt {
-                            pm.update_apply_last_price(sk.provider, &c.instrument, c.close);
-                            strategy_for_task.on_bar(&c, sk.provider);
-                        }
-                    }
                 }
                 // Flush any commands the strategy enqueued during this message
                 Self::drain_commands_for_task(

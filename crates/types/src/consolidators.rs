@@ -1,11 +1,30 @@
 use crate::data::core::{Bbo, Candle, Tick, TickBar};
 use crate::data::models::{Resolution, TradeSide};
+use crate::keys::Topic;
+use crate::providers::ProviderKind;
 use crate::securities::hours::market_hours::{MarketHours, next_session_after, session_bounds};
 use crate::securities::symbols::Instrument;
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use rust_decimal::{Decimal, dec};
 use std::sync::Arc;
+
 // ===================== Helpers =====================
+#[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
+pub struct ConsolidatorKey {
+    pub instrument: Instrument,
+    pub provider: ProviderKind,
+    from: Topic,
+}
+
+impl ConsolidatorKey {
+    pub fn new(instrument: Instrument, provider: ProviderKind, from: Topic) -> ConsolidatorKey {
+        Self {
+            instrument,
+            provider,
+            from,
+        }
+    }
+}
 
 fn end_inclusive(end: DateTime<Utc>) -> DateTime<Utc> {
     end - Duration::nanoseconds(1)
