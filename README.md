@@ -162,10 +162,7 @@ To use stop loss and take profit brackets in ProjectX switch to OCO brackets. (n
 - Server address:
   - TT_BUS_ADDR defaults to /tmp/tick-trader.sock (macOS) or @tick-trader.sock (Linux abstract). Override in .env or env.
 - Database connection:
-  - Tick Trader now uses PostgreSQL via sqlx. Set DATABASE_URL for a direct connection string, e.g. postgres://user:pass@127.0.0.1:5432/tick_trader.
-  - If DATABASE_URL is not set, we fall back to DB_PATH in the form host:host_port:container_port (default: 127.0.0.1:5432:5432) to construct a local URL using pg/.env.example defaults.
-  - See pg/docker-compose.yml and pg/.env.example for a ready-to-run local instance with app roles.
-
+  - For custom db connections see tick-trader/pg, else the build will automatically use a local docker connection.
 ## ⚡ Quick start
 
 ### 1) Build the workspace:
