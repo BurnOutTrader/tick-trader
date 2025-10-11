@@ -397,7 +397,7 @@ Async is still available (where it’s cold path)
 - Need discovery? Use handle.list_instruments().await.
 - Need account snapshots? EngineRuntime keeps last_* caches with async getters for tooling/UI.
 
-How we abstracted async away from your strategy
+How I abstracted async away from your strategy
 - The engine runs a single task that receives messages, updates portfolio marks, invokes your sync callbacks, then drains the command queue for any fire-and-forget requests.
 - SHM readers decode bytes and send compact events into the same intake mpsc; they never call the strategy directly.
 - Because the engine updates marks before calling you, instant getters reflect the latest state in the same tick.
