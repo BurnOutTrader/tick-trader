@@ -3392,6 +3392,7 @@ dependencies = [
  "lazy_static",
  "nanoid",
  "parquet",
+ "rkyv",
  "rust_decimal",
  "serde",
  "serde_json",

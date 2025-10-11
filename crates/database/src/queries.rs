@@ -970,3 +970,97 @@ pub async fn latest_bars_1m(
     }
     Ok(out)
 }
+
+// === Futures contracts map storage ===
+use std::collections::HashMap as StdHashMap;
+use tt_types::securities::security::FuturesContract;
+
+/// Append-only insert for a provider's contracts map: only insert instruments that
+/// do not already exist for the provider. Existing rows are left untouched.
+pub async fn inject_contracts_map(
+    conn: &crate::init::Connection,
+    provider: tt_types::providers::ProviderKind,
+    contracts: &StdHashMap<tt_types::securities::symbols::Instrument, FuturesContract>,
+) -> anyhow::Result<()> {
+    use rkyv::to_bytes;
+    use std::collections::HashSet;
+
+    let prov = crate::paths::provider_kind_to_db_string(provider);
+
+    // Fetch existing instrument symbols for this provider to avoid re-inserting.
+    let existing_rows = sqlx::query(
+        "SELECT i.sym AS sym
+         FROM futures_contracts f
+         JOIN instrument i ON i.id = f.symbol_id
+         WHERE f.provider = $1",
+    )
+    .bind(&prov)
+    .fetch_all(conn)
+    .await?;
+
+    let mut existing: HashSet<String> = HashSet::with_capacity(existing_rows.len());
+    for r in existing_rows.iter() {
+        let s: String = r.get("sym");
+        existing.insert(s);
+    }
+
+    let mut tx = conn.begin().await?;
+
+    for (instrument, contract) in contracts.iter() {
+        let sym = instrument.to_string();
+        if existing.contains(&sym) {
+            // Skip existing instrument for this provider (append-only behavior)
+            continue;
+        }
+        let symbol_id = crate::schema::get_or_create_instrument_id(&conn, &sym).await?;
+        // Serialize contract using rkyv
+        let bytes = rkyv::to_bytes::<_, 256>(contract)?;
+        // Insert only; if a concurrent insert happens, ignore via DO NOTHING.
+        sqlx::query(
+            "INSERT INTO futures_contracts (provider, symbol_id, contract) VALUES ($1, $2, $3)
+             ON CONFLICT (provider, symbol_id) DO NOTHING",
+        )
+        .bind(&prov)
+        .bind(symbol_id)
+        .bind(bytes.as_slice())
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Retrieve the contracts map for a provider.
+pub async fn get_contracts_map(
+    conn: &crate::init::Connection,
+    provider: tt_types::providers::ProviderKind,
+) -> anyhow::Result<StdHashMap<tt_types::securities::symbols::Instrument, FuturesContract>> {
+    use rkyv::from_bytes;
+    use std::str::FromStr;
+
+    let prov = crate::paths::provider_kind_to_db_string(provider);
+    let rows = sqlx::query(
+        "SELECT i.sym AS sym, f.contract AS contract
+         FROM futures_contracts f
+         JOIN instrument i ON i.id = f.symbol_id
+         WHERE f.provider = $1",
+    )
+    .bind(&prov)
+    .fetch_all(conn)
+    .await?;
+
+    let mut out: StdHashMap<tt_types::securities::symbols::Instrument, FuturesContract> =
+        StdHashMap::with_capacity(rows.len());
+    for r in rows.iter() {
+        let sym: String = r.get("sym");
+        if let Ok(instr) = tt_types::securities::symbols::Instrument::from_str(&sym) {
+            let bytes: Vec<u8> = r.get("contract");
+            // Deserialize using rkyv
+            let val: FuturesContract = rkyv::from_bytes(&bytes)
+                .map_err(|_e| anyhow::anyhow!("contracts decode failed"))?;
+            out.insert(instr, val);
+        }
+    }
+    Ok(out)
+}

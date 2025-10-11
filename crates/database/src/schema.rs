@@ -151,6 +151,18 @@ pub async fn ensure_schema(pool: &Pool<Postgres>) -> Result<()> {
     pool.execute(create_mbp10).await?;
     pool.execute(create_series_extent).await?;
     pool.execute(create_kvp).await?;
+
+    // Futures contracts table storing serialized contract per (provider, symbol)
+    let create_contracts = r#"
+    CREATE TABLE IF NOT EXISTS futures_contracts (
+        provider   TEXT   NOT NULL,
+        symbol_id  BIGINT NOT NULL REFERENCES instrument(id),
+        contract   BYTEA  NOT NULL,
+        PRIMARY KEY (provider, symbol_id)
+    );
+    "#;
+    pool.execute(create_contracts).await?;
+
     Ok(())
 }
 

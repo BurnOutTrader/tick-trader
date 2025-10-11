@@ -2,7 +2,7 @@ use crate::providers::ProviderKind;
 use crate::securities::futures_helpers::{
     activation_ns_default, extract_root, parse_expiry_from_instrument,
 };
-use crate::securities::symbols::{Currency, Exchange, Instrument, SecurityType, get_symbol_info};
+use crate::securities::symbols::{Currency, Exchange, Instrument, get_symbol_info};
 use chrono::{DateTime, NaiveDate, Utc};
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use rust_decimal::Decimal;
@@ -13,19 +13,14 @@ use rust_decimal::Decimal;
 pub struct FuturesContract {
     pub root: String,
     pub instrument: Instrument,
-    pub security_type: SecurityType,
     pub exchange: Exchange,
     /// Provider ID for this instrument, this is the id used to place orders on the exchange.
     pub provider_contract_name: String,
     pub provider_id: ProviderKind,
-
     pub tick_size: Decimal,
-
     pub value_per_tick: Decimal,
     pub quote_ccy: Currency,
-
     pub activation_date: NaiveDate,
-
     pub expiration_date: NaiveDate,
     pub is_continuous: bool,
 }
@@ -35,7 +30,6 @@ impl FuturesContract {
     pub fn from_root_with(
         instrument: &Instrument,
         exchange: Exchange,
-        security_type: SecurityType,
         provider_contract_name: String,
         provider_id: ProviderKind,
         value_per_tick: Decimal,
@@ -60,7 +54,6 @@ impl FuturesContract {
             provider_contract_name,
             provider_id,
             instrument: instrument.clone(),
-            security_type,
             exchange,
             tick_size,
             value_per_tick,
@@ -73,9 +66,9 @@ impl FuturesContract {
     pub fn from_root_with_serialized(
         instrument: &Instrument,
         exchange: Exchange,
-        security_type: SecurityType,
         provider_contract_name: String,
         provider_id: ProviderKind,
+        quote_ccy: Currency,
     ) -> Option<Self> {
         let root = extract_root(instrument);
         let is_continuous = root == instrument.to_string();
@@ -97,14 +90,13 @@ impl FuturesContract {
             provider_contract_name,
             provider_id,
             instrument: instrument.clone(),
-            security_type,
             exchange,
             tick_size: symbol_info.tick_size,
             value_per_tick: symbol_info.value_per_tick,
-            quote_ccy: Currency::USD,
             activation_date: activation,
             expiration_date: expiry,
             is_continuous,
+            quote_ccy,
         })
     }
 }
