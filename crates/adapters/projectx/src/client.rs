@@ -24,7 +24,7 @@ use tt_types::providers::{ProjectXTenant, ProviderKind};
 use tt_types::securities::futures_helpers::{extract_month_year, extract_root};
 use tt_types::securities::security::FuturesContract;
 use tt_types::securities::symbols::Instrument;
-use tt_types::securities::symbols::{Currency, Exchange, SecurityType, get_symbol_info};
+use tt_types::securities::symbols::{Currency, Exchange, get_symbol_info};
 use tt_types::server_side::traits::{
     CommandAck, ConnectionState, DisconnectReason, ExecutionProvider, HistoricalDataProvider,
     MarketDataProvider, ProviderSessionSpec,

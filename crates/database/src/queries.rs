@@ -982,7 +982,6 @@ pub async fn inject_contracts_map(
     provider: tt_types::providers::ProviderKind,
     contracts: &StdHashMap<tt_types::securities::symbols::Instrument, FuturesContract>,
 ) -> anyhow::Result<()> {
-    use rkyv::to_bytes;
     use std::collections::HashSet;
 
     let prov = crate::paths::provider_kind_to_db_string(provider);
@@ -1036,7 +1035,6 @@ pub async fn get_contracts_map(
     conn: &crate::init::Connection,
     provider: tt_types::providers::ProviderKind,
 ) -> anyhow::Result<StdHashMap<tt_types::securities::symbols::Instrument, FuturesContract>> {
-    use rkyv::from_bytes;
     use std::str::FromStr;
 
     let prov = crate::paths::provider_kind_to_db_string(provider);
