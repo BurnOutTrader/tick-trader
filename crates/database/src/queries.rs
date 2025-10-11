@@ -36,7 +36,8 @@ pub async fn latest_data_time(
             .bind(Resolution::Seconds(1).to_string())
             .fetch_optional(conn)
             .await?;
-            row.and_then(|r| r.try_get::<Option<DateTime<Utc>>, _>("time_end").ok()).flatten()
+            row.and_then(|r| r.try_get::<Option<DateTime<Utc>>, _>("time_end").ok())
+                .flatten()
         }
         Topic::Candles1m => {
             let prov = crate::paths::provider_kind_to_db_string(provider);
@@ -48,7 +49,9 @@ pub async fn latest_data_time(
             .bind(inst_id)
             .fetch_optional(conn)
             .await?;
-            if let Some(r) = row_hot { Some(r.get::<DateTime<Utc>, _>("time_end")) } else {
+            if let Some(r) = row_hot {
+                Some(r.get::<DateTime<Utc>, _>("time_end"))
+            } else {
                 let row = sqlx::query(
                     "SELECT MAX(time_end) AS time_end FROM bars WHERE provider=$1 AND symbol_id=$2 AND resolution = $3",
                 )
@@ -57,7 +60,8 @@ pub async fn latest_data_time(
                 .bind(Resolution::Minutes(1).to_string())
                 .fetch_optional(conn)
                 .await?;
-                row.and_then(|r| r.try_get::<Option<DateTime<Utc>>, _>("time_end").ok()).flatten()
+                row.and_then(|r| r.try_get::<Option<DateTime<Utc>>, _>("time_end").ok())
+                    .flatten()
             }
         }
         Topic::Candles1h => {
@@ -69,7 +73,8 @@ pub async fn latest_data_time(
             .bind(inst_id)
             .fetch_optional(conn)
             .await?;
-            row.and_then(|r| r.try_get::<Option<DateTime<Utc>>, _>("time_end").ok()).flatten()
+            row.and_then(|r| r.try_get::<Option<DateTime<Utc>>, _>("time_end").ok())
+                .flatten()
         }
         Topic::Candles1d => {
             let prov = crate::paths::provider_kind_to_db_string(provider);
@@ -81,7 +86,8 @@ pub async fn latest_data_time(
             .bind(Resolution::Daily.to_string())
             .fetch_optional(conn)
             .await?;
-            row.and_then(|r| r.try_get::<Option<DateTime<Utc>>, _>("time_end").ok()).flatten()
+            row.and_then(|r| r.try_get::<Option<DateTime<Utc>>, _>("time_end").ok())
+                .flatten()
         }
         Topic::Ticks => {
             let prov = crate::paths::provider_kind_to_db_string(provider);
@@ -196,11 +202,13 @@ pub async fn get_extent(
             )
         }
         Topic::Ticks => {
-            let row = sqlx::query("SELECT MIN(ts_ns) e, MAX(ts_ns) l FROM tick WHERE provider=$1 AND symbol_id=$2")
-                .bind(&prov)
-                .bind(inst_id)
-                .fetch_one(conn)
-                .await?;
+            let row = sqlx::query(
+                "SELECT MIN(ts_ns) e, MAX(ts_ns) l FROM tick WHERE provider=$1 AND symbol_id=$2",
+            )
+            .bind(&prov)
+            .bind(inst_id)
+            .fetch_one(conn)
+            .await?;
             let e_ns: Option<i64> = row.get("e");
             let l_ns: Option<i64> = row.get("l");
             let to_dt = |ns: i64| {
@@ -211,11 +219,13 @@ pub async fn get_extent(
             (e_ns.and_then(to_dt), l_ns.and_then(to_dt))
         }
         Topic::Quotes => {
-            let row = sqlx::query("SELECT MIN(ts_ns) e, MAX(ts_ns) l FROM bbo WHERE provider=$1 AND symbol_id=$2")
-                .bind(&prov)
-                .bind(inst_id)
-                .fetch_one(conn)
-                .await?;
+            let row = sqlx::query(
+                "SELECT MIN(ts_ns) e, MAX(ts_ns) l FROM bbo WHERE provider=$1 AND symbol_id=$2",
+            )
+            .bind(&prov)
+            .bind(inst_id)
+            .fetch_one(conn)
+            .await?;
             let e_ns: Option<i64> = row.get("e");
             let l_ns: Option<i64> = row.get("l");
             let to_dt = |ns: i64| {
@@ -290,8 +300,15 @@ pub async fn get_range(
                     resolution: Resolution::Seconds(1),
                 })
                 .collect();
-            let batch = tt_types::wire::BarBatch { topic, seq: 0, bars, provider_kind: provider };
-            let next = rows.last().map(|r| r.get::<DateTime<Utc>, _>("time_end").to_rfc3339());
+            let batch = tt_types::wire::BarBatch {
+                topic,
+                seq: 0,
+                bars,
+                provider_kind: provider,
+            };
+            let next = rows
+                .last()
+                .map(|r| r.get::<DateTime<Utc>, _>("time_end").to_rfc3339());
             Ok((vec![tt_types::wire::Response::BarBatch(batch)], next))
         }
         Topic::Candles1m => {
@@ -323,8 +340,15 @@ pub async fn get_range(
                     resolution: Resolution::Minutes(1),
                 })
                 .collect();
-            let batch = tt_types::wire::BarBatch { topic, seq: 0, bars, provider_kind: provider };
-            let next = rows.last().map(|r| r.get::<DateTime<Utc>, _>("time_end").to_rfc3339());
+            let batch = tt_types::wire::BarBatch {
+                topic,
+                seq: 0,
+                bars,
+                provider_kind: provider,
+            };
+            let next = rows
+                .last()
+                .map(|r| r.get::<DateTime<Utc>, _>("time_end").to_rfc3339());
             Ok((vec![tt_types::wire::Response::BarBatch(batch)], next))
         }
         Topic::Candles1h => {
@@ -355,17 +379,35 @@ pub async fn get_range(
                     // If you stored explicit hr10, keep it; otherwise default to 1h
                     resolution: {
                         let res: String = r.get("resolution");
-                        if let Some(num) = res.strip_prefix("Hours(").and_then(|s| s.strip_suffix(")")) {
-                            num.parse::<u8>().ok().map(Resolution::Hours).unwrap_or(Resolution::Hours(1))
+                        if let Some(num) =
+                            res.strip_prefix("Hours(").and_then(|s| s.strip_suffix(")"))
+                        {
+                            num.parse::<u8>()
+                                .ok()
+                                .map(Resolution::Hours)
+                                .unwrap_or(Resolution::Hours(1))
                         } else if res.starts_with("hr") {
                             // Backward compatibility if older keys were stored
-                            res.trim_start_matches("hr").parse::<u8>().ok().map(Resolution::Hours).unwrap_or(Resolution::Hours(1))
-                        } else { Resolution::Hours(1) }
+                            res.trim_start_matches("hr")
+                                .parse::<u8>()
+                                .ok()
+                                .map(Resolution::Hours)
+                                .unwrap_or(Resolution::Hours(1))
+                        } else {
+                            Resolution::Hours(1)
+                        }
                     },
                 })
                 .collect();
-            let batch = tt_types::wire::BarBatch { topic, seq: 0, bars, provider_kind: provider };
-            let next = rows.last().map(|r| r.get::<DateTime<Utc>, _>("time_end").to_rfc3339());
+            let batch = tt_types::wire::BarBatch {
+                topic,
+                seq: 0,
+                bars,
+                provider_kind: provider,
+            };
+            let next = rows
+                .last()
+                .map(|r| r.get::<DateTime<Utc>, _>("time_end").to_rfc3339());
             Ok((vec![tt_types::wire::Response::BarBatch(batch)], next))
         }
         Topic::Candles1d => {
@@ -397,8 +439,15 @@ pub async fn get_range(
                     resolution: Resolution::Daily,
                 })
                 .collect();
-            let batch = tt_types::wire::BarBatch { topic, seq: 0, bars, provider_kind: provider };
-            let next = rows.last().map(|r| r.get::<DateTime<Utc>, _>("time_end").to_rfc3339());
+            let batch = tt_types::wire::BarBatch {
+                topic,
+                seq: 0,
+                bars,
+                provider_kind: provider,
+            };
+            let next = rows
+                .last()
+                .map(|r| r.get::<DateTime<Utc>, _>("time_end").to_rfc3339());
             Ok((vec![tt_types::wire::Response::BarBatch(batch)], next))
         }
         Topic::Ticks => {

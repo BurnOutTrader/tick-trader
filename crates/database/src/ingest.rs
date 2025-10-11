@@ -165,7 +165,10 @@ pub async fn ingest_candles(
 
     // Update extent cache per topic based on each row's resolution (batch may mix resolutions)
     use std::collections::HashMap;
-    let mut extent_map: HashMap<i16, (chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)> = HashMap::new();
+    let mut extent_map: HashMap<
+        i16,
+        (chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>),
+    > = HashMap::new();
     for r in rows.iter() {
         let topic_i16: i16 = match r.resolution {
             tt_types::data::models::Resolution::Seconds(1) => Topic::Candles1s as i16,
@@ -174,9 +177,15 @@ pub async fn ingest_candles(
             tt_types::data::models::Resolution::Daily => Topic::Candles1d as i16,
             _ => Topic::Candles1m as i16,
         };
-        let entry = extent_map.entry(topic_i16).or_insert((r.time_end, r.time_end));
-        if r.time_end < entry.0 { entry.0 = r.time_end; }
-        if r.time_end > entry.1 { entry.1 = r.time_end; }
+        let entry = extent_map
+            .entry(topic_i16)
+            .or_insert((r.time_end, r.time_end));
+        if r.time_end < entry.0 {
+            entry.0 = r.time_end;
+        }
+        if r.time_end > entry.1 {
+            entry.1 = r.time_end;
+        }
     }
     for (topic_i16, (min_end, max_end)) in extent_map.into_iter() {
         upsert_series_extent(conn, &provider_code, inst_id, topic_i16, min_end, max_end).await?;

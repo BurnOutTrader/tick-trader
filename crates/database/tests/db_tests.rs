@@ -186,7 +186,10 @@ async fn test_ingest_and_get_range_multi_res_candles() -> Result<()> {
         10,
     )
     .await?;
-    match &resp_sec[0] { tt_types::wire::Response::BarBatch(b) => assert_eq!(b.bars.len(), 3), _ => panic!("expected BarBatch") }
+    match &resp_sec[0] {
+        tt_types::wire::Response::BarBatch(b) => assert_eq!(b.bars.len(), 3),
+        _ => panic!("expected BarBatch"),
+    }
 
     // 10-hour candles (fall under Candles1h family)
     let mut hr_bars = Vec::new();
@@ -219,7 +222,10 @@ async fn test_ingest_and_get_range_multi_res_candles() -> Result<()> {
         10,
     )
     .await?;
-    match &resp_hr[0] { tt_types::wire::Response::BarBatch(b) => assert_eq!(b.bars.len(), 2), _ => panic!("expected BarBatch") }
+    match &resp_hr[0] {
+        tt_types::wire::Response::BarBatch(b) => assert_eq!(b.bars.len(), 2),
+        _ => panic!("expected BarBatch"),
+    }
 
     // Daily candles
     let mut day_bars = Vec::new();
@@ -252,7 +258,10 @@ async fn test_ingest_and_get_range_multi_res_candles() -> Result<()> {
         10,
     )
     .await?;
-    match &resp_day[0] { tt_types::wire::Response::BarBatch(b) => assert_eq!(b.bars.len(), 2), _ => panic!("expected BarBatch") }
+    match &resp_day[0] {
+        tt_types::wire::Response::BarBatch(b) => assert_eq!(b.bars.len(), 2),
+        _ => panic!("expected BarBatch"),
+    }
 
     // latest_data_time should return max per-topic
     let latest_1s = queries::latest_data_time(&pool, provider, &inst, Topic::Candles1s).await?;
