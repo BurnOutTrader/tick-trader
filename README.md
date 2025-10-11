@@ -140,7 +140,7 @@ impl Strategy for TotalLiveTestStrategy {
   fn on_tick(&mut self, t: &Tick, provider_kind: ProviderKind) {
       println!("{:?}", t);
     // then use the handle helper to place orders etc
-    let _ = h.place_order(
+    let _ = h.unwrap().place_order(
       account.clone(),
       exec_key.clone(),
       tt_types::accounts::events::Side::Buy,
@@ -170,6 +170,8 @@ To use stop loss and take profit brackets in ProjectX switch to OCO brackets. (n
     - PX_TOPSTEP_USERNAME=alice
     - PX_TOPSTEP_APIKEY=xxxx
     - PX_TOPSTEP_FIRM=topstep
+  - For all available firms and the correct string see: [providers.rs](crates/types/src/providers.rs)
+    We build the api configuration from the api string from_env_string()
 - Rithmic keys use the RITHMIC_ prefix (parsing supported, implementation TBD):
   - RITHMIC_{SYSTEM}_{USERNAME|APIKEY|PASSWORD|FCM_ID|IB_ID|USER_TYPE}
 - Server address:
