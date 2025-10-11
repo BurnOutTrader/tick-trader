@@ -18,17 +18,51 @@ use strum_macros::Display;
 )]
 #[archive(check_bytes)]
 pub enum ProjectXTenant {
-    Topstep,
     AlphaFutures,
+    AquaFutures,
+    BlueGuardian,
+    DayTraders,
+    E8X,
+    FundingFutures,
+    FundingFutures2,
+    TheFuturesDesk,
+    FuturesElite,
+    FXFY,
+    GoatFunded,
+    HolaPrime,
+    LucidTrading,
+    Phidias,
+    TickTickTrader,
+    TopOneFutures,
+    Tradeify,
+    TX3Funding,
+    Topstep,
     Demo,
 }
 
 impl Display for ProjectXTenant {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ProjectXTenant::Topstep => write!(f, "topstep"),
-            ProjectXTenant::AlphaFutures => write!(f, "alphafutures"),
+            ProjectXTenant::AlphaFutures => write!(f, "alphaticks"),
+            ProjectXTenant::Topstep => write!(f, "topstepx"),
             ProjectXTenant::Demo => write!(f, "demo"),
+            ProjectXTenant::AquaFutures => write!(f, "blueguardianfutures"),
+            ProjectXTenant::BlueGuardian => write!(f, "blusky"),
+            ProjectXTenant::DayTraders => write!(f, "daytraders"),
+            ProjectXTenant::E8X => write!(f, "e8"),
+            ProjectXTenant::FundingFutures => write!(f, "fundingfutures"),
+            ProjectXTenant::FundingFutures2 => write!(f, "funding-futures"),
+            ProjectXTenant::TheFuturesDesk => write!(f, "thefuturesdesk"),
+            ProjectXTenant::FuturesElite => write!(f, "futureselite"),
+            ProjectXTenant::FXFY => write!(f, "fxifyfutures"),
+            ProjectXTenant::GoatFunded => write!(f, "goatfundedfutures"),
+            ProjectXTenant::HolaPrime => write!(f, "holaprime"),
+            ProjectXTenant::LucidTrading => write!(f, "lucidtrading"),
+            ProjectXTenant::Phidias => write!(f, "phidias"),
+            ProjectXTenant::TickTickTrader => write!(f, "tickticktrader"),
+            ProjectXTenant::TopOneFutures => write!(f, "toponefutures"),
+            ProjectXTenant::Tradeify => write!(f, "tradeify"),
+            ProjectXTenant::TX3Funding => write!(f, "tx3funding"),
         }
     }
 }
@@ -41,32 +75,24 @@ impl ProjectXTenant {
             "topstep" => ProjectXTenant::Topstep,
             "alphafutures" => ProjectXTenant::AlphaFutures,
             "demo" => ProjectXTenant::Demo,
+            "blueguardianfutures" => ProjectXTenant::AquaFutures,
+            "blusky" => ProjectXTenant::BlueGuardian,
+            "daytraders" => ProjectXTenant::DayTraders,
+            "e8" => ProjectXTenant::E8X,
+            "fundingfutures" => ProjectXTenant::FundingFutures,
+            "funding-futures" => ProjectXTenant::FundingFutures2,
+            "thefuturesdesk" => ProjectXTenant::TheFuturesDesk,
+            "futureselite" => ProjectXTenant::FuturesElite,
+            "fxifyfutures" => ProjectXTenant::FXFY,
+            "goatfundedfutures" => ProjectXTenant::GoatFunded,
+            "holaprime" => ProjectXTenant::HolaPrime,
+            "lucidtrading" => ProjectXTenant::LucidTrading,
+            "phidias" => ProjectXTenant::Phidias,
+            "tickticktrader" => ProjectXTenant::TickTickTrader,
+            "toponefutures" => ProjectXTenant::TopOneFutures,
+            "tradeify" => ProjectXTenant::Tradeify,
+            "tx3funding" => ProjectXTenant::TX3Funding,
             _ => panic!("invalid ProjectX tenant: {}", s),
-        }
-    }
-    pub fn to_id_segment(&self) -> String {
-        match self {
-            ProjectXTenant::Topstep => "topstep".to_string(),
-            ProjectXTenant::AlphaFutures => "alphafutures".to_string(),
-            ProjectXTenant::Demo => "demo".to_string(),
-        }
-    }
-
-    /// Base HTTPS URL for ProjectX APIs for this tenant.
-    /// For Custom, returns the string verbatim assuming it's already a URL; if not, caller may build it.
-    pub fn to_url_string(&self) -> String {
-        match self {
-            ProjectXTenant::Topstep => "https://api.projectx.topstep.com".to_string(),
-            ProjectXTenant::AlphaFutures => "https://api.projectx.alphafutures.com".to_string(),
-            ProjectXTenant::Demo => "https://api.projectx.demo.com".to_string(),
-        }
-    }
-
-    pub fn to_platform_name(&self) -> String {
-        match self {
-            ProjectXTenant::Topstep => "topstepx".to_string(),
-            ProjectXTenant::AlphaFutures => "alphaticks".to_string(),
-            ProjectXTenant::Demo => "demo".to_string(),
         }
     }
 }
