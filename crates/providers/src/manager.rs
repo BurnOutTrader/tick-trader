@@ -5,7 +5,7 @@ use dashmap::DashMap;
 use std::sync::Arc;
 use tt_bus::Router;
 use tt_bus::UpstreamManager;
-use tt_types::history::{HistoricalRequest, HistoryEvent};
+use tt_types::history::{HistoricalRangeRequest, HistoryEvent};
 use tt_types::providers::ProviderKind;
 use tt_types::securities::security::FuturesContract;
 use tt_types::server_side::traits::{
@@ -179,7 +179,7 @@ impl UpstreamManager for ProviderManager {
 
     async fn fetch_historical_data(
         &self,
-        req: HistoricalRequest,
+        req: HistoricalRangeRequest,
     ) -> anyhow::Result<Vec<HistoryEvent>> {
         self.ensure_clients(req.provider_kind).await?;
         if let Some(client) = self.hist.get(&req.provider_kind) {
@@ -198,7 +198,7 @@ impl UpstreamManager for ProviderManager {
         ))
     }
 
-    async fn update_historical_database(&self, req: HistoricalRequest) -> anyhow::Result<()> {
+    async fn update_historical_database(&self, req: HistoricalRangeRequest) -> anyhow::Result<()> {
         self.ensure_clients(req.provider_kind).await?;
         if let Some(client) = self.hist.get(&req.provider_kind) {
             if !client.supports(req.topic) {

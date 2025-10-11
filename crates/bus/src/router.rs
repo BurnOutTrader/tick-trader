@@ -14,7 +14,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::codec::length_delimited::LengthDelimitedCodec;
 use tokio_util::codec::{FramedRead, FramedWrite};
 use tracing::{error, info, trace, warn};
-use tt_types::history::{HistoricalRequest, HistoryEvent};
+use tt_types::history::{HistoricalRangeRequest, HistoryEvent};
 use tt_types::keys::{AccountKey, SymbolKey, Topic};
 use tt_types::providers::ProviderKind;
 use tt_types::securities::security::FuturesContract;
@@ -141,9 +141,9 @@ pub trait UpstreamManager: Send + Sync {
     ) -> Result<Vec<FuturesContract>>;
     async fn fetch_historical_data(
         &self,
-        req: HistoricalRequest,
+        req: HistoricalRangeRequest,
     ) -> anyhow::Result<Vec<HistoryEvent>>;
-    async fn update_historical_database(&self, req: HistoricalRequest) -> anyhow::Result<()>;
+    async fn update_historical_database(&self, req: HistoricalRangeRequest) -> anyhow::Result<()>;
 }
 
 impl Router {

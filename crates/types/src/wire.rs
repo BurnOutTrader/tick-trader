@@ -3,6 +3,7 @@ use crate::accounts::events::Side;
 use crate::data::core::{Bbo, Candle, Tick};
 use crate::data::mbp10::Mbp10;
 use crate::engine_id::EngineUuid;
+use crate::history::{HistoricalRangeRequest, HistoricalUpdateLatestRequest};
 use crate::keys::{SymbolKey, Topic};
 use crate::providers::ProviderKind;
 use crate::securities::security::FuturesContract;
@@ -503,16 +504,14 @@ pub enum Request {
     Kick(Kick),
     InstrumentsRequest(InstrumentsRequest),
     InstrumentsMapRequest(InstrumentsMapRequest),
-    // Database endpoints
-    DbGetLatest(DbGetLatest),
-    DbGetRange(DbGetRange),
-    DbGetSymbols(DbGetSymbols),
     // Historical data update trigger
     DbUpdateKeyLatest(DbUpdateKeyLatest),
     // Execution
     PlaceOrder(PlaceOrder),
     CancelOrder(CancelOrder),
     ReplaceOrder(ReplaceOrder),
+    UpdateData(HistoricalRangeRequest),
+    UpdateDataToLatest(HistoricalUpdateLatestRequest),
 }
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, PartialEq, Clone, Debug)]
@@ -563,6 +562,8 @@ pub enum Response {
         mbp10: Mbp10,
         provider_kind: ProviderKind,
     },
+    UpdateRangeComplete(HistoricalRangeRequest),
+    UpdateToLatestComplete(HistoricalUpdateLatestRequest),
 }
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, PartialEq, Clone, Debug)]

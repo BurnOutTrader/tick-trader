@@ -5,6 +5,7 @@ use rust_decimal::prelude::FromPrimitive;
 use sqlx::Row;
 use std::str::FromStr;
 use tt_types::data::core::{Bbo, Candle, Tick};
+use tt_types::data::mbp10::Mbp10;
 use tt_types::data::models::{Resolution, TradeSide};
 use tt_types::keys::Topic;
 use tt_types::providers::ProviderKind;
@@ -253,6 +254,326 @@ pub async fn get_extent(
         _ => (None, None),
     };
     return Ok((e, l));
+}
+
+pub enum TopicDataEnum {
+    Tick(Tick),
+    Bbo(Bbo),
+    Mbp10(Mbp10),
+    Candle(Candle),
+}
+
+use std::collections::BTreeMap;
+
+/// Return all rows for a given (provider, instrument, topic) over [start, end),
+/// grouped by timestamp into a BTreeMap<DateTime, Vec<TopicDataEnum>>.
+/// Note: this is an unpaginated call intended for modest ranges; prefer paginated get_range for very large scans.
+pub async fn get_time_indexed(
+    conn: &Connection,
+    provider: ProviderKind,
+    instrument: &Instrument,
+    topic: Topic,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+) -> Result<BTreeMap<DateTime<Utc>, Vec<TopicDataEnum>>> {
+    use sqlx::Row;
+    let sym = instrument.to_string();
+    let inst_id = get_or_create_instrument_id(conn, &sym).await?;
+    let prov = crate::paths::provider_kind_to_db_string(provider);
+    let mut out: BTreeMap<DateTime<Utc>, Vec<TopicDataEnum>> = BTreeMap::new();
+
+    match topic {
+        Topic::Candles1s => {
+            let rows = sqlx::query(
+                "SELECT time_start, time_end, open, high, low, close, volume, ask_volume, bid_volume FROM bars WHERE provider=$1 AND symbol_id=$2 AND resolution=$3 AND time_end >= $4 AND time_end < $5 ORDER BY time_end ASC",
+            )
+            .bind(&prov)
+            .bind(inst_id)
+            .bind(Resolution::Seconds(1).to_string())
+            .bind(start)
+            .bind(end)
+            .fetch_all(conn)
+            .await?;
+            for r in rows.iter() {
+                let c = Candle {
+                    symbol: instrument.to_string(),
+                    instrument: instrument.clone(),
+                    time_start: r.get("time_start"),
+                    time_end: r.get("time_end"),
+                    open: r.get("open"),
+                    high: r.get("high"),
+                    low: r.get("low"),
+                    close: r.get("close"),
+                    volume: r.get("volume"),
+                    ask_volume: r.get("ask_volume"),
+                    bid_volume: r.get("bid_volume"),
+                    resolution: Resolution::Seconds(1),
+                };
+                out.entry(c.time_end)
+                    .or_default()
+                    .push(TopicDataEnum::Candle(c));
+            }
+        }
+        Topic::Candles1m => {
+            let rows = sqlx::query(
+                "SELECT time_start, time_end, open, high, low, close, volume, ask_volume, bid_volume FROM bars WHERE provider=$1 AND symbol_id=$2 AND resolution=$3 AND time_end >= $4 AND time_end < $5 ORDER BY time_end ASC",
+            )
+            .bind(&prov)
+            .bind(inst_id)
+            .bind(Resolution::Minutes(1).to_string())
+            .bind(start)
+            .bind(end)
+            .fetch_all(conn)
+            .await?;
+            for r in rows.iter() {
+                let c = Candle {
+                    symbol: instrument.to_string(),
+                    instrument: instrument.clone(),
+                    time_start: r.get("time_start"),
+                    time_end: r.get("time_end"),
+                    open: r.get("open"),
+                    high: r.get("high"),
+                    low: r.get("low"),
+                    close: r.get("close"),
+                    volume: r.get("volume"),
+                    ask_volume: r.get("ask_volume"),
+                    bid_volume: r.get("bid_volume"),
+                    resolution: Resolution::Minutes(1),
+                };
+                out.entry(c.time_end)
+                    .or_default()
+                    .push(TopicDataEnum::Candle(c));
+            }
+        }
+        Topic::Candles1h => {
+            let rows = sqlx::query(
+                "SELECT time_start, time_end, open, high, low, close, volume, ask_volume, bid_volume, resolution FROM bars WHERE provider=$1 AND symbol_id=$2 AND resolution LIKE 'Hours(%' AND time_end >= $3 AND time_end < $4 ORDER BY time_end ASC",
+            )
+            .bind(&prov)
+            .bind(inst_id)
+            .bind(start)
+            .bind(end)
+            .fetch_all(conn)
+            .await?;
+            for r in rows.iter() {
+                let res: String = r.get("resolution");
+                let resolution = if let Some(num) =
+                    res.strip_prefix("Hours(").and_then(|s| s.strip_suffix(")"))
+                {
+                    num.parse::<u8>()
+                        .ok()
+                        .map(Resolution::Hours)
+                        .unwrap_or(Resolution::Hours(1))
+                } else if res.starts_with("hr") {
+                    res.trim_start_matches("hr")
+                        .parse::<u8>()
+                        .ok()
+                        .map(Resolution::Hours)
+                        .unwrap_or(Resolution::Hours(1))
+                } else {
+                    Resolution::Hours(1)
+                };
+                let c = Candle {
+                    symbol: instrument.to_string(),
+                    instrument: instrument.clone(),
+                    time_start: r.get("time_start"),
+                    time_end: r.get("time_end"),
+                    open: r.get("open"),
+                    high: r.get("high"),
+                    low: r.get("low"),
+                    close: r.get("close"),
+                    volume: r.get("volume"),
+                    ask_volume: r.get("ask_volume"),
+                    bid_volume: r.get("bid_volume"),
+                    resolution,
+                };
+                out.entry(c.time_end)
+                    .or_default()
+                    .push(TopicDataEnum::Candle(c));
+            }
+        }
+        Topic::Candles1d => {
+            let rows = sqlx::query(
+                "SELECT time_start, time_end, open, high, low, close, volume, ask_volume, bid_volume FROM bars WHERE provider=$1 AND symbol_id=$2 AND resolution=$3 AND time_end >= $4 AND time_end < $5 ORDER BY time_end ASC",
+            )
+            .bind(&prov)
+            .bind(inst_id)
+            .bind(Resolution::Daily.to_string())
+            .bind(start)
+            .bind(end)
+            .fetch_all(conn)
+            .await?;
+            for r in rows.iter() {
+                let c = Candle {
+                    symbol: instrument.to_string(),
+                    instrument: instrument.clone(),
+                    time_start: r.get("time_start"),
+                    time_end: r.get("time_end"),
+                    open: r.get("open"),
+                    high: r.get("high"),
+                    low: r.get("low"),
+                    close: r.get("close"),
+                    volume: r.get("volume"),
+                    ask_volume: r.get("ask_volume"),
+                    bid_volume: r.get("bid_volume"),
+                    resolution: Resolution::Daily,
+                };
+                out.entry(c.time_end)
+                    .or_default()
+                    .push(TopicDataEnum::Candle(c));
+            }
+        }
+        Topic::Ticks => {
+            let rows = sqlx::query(
+                "SELECT ts_ns, price, volume, side, venue_seq FROM tick WHERE provider=$1 AND symbol_id=$2 AND ts_ns >= $3 AND ts_ns < $4 ORDER BY ts_ns ASC",
+            )
+            .bind(&prov)
+            .bind(inst_id)
+            .bind(start.timestamp_nanos_opt().unwrap_or(0))
+            .bind(end.timestamp_nanos_opt().unwrap_or(0))
+            .fetch_all(conn)
+            .await?;
+            for r in rows.iter() {
+                let ns: i64 = r.get("ts_ns");
+                let secs = ns / 1_000_000_000;
+                let nanos = (ns % 1_000_000_000) as u32;
+                let time = DateTime::<Utc>::from_timestamp(secs, nanos).unwrap();
+                let side_i: i16 = r.get("side");
+                let side = match side_i {
+                    1 => TradeSide::Buy,
+                    2 => TradeSide::Sell,
+                    _ => TradeSide::None,
+                };
+                let venue_seq = r
+                    .try_get::<i64, _>("venue_seq")
+                    .ok()
+                    .and_then(|v| u32::try_from(v).ok());
+                let t = Tick {
+                    symbol: instrument.to_string(),
+                    instrument: instrument.clone(),
+                    price: r.get("price"),
+                    volume: r.get("volume"),
+                    time,
+                    side,
+                    venue_seq,
+                };
+                out.entry(time).or_default().push(TopicDataEnum::Tick(t));
+            }
+        }
+        Topic::Quotes => {
+            let rows = sqlx::query(
+                "SELECT ts_ns, COALESCE(bid, 0) AS bid, COALESCE(bid_size, 0) AS bid_size, COALESCE(ask, 0) AS ask, COALESCE(ask_size, 0) AS ask_size, bid_orders, ask_orders, venue_seq, is_snapshot FROM bbo WHERE provider=$1 AND symbol_id=$2 AND ts_ns >= $3 AND ts_ns < $4 ORDER BY ts_ns ASC",
+            )
+            .bind(&prov)
+            .bind(inst_id)
+            .bind(start.timestamp_nanos_opt().unwrap_or(0))
+            .bind(end.timestamp_nanos_opt().unwrap_or(0))
+            .fetch_all(conn)
+            .await?;
+            for r in rows.iter() {
+                let ns: i64 = r.get("ts_ns");
+                let secs = ns / 1_000_000_000;
+                let nanos = (ns % 1_000_000_000) as u32;
+                let time = DateTime::<Utc>::from_timestamp(secs, nanos).unwrap();
+                let bid_orders = r.try_get::<i32, _>("bid_orders").ok().map(|v| v as u32);
+                let ask_orders = r.try_get::<i32, _>("ask_orders").ok().map(|v| v as u32);
+                let venue_seq = r
+                    .try_get::<i64, _>("venue_seq")
+                    .ok()
+                    .and_then(|v| u32::try_from(v).ok());
+                let b = Bbo {
+                    symbol: instrument.to_string(),
+                    instrument: instrument.clone(),
+                    time,
+                    bid: r.get("bid"),
+                    bid_size: r.get("bid_size"),
+                    ask: r.get("ask"),
+                    ask_size: r.get("ask_size"),
+                    bid_orders,
+                    ask_orders,
+                    is_snapshot: Some(r.get::<bool, _>("is_snapshot")),
+                    venue_seq,
+                };
+                out.entry(time).or_default().push(TopicDataEnum::Bbo(b));
+            }
+        }
+        Topic::MBP10 => {
+            let rows = sqlx::query(
+                "SELECT ts_recv_ns, ts_event_ns, rtype, publisher_id, instrument_ref, action, side, depth, price, size, flags, ts_in_delta, sequence, book_bid_px, book_ask_px, book_bid_sz, book_ask_sz, book_bid_ct, book_ask_ct FROM mbp10 WHERE provider=$1 AND symbol_id=$2 AND ts_event_ns >= $3 AND ts_event_ns < $4 ORDER BY ts_event_ns ASC",
+            )
+            .bind(&prov)
+            .bind(inst_id)
+            .bind(start.timestamp_nanos_opt().unwrap_or(0))
+            .bind(end.timestamp_nanos_opt().unwrap_or(0))
+            .fetch_all(conn)
+            .await?;
+            for r in rows.iter() {
+                let ns: i64 = r.get("ts_event_ns");
+                let secs = ns / 1_000_000_000;
+                let nanos = (ns % 1_000_000_000) as u32;
+                let ts_event = DateTime::<Utc>::from_timestamp(secs, nanos).unwrap();
+                let ts_recv_ns: i64 = r.get("ts_recv_ns");
+                let rs = ts_recv_ns / 1_000_000_000;
+                let rn = (ts_recv_ns % 1_000_000_000) as u32;
+                let ts_recv = DateTime::<Utc>::from_timestamp(rs, rn).unwrap();
+                let action_i16: i16 = r.get("action");
+                let side_i16: i16 = r.get("side");
+                let flags_i16: i16 = r.get("flags");
+                let action = tt_types::data::mbp10::Action::from(action_i16 as u8);
+                let side = tt_types::data::mbp10::BookSide::from(side_i16 as u8);
+                let flags = tt_types::data::mbp10::Flags::from(flags_i16 as u8);
+                let book_bid_ct: Option<Vec<i32>> = r.try_get("book_bid_ct").ok();
+                let book_ask_ct: Option<Vec<i32>> = r.try_get("book_ask_ct").ok();
+                let mbp = Mbp10 {
+                    instrument: instrument.clone(),
+                    ts_recv,
+                    ts_event,
+                    rtype: r.get::<i16, _>("rtype") as u8,
+                    publisher_id: r.get::<i32, _>("publisher_id") as u16,
+                    instrument_id: r.get::<i32, _>("instrument_ref") as u32,
+                    action,
+                    side,
+                    depth: r.get::<i16, _>("depth") as u8,
+                    price: r.get("price"),
+                    size: r.get("size"),
+                    flags,
+                    ts_in_delta: r.get::<i32, _>("ts_in_delta"),
+                    sequence: r.get::<i64, _>("sequence") as u32,
+                    book: {
+                        let px_b: Option<Vec<Decimal>> = r.try_get("book_bid_px").ok();
+                        let px_a: Option<Vec<Decimal>> = r.try_get("book_ask_px").ok();
+                        let sz_b: Option<Vec<Decimal>> = r.try_get("book_bid_sz").ok();
+                        let sz_a: Option<Vec<Decimal>> = r.try_get("book_ask_sz").ok();
+                        match (px_b, px_a, sz_b, sz_a, book_bid_ct, book_ask_ct) {
+                            (Some(bpx), Some(apx), Some(bsz), Some(asz), Some(bct), Some(act)) => {
+                                Some(tt_types::data::mbp10::BookLevels {
+                                    bid_px: bpx,
+                                    ask_px: apx,
+                                    bid_sz: bsz,
+                                    ask_sz: asz,
+                                    bid_ct: bct
+                                        .into_iter()
+                                        .map(|v| Decimal::from_i32(v).unwrap())
+                                        .collect(),
+                                    ask_ct: act
+                                        .into_iter()
+                                        .map(|v| Decimal::from_i32(v).unwrap())
+                                        .collect(),
+                                })
+                            }
+                            _ => None,
+                        }
+                    },
+                };
+                out.entry(ts_event)
+                    .or_default()
+                    .push(TopicDataEnum::Mbp10(mbp));
+            }
+        }
+        _ => {}
+    }
+
+    Ok(out)
 }
 
 /// Keyset-paginated range query returning typed rows converted to tt-types items.

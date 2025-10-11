@@ -18,7 +18,7 @@ use tt_bus::Router;
 use tt_types::accounts::account::{AccountName, AccountSnapShot};
 use tt_types::data::core::Candle;
 use tt_types::data::models::Resolution;
-use tt_types::history::{HistoricalRequest, HistoryEvent};
+use tt_types::history::{HistoricalRangeRequest, HistoryEvent};
 use tt_types::keys::{AccountKey, SymbolKey, Topic};
 use tt_types::providers::{ProjectXTenant, ProviderKind};
 use tt_types::securities::futures_helpers::{extract_month_year, extract_root};
@@ -259,7 +259,7 @@ impl PXClient {
     /// Paginates using the ProjectX 20,000-bars limit and normalizes timestamps to UTC.
     pub async fn retrieve_bars(
         &self,
-        req: &HistoricalRequest,
+        req: &HistoricalRangeRequest,
     ) -> anyhow::Result<Vec<HistoryEvent>> {
         // Map Topic -> Resolution and PX unit fields
         let (resolution, unit, unit_number) = match req.topic {
@@ -802,7 +802,7 @@ impl HistoricalDataProvider for PXClient {
         Ok(())
     }
 
-    async fn fetch(&self, req: HistoricalRequest) -> anyhow::Result<Vec<HistoryEvent>> {
+    async fn fetch(&self, req: HistoricalRangeRequest) -> anyhow::Result<Vec<HistoryEvent>> {
         self.retrieve_bars(&req).await
     }
 

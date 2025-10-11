@@ -3,11 +3,13 @@ use crate::keys::Topic;
 use crate::providers::ProviderKind;
 use crate::securities::symbols::Instrument;
 use chrono::{DateTime, Utc};
+use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use uuid::Uuid;
 
 /// What a backtest wants to pull.
-#[derive(Clone, Debug)]
-pub struct HistoricalRequest {
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, PartialEq, Clone, Debug)]
+#[archive(check_bytes)]
+pub struct HistoricalRangeRequest {
     pub provider_kind: ProviderKind,
     pub topic: Topic,
     pub instrument: Instrument,
@@ -15,6 +17,15 @@ pub struct HistoricalRequest {
     pub start: DateTime<Utc>,
     pub end: DateTime<Utc>,
 }
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, PartialEq, Clone, Debug)]
+#[archive(check_bytes)]
+pub struct HistoricalUpdateLatestRequest {
+    pub provider_kind: ProviderKind,
+    pub topic: Topic,
+    pub instrument: Instrument,
+    pub exchange: Exchange,
+}
+
 /// Streamed payloads from a provider.
 #[derive(Debug)]
 pub enum HistoryEvent {

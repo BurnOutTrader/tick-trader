@@ -13,7 +13,7 @@ use tt_database::init::Connection;
 use tt_database::queries::latest_data_time;
 use tt_types::data::models::Resolution;
 use tt_types::engine_id::EngineUuid;
-use tt_types::history::{HistoricalRequest, HistoryEvent};
+use tt_types::history::{HistoricalRangeRequest, HistoryEvent};
 use tt_types::keys::Topic;
 use tt_types::providers::ProviderKind;
 use tt_types::securities::hours::market_hours::{
@@ -165,7 +165,7 @@ impl DownloadManager {
     pub async fn request_update(
         &self,
         _client: std::sync::Arc<dyn HistoricalDataProvider>,
-        req: HistoricalRequest,
+        req: HistoricalRangeRequest,
     ) -> anyhow::Result<Option<DownloadTaskHandle>> {
         let key = DownloadKey::new(req.provider_kind, req.instrument.clone(), req.topic);
         let guard = self.inner.inflight.read().await;
@@ -185,7 +185,7 @@ impl DownloadManager {
     pub async fn start_update(
         &self,
         client: std::sync::Arc<dyn HistoricalDataProvider>,
-        req: HistoricalRequest,
+        req: HistoricalRangeRequest,
     ) -> anyhow::Result<DownloadTaskHandle> {
         let key = DownloadKey::new(req.provider_kind, req.instrument.clone(), req.topic);
         // fast path: existing
@@ -258,7 +258,7 @@ impl DownloadManager {
 // your helper
 async fn run_download(
     client: Arc<dyn HistoricalDataProvider>,
-    req: HistoricalRequest,
+    req: HistoricalRangeRequest,
     connection: Connection,
 ) -> anyhow::Result<()> {
     // Ensure the schema exists before we start persisting fetched data. This is idempotent.
@@ -321,7 +321,7 @@ async fn run_download(
             continue;
         }
 
-        let req = HistoricalRequest {
+        let req = HistoricalRangeRequest {
             provider_kind: req.provider_kind,
             topic: req.topic,
             instrument: req.instrument.clone(),

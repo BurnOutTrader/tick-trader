@@ -1,6 +1,6 @@
 use crate::accounts::account::AccountSnapShot;
 use crate::data::core::{DateTime, Utc};
-use crate::history::{HistoricalRequest, HistoryEvent};
+use crate::history::{HistoricalRangeRequest, HistoryEvent};
 use crate::keys::{AccountKey, SymbolKey, Topic};
 use crate::providers::{ProjectXTenant, ProviderKind, RithmicSystem};
 use crate::securities::security::FuturesContract;
@@ -249,7 +249,7 @@ pub trait HistoricalDataProvider: Send + Sync {
 
     /// The job of this function is to return any data within the period, for the specifications,
     /// how your function does that doesnt matter, as long as you return all data available for the period
-    async fn fetch(&self, req: HistoricalRequest) -> anyhow::Result<Vec<HistoryEvent>>;
+    async fn fetch(&self, req: HistoricalRangeRequest) -> anyhow::Result<Vec<HistoryEvent>>;
 
     /// Feature flags help the router pick/shape requests.
     fn supports(&self, _topic: Topic) -> bool {

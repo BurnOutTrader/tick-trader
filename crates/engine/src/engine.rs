@@ -1518,6 +1518,8 @@ impl EngineRuntime {
                     | Response::InstrumentsMapResponse(_)
                     | Response::VendorData(_)
                     | Response::AccountInfoResponse(_) => {}
+                    Response::UpdateRangeComplete(_) => {}
+                    Response::UpdateToLatestComplete(_) => {}
                 }
                 // Flush any commands the strategy enqueued during this message
                 Self::drain_commands_for_task(
