@@ -10,7 +10,6 @@ server = []
 
 [dependencies]
 tt-types = { path = "../types" }
-chrono = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }
 # bench-only (optional normal dependency so feature-gated code compiles)
@@ -22,7 +21,6 @@ futures-util = {workspace = true}
 tokio-util = {workspace = true}
 async-trait = { workspace = true }
 once_cell = { workspace = true }
-log = "0.4.28"
 tracing-subscriber = { workspace = true }
 
 [dev-dependencies]

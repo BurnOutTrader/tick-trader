@@ -5,23 +5,12 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-async-trait = {workspace = true}
 tt-types = {path = "../types"}
 chrono = { workspace = true}
-chrono-tz = {workspace = true}
 rust_decimal = { workspace = true }
-serde = { workspace = true }
 anyhow = { workspace = true }
-thiserror = { workspace = true }
-tracing = { workspace = true }
-serde_json = {workspace = true}
 tokio = { workspace = true }
 ahash = { workspace = true }
-arrow = "56.1.0"
-parquet = "56.2.0"
-nanoid = "0.4.0"
-tempfile = "3.10.1"
-lazy_static = {workspace = true}
 sqlx = { workspace = true }
 rkyv = { workspace = true }
 
