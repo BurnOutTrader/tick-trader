@@ -1,208 +1,35 @@
-use crate::backtest::backtest_execution::{
-    FeeCtx, Fill, LimitPolicy, MarketPolicy, Money, PostFillAction, ProposedPortfolioChange,
-    RiskCtx, RiskDecision, StopTrigger,
-};
-use crate::traits::{FeeModel, FillModel, LatencyModel, RiskModel, SessionCalendar, SlippageModel};
-use chrono::{DateTime, NaiveDate, Utc};
+use crate::backtest::models::{Fill, LimitPolicy, MarketPolicy, StopTrigger};
+use crate::backtest::realism_models::traits::{FillModel, SessionCalendar, SlippageModel};
+use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
-use rust_decimal::prelude::FromPrimitive;
-use rust_decimal::prelude::ToPrimitive;
-use std::time::Duration;
-use tt_types::accounts::events::{PositionDelta, Side};
-use tt_types::data::core::Exchange;
+use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
+use tt_types::accounts::events::Side;
 use tt_types::data::mbp10::BookLevels;
-use tt_types::securities::hours::market_hours::{
-    MarketHours, hours_for_exchange, next_session_after, session_bounds,
-};
-use tt_types::securities::symbols::Instrument;
-use tt_types::wire::{OrderType, PlaceOrder, ReplaceOrder};
-
-// =========================
-// Default CME-oriented models
-// =========================
-/// CME-like latency profile (tight but non-zero).
+use tt_types::wire::{OrderType, PlaceOrder};
+/// Fill configuration knobs
 #[derive(Debug, Clone, Copy)]
-pub struct CmeLatency {
-    pub submit_ack_ms: u64,
-    pub ack_fill_ms: u64,
-    pub cancel_rtt_ms: u64,
-    pub replace_rtt_ms: u64,
-}
-impl CmeLatency {
-    pub fn new(
-        submit_ack_ms: u64,
-        ack_fill_ms: u64,
-        cancel_rtt_ms: u64,
-        replace_rtt_ms: u64,
-    ) -> Self {
-        Self {
-            submit_ack_ms,
-            ack_fill_ms,
-            cancel_rtt_ms,
-            replace_rtt_ms,
-        }
-    }
-}
-impl Default for CmeLatency {
-    fn default() -> Self {
-        Self::new(3, 6, 12, 12)
-    }
-}
-impl LatencyModel for CmeLatency {
-    fn submit_to_ack(&mut self) -> Duration {
-        Duration::from_millis(self.submit_ack_ms)
-    }
-    fn ack_to_first_fill(&mut self) -> Duration {
-        Duration::from_millis(self.ack_fill_ms)
-    }
-    fn cancel_rtt(&mut self) -> Duration {
-        Duration::from_millis(self.cancel_rtt_ms)
-    }
-    fn replace_rtt(&mut self) -> Duration {
-        Duration::from_millis(self.replace_rtt_ms)
-    }
+pub struct FillConfig {
+    pub limit_policy: LimitPolicy,
+    pub market_policy: MarketPolicy,
+    pub stop_trigger: StopTrigger,
+    pub trailing_enabled: bool,
 }
 
-/// No additional slippage; execute at touch/reference.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct NoSlippage;
-impl SlippageModel for NoSlippage {
-    fn adjust(
-        &mut self,
-        side: Side,
-        ref_price: Decimal,
-        _spread: Option<Decimal>,
-        _qty: i64,
-    ) -> Decimal {
-        let _ = side;
-        ref_price
-    }
+/// CME-ish fill model using touch-or-cross logic with optional stop triggers.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CmeFillModel {
+    pub cfg: FillConfig,
 }
-
-/// Simple spread-based slippage: market orders pay 0.5 * spread.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct HalfSpreadSlippage;
-impl SlippageModel for HalfSpreadSlippage {
-    fn adjust(
-        &mut self,
-        side: Side,
-        ref_price: Decimal,
-        spread: Option<Decimal>,
-        _qty: i64,
-    ) -> Decimal {
-        if let Some(sp) = spread {
-            let half = sp / Decimal::from(2);
-            match side {
-                Side::Buy => ref_price + half,
-                Side::Sell => ref_price - half,
-            }
-        } else {
-            ref_price
-        }
-    }
-}
-
-/// Flat per-contract fees typical for CME+clearing+broker (approximate; configurable).
-#[derive(Debug, Clone, Copy)]
-pub struct CmeFlatFee {
-    pub per_contract: Decimal, // e.g., 2.50 USD per contract per side
-}
-
-impl Default for CmeFlatFee {
+impl Default for FillConfig {
     fn default() -> Self {
         Self {
-            per_contract: Decimal::new(250, 2),
-        }
-    } // 2.50
-}
-
-impl FeeModel for CmeFlatFee {
-    fn on_new_order(&self, _ctx: &FeeCtx, _o: &PlaceOrder) -> Money {
-        Money::ZERO
-    }
-    fn on_fill(&self, _ctx: &FeeCtx, f: &Fill) -> Money {
-        // Charge per contract filled (absolute qty).
-        let contracts = Decimal::from(f.qty.abs());
-        Money {
-            amount: contracts * self.per_contract,
+            limit_policy: LimitPolicy::TouchOrCross,
+            market_policy: MarketPolicy::AtTouch,
+            stop_trigger: StopTrigger::Trade,
+            trailing_enabled: true,
         }
     }
-    fn on_cancel(&self, _ctx: &FeeCtx, _o: &PlaceOrder, _canceled_qty: i64) -> Money {
-        let _ = _canceled_qty;
-        Money::ZERO
-    }
-    fn settle(&self, _ctx: &FeeCtx, _pos: &PositionDelta) -> Money {
-        Money::ZERO
-    }
 }
-
-impl SessionCalendar for HoursCalendar {
-    fn is_open(&self, _instr: &Instrument, t: DateTime<Utc>) -> bool {
-        self.hours.is_open(t)
-    }
-
-    fn session_bounds(
-        &self,
-        _instr: &Instrument,
-        t: DateTime<Utc>,
-    ) -> (DateTime<Utc>, DateTime<Utc>) {
-        session_bounds(&self.hours, t)
-    }
-
-    fn next_open_after(&self, _instr: &Instrument, t: DateTime<Utc>) -> Option<DateTime<Utc>> {
-        let (open, _close) = next_session_after(&self.hours, t);
-        Some(open)
-    }
-
-    fn next_close_after(&self, _instr: &Instrument, t: DateTime<Utc>) -> Option<DateTime<Utc>> {
-        let (_open, close) = session_bounds(&self.hours, t);
-        Some(close)
-    }
-
-    fn trading_day(&self, _instr: &Instrument, t: DateTime<Utc>) -> NaiveDate {
-        // Define trading day by the *session close* local date.
-        let (_open, close) = session_bounds(&self.hours, t);
-        close.with_timezone(&self.hours.tz).date_naive()
-    }
-
-    fn is_halt(&self, _instr: &Instrument, t: DateTime<Utc>) -> bool {
-        // Delegate: a venue-level "maintenance" window counts as a halt for matching
-        self.hours.is_maintenance(t)
-    }
-}
-
-impl RiskModel for SimpleCmeRisk {
-    fn pre_place(&self, _ctx: &RiskCtx, _o: &PlaceOrder) -> RiskDecision {
-        RiskDecision::Allow
-    }
-    fn pre_replace(
-        &self,
-        _ctx: &RiskCtx,
-        _r: &ReplaceOrder,
-        _current: &PlaceOrder,
-    ) -> RiskDecision {
-        RiskDecision::Allow
-    }
-    fn pre_cancel(&self, _ctx: &RiskCtx, _current: &PlaceOrder) -> RiskDecision {
-        RiskDecision::Allow
-    }
-    fn on_fill(&self, ctx: &RiskCtx, _f: &Fill) -> PostFillAction {
-        if ctx.day_realized_pnl + ctx.open_pnl <= -self.max_daily_loss {
-            PostFillAction::FlattenAll {
-                reason: "daily loss limit breached",
-            }
-        } else {
-            PostFillAction::None
-        }
-    }
-    fn margin_required(&self, _ctx: &RiskCtx, _after: &ProposedPortfolioChange) -> Money {
-        Money::ZERO
-    }
-    fn can_trade(&self, ctx: &RiskCtx) -> bool {
-        ctx.day_realized_pnl + ctx.open_pnl > -self.max_daily_loss
-    }
-}
-
 impl FillModel for CmeFillModel {
     fn on_submit(&mut self, _now: DateTime<Utc>, _order: &mut PlaceOrder) {
         // Basic normalization: IOC and FOK cannot both be true.
@@ -667,64 +494,4 @@ impl FillModel for CmeFillModel {
         }
         out
     }
-}
-
-/// Fill configuration knobs
-#[derive(Debug, Clone, Copy)]
-pub struct FillConfig {
-    pub limit_policy: LimitPolicy,
-    pub market_policy: MarketPolicy,
-    pub stop_trigger: StopTrigger,
-    pub trailing_enabled: bool,
-}
-
-impl Default for FillConfig {
-    fn default() -> Self {
-        Self {
-            limit_policy: LimitPolicy::TouchOrCross,
-            market_policy: MarketPolicy::AtTouch,
-            stop_trigger: StopTrigger::Trade,
-            trailing_enabled: true,
-        }
-    }
-}
-
-/// Generic adapter: use the engine's MarketHours model as a SessionCalendar.
-#[derive(Debug, Clone)]
-pub struct HoursCalendar {
-    pub hours: MarketHours,
-}
-
-impl HoursCalendar {
-    /// Convenience constructor for a given exchange using your hours table.
-    pub fn for_exchange(ex: Exchange) -> Self {
-        Self {
-            hours: hours_for_exchange(ex),
-        }
-    }
-}
-
-impl Default for HoursCalendar {
-    fn default() -> Self {
-        // Default to CME hours to preserve previous behavior
-        Self::for_exchange(Exchange::CME)
-    }
-}
-
-/// Simple CME risk: enforce daily loss stop; allow everything else.
-#[derive(Debug, Clone, Copy)]
-pub struct SimpleCmeRisk {
-    pub max_daily_loss: Decimal, // in currency units
-}
-
-impl SimpleCmeRisk {
-    pub fn new(max_daily_loss: Decimal) -> SimpleCmeRisk {
-        Self { max_daily_loss }
-    }
-}
-
-/// CME-ish fill model using touch-or-cross logic with optional stop triggers.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct CmeFillModel {
-    pub cfg: FillConfig,
 }
