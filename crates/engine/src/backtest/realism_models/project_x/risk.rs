@@ -7,16 +7,16 @@ use tt_types::wire::{PlaceOrder, ReplaceOrder};
 
 /// Simple CME risk: enforce daily loss stop; allow everything else.
 #[derive(Debug, Clone, Copy)]
-pub struct SimpleCmeRisk {
+pub struct SimpleRisk {
     pub max_daily_loss: Decimal, // in currency units
 }
 
-impl SimpleCmeRisk {
-    pub fn new(max_daily_loss: Decimal) -> SimpleCmeRisk {
+impl SimpleRisk {
+    pub fn new(max_daily_loss: Decimal) -> SimpleRisk {
         Self { max_daily_loss }
     }
 }
-impl RiskModel for SimpleCmeRisk {
+impl RiskModel for SimpleRisk {
     fn pre_place(&self, _ctx: &RiskCtx, _o: &PlaceOrder) -> RiskDecision {
         RiskDecision::Allow
     }
