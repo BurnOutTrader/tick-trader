@@ -25,15 +25,21 @@ pub struct BacktestFeederConfig {
     /// Optional warmup period prior to the start timestamp; events in warmup are emitted first
     /// (useful for consolidators to stabilize). If zero, no warmup prefeed occurs.
     pub warmup: ChronoDuration,
+    /// Optional absolute start time (UTC) to clamp backtest range.
+    pub range_start: Option<DateTime<Utc>>,
+    /// Optional absolute end time (UTC) to clamp backtest range.
+    pub range_end: Option<DateTime<Utc>>,
 }
 impl Default for BacktestFeederConfig {
     fn default() -> Self {
         // Default to fetching one month at a time to reduce query fan-out and round-trips
         // for historical backtests. Lookahead provides a small buffer to avoid tight refills.
         Self {
-            window: ChronoDuration::days(30),
+            window: ChronoDuration::days(2),
             lookahead: ChronoDuration::days(1),
             warmup: ChronoDuration::zero(),
+            range_start: None,
+            range_end: None,
         }
     }
 }
@@ -51,6 +57,10 @@ struct KeyState {
     buf: BTreeMap<DateTime<Utc>, Vec<tt_database::queries::TopicDataEnum>>, // ordered by time
     /// Emit info log once on first data emission to confirm flow
     first_emitted: bool,
+    /// Optional hard stop time; after this, no more data will be fetched or emitted.
+    hard_stop: Option<DateTime<Utc>>,
+    /// Whether this key has reached hard stop and is completed
+    done: bool,
 }
 
 /// Min-heap entry used to merge across keys by next event time
@@ -119,7 +129,17 @@ impl BacktestFeeder {
                     return;
                 }
                 let start = ks.window_end;
-                let end = want_end + cfg.lookahead;
+                let mut end = want_end + cfg.lookahead;
+                // Respect hard stop if configured
+                if let Some(hs) = ks.hard_stop
+                    && end > hs
+                {
+                    end = hs;
+                }
+                if start >= end {
+                    // Nothing to fetch
+                    return;
+                }
                 match tt_database::queries::get_time_indexed(
                     conn,
                     ks.provider,
@@ -153,6 +173,9 @@ impl BacktestFeeder {
                 sk: &SymbolKey,
                 ks: &KeyState,
             ) {
+                if ks.done {
+                    return;
+                }
                 if let Some((&t, _)) = ks.buf.iter().next() {
                     heap.push(HeapEntry {
                         t,
@@ -252,10 +275,15 @@ impl BacktestFeeder {
                                         (None, None)
                                     }
                                 };
-                            let start =
-                                earliest_opt.unwrap_or_else(|| Utc.timestamp_opt(0, 0).unwrap());
-
-                            // Initialize KeyState at start
+                            let epoch = Utc.timestamp_opt(0, 0).unwrap();
+                            let mut start = earliest_opt.unwrap_or(epoch);
+                            // Respect configured range start if provided
+                            if let Some(rs) = cfg.range_start
+                                && rs > start
+                            {
+                                start = rs;
+                            }
+                            // Initialize KeyState at the start
                             let mut ks = KeyState {
                                 provider,
                                 instrument: instr.clone(),
@@ -264,27 +292,42 @@ impl BacktestFeeder {
                                 window_end: start,
                                 buf: BTreeMap::new(),
                                 first_emitted: false,
+                                hard_stop: cfg.range_end,
+                                done: false,
                             };
 
                             // Warmup prefetch and emit if configured (from start - warmup up to start)
                             if !cfg.warmup.is_zero() {
-                                let warm_start =
+                                let lb = start.min(cfg.range_start.unwrap_or(start));
+                                let mut warm_start =
                                     start.checked_sub_signed(cfg.warmup).unwrap_or(start);
-                                match tt_database::queries::get_time_indexed(
-                                    &conn, provider, &instr, topic, warm_start, start,
-                                )
-                                .await
-                                {
-                                    Ok(map) => {
-                                        for (_t, vec) in map.iter() {
-                                            for item in vec {
-                                                emit_one(&bus_clone, item, provider).await;
+                                if warm_start < lb {
+                                    warm_start = lb;
+                                }
+                                if warm_start < start {
+                                    match tt_database::queries::get_time_indexed(
+                                        &conn, provider, &instr, topic, warm_start, start,
+                                    )
+                                    .await
+                                    {
+                                        Ok(map) => {
+                                            for (_t, vec) in map.iter() {
+                                                for item in vec {
+                                                    emit_one(&bus_clone, item, provider).await;
+                                                }
                                             }
                                         }
+                                        Err(e) => warn!("feeder warmup error: {:?}", e),
                                     }
-                                    Err(e) => warn!("feeder warmup error: {:?}", e),
                                 }
                             }
+                            // Signal warmup complete to the engine/strategy (even if warmup==0)
+                            let _ = bus_clone
+                                .route_response(Response::WarmupComplete {
+                                    topic,
+                                    instrument: instr.clone(),
+                                })
+                                .await;
                             // Prime first window after start
                             ks.cursor = start;
                             ensure_window(&mut ks, &conn, &cfg).await;
@@ -314,6 +357,16 @@ impl BacktestFeeder {
                 {
                     if let Some(ks) = keys.get_mut(&(topic, sk.clone())) {
                         if let Some(mut vec) = ks.buf.remove(&t) {
+                            // If we have a hard stop and this timestamp is beyond it, complete this key
+                            if let Some(hs) = ks.hard_stop
+                                && t > hs
+                            {
+                                ks.done = true;
+                                info!(topic=?topic, inst=%ks.instrument, stop=%hs, "backtest_feeder: reached hard stop; completing key");
+                                // Do not reinsert; drop key below
+                                keys.remove(&(topic, sk.clone()));
+                                continue;
+                            }
                             // First emission log for this key
                             if !ks.first_emitted {
                                 info!(topic=?topic, inst=%ks.instrument, ts=%t, count=%vec.len(), "backtest_feeder: emitting first data batch for key");
@@ -333,8 +386,10 @@ impl BacktestFeeder {
                             if t > ks.cursor {
                                 ks.cursor = t;
                             }
-                            // Refill window if close to end
-                            if ks.cursor + ChronoDuration::seconds(1) >= ks.window_end {
+                            // Refill window if close to end and not past hard stop
+                            let can_refill = ks.hard_stop.map(|hs| ks.cursor < hs).unwrap_or(true);
+                            if can_refill && ks.cursor + ChronoDuration::seconds(1) >= ks.window_end
+                            {
                                 ensure_window(ks, &conn, &cfg).await;
                             }
                         }

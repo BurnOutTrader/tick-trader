@@ -543,6 +543,11 @@ pub enum Response {
         topic: Topic,
         instrument: Instrument,
     },
+    // Warmup completion signal from providers/feeder. Allows engine to notify Strategy.
+    WarmupComplete {
+        topic: Topic,
+        instrument: Instrument,
+    },
     // Historical DB update completion notification (response to DbUpdateKeyLatest)
     DbUpdateComplete {
         provider: ProviderKind,

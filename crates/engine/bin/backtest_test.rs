@@ -1,6 +1,6 @@
+use chrono::Utc;
 use std::str::FromStr;
 use std::time::Duration;
-
 use tokio::time::sleep;
 use tracing::info;
 use tracing::level_filters::LevelFilter;
@@ -113,8 +113,11 @@ async fn main() -> anyhow::Result<()> {
     // Ensure database schema is initialized like the server does
     tt_database::schema::ensure_schema(&db).await?;
 
+    let end_date = Utc::now().date_naive();
+    let start_date = end_date - chrono::Duration::days(10);
+
     // Configure and start backtest
-    let cfg = BacktestConfig::default();
+    let cfg = BacktestConfig::from_to(start_date, end_date);
     let strategy = BacktestDataStrategy::default();
     let (_engine_handle, _feeder_handle) = start_backtest(db, cfg, strategy).await?;
 

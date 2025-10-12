@@ -701,7 +701,10 @@ impl EngineRuntime {
                                 }
                                 _ => {}
                             }
-                            match resp {
+                match resp {
+                    Response::WarmupComplete{ .. } => {
+                       strategy_for_task.on_warmup_complete();
+                    },
                     Response::TickBatch(TickBatch {
                         ticks,
                         provider_kind,
