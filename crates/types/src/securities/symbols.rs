@@ -295,6 +295,10 @@ impl Instrument {
 
         Self::build_canonical_month(root, &format!("{}{}", m as char, digs))
     }
+    #[inline]
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
 }
 
 impl FromStr for Instrument {
