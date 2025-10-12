@@ -1,7 +1,3 @@
-pub(crate) mod backtest_clock;
-mod backtest_execution;
-pub mod backtest_feeder;
-pub mod default_models;
 pub(crate) mod engine;
 pub mod handle;
 pub(crate) mod helpers;
@@ -9,3 +5,4 @@ pub mod models;
 pub(crate) mod portfolio;
 pub mod runtime;
 pub mod traits;
+pub mod backtest;

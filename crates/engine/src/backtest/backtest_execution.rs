@@ -1,4 +1,4 @@
-use crate::default_models::FillConfig;
+use crate::backtest::default_models::FillConfig;
 use crate::traits::{FeeModel, FillModel, LatencyModel, RiskModel, SessionCalendar, SlippageModel};
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;

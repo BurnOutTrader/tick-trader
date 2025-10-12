@@ -11,7 +11,7 @@ use tt_types::providers::ProviderKind;
 use tt_types::securities::symbols::Instrument;
 use tt_types::wire::Response;
 
-use crate::backtest_clock::BacktestClock;
+use crate::backtest::backtest_clock::BacktestClock;
 
 /// Windowed DB feeder that simulates a provider by emitting Responses over an in-process bus.
 /// It listens for SubscribeKey/UnsubscribeKey requests on a request channel you provide when
