@@ -3,7 +3,9 @@ use std::sync::Arc;
 use anyhow::Result;
 
 use crate::backtest::backtest_clock::BacktestClock;
-use crate::backtest::backtest_feeder::{BacktestFeeder, BacktestFeederConfig, BacktestFeederHandle};
+use crate::backtest::backtest_feeder::{
+    BacktestFeeder, BacktestFeederConfig, BacktestFeederHandle,
+};
 use crate::handle::EngineHandle;
 use crate::runtime::EngineRuntime;
 use crate::traits::Strategy;
@@ -19,6 +21,7 @@ pub struct BacktestConfig {
     pub clock: Option<Arc<BacktestClock>>,
 }
 
+#[allow(clippy::derivable_impls)]
 impl Default for BacktestConfig {
     fn default() -> Self {
         Self {

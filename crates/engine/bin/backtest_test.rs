@@ -5,7 +5,7 @@ use tokio::time::sleep;
 use tracing::info;
 use tracing::level_filters::LevelFilter;
 
-use tt_engine::backtest::orchestrator::{start_backtest, BacktestConfig};
+use tt_engine::backtest::orchestrator::{BacktestConfig, start_backtest};
 use tt_engine::handle::EngineHandle;
 use tt_engine::models::DataTopic;
 use tt_engine::traits::Strategy;

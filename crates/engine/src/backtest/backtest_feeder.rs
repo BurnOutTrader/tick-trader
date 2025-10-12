@@ -9,7 +9,7 @@ use tt_bus::ClientMessageBus;
 use tt_types::keys::{SymbolKey, Topic};
 use tt_types::providers::ProviderKind;
 use tt_types::securities::symbols::Instrument;
-use tt_types::wire::{Response, BarBatch};
+use tt_types::wire::{BarBatch, Response};
 
 use crate::backtest::backtest_clock::BacktestClock;
 
@@ -31,7 +31,7 @@ impl Default for BacktestFeederConfig {
         // Default to fetching one month at a time to reduce query fan-out and round-trips
         // for historical backtests. Lookahead provides a small buffer to avoid tight refills.
         Self {
-            window: ChronoDuration::days(5),
+            window: ChronoDuration::days(30),
             lookahead: ChronoDuration::days(1),
             warmup: ChronoDuration::zero(),
         }
@@ -168,11 +168,9 @@ impl BacktestFeeder {
                 match c.resolution {
                     Resolution::Seconds(1) => Topic::Candles1s,
                     Resolution::Minutes(1) => Topic::Candles1m,
-                    Resolution::Hours(h) => {
-                        if h == 1 { Topic::Candles1h } else { Topic::Candles1h }
-                    }
+                    Resolution::Hours(1) => Topic::Candles1h,
                     Resolution::Daily => Topic::Candles1d,
-                    _ => Topic::Candles1m,
+                    _ => panic!("unexpected resolution"),
                 }
             }
 
@@ -208,7 +206,12 @@ impl BacktestFeeder {
                     }
                     tt_database::queries::TopicDataEnum::Candle(c) => {
                         // Emit as a BarBatch (even for a single candle) to carry a topic for routing
-                        let batch = BarBatch { topic: topic_for_candle(c), seq: 0, bars: vec![c.clone()], provider_kind: provider };
+                        let batch = BarBatch {
+                            topic: topic_for_candle(c),
+                            seq: 0,
+                            bars: vec![c.clone()],
+                            provider_kind: provider,
+                        };
                         let _ = bus.route_response(Response::BarBatch(batch)).await;
                     }
                 }
@@ -216,105 +219,131 @@ impl BacktestFeeder {
 
             // Main loop: interleave handling of requests with emitting events in time order
             loop {
-                tokio::select! {
-                    Some(req) = req_rx.recv() => {
-                        use tt_types::wire::Request;
-                        match req {
-                            Request::SubscribeKey(skreq) => {
-                                // Acknowledge subscribe immediately
-                                let instr = skreq.key.instrument.clone();
-                                let topic = skreq.topic;
-                                let provider = skreq.key.provider;
-                                let _ = bus_clone.route_response(Response::SubscribeResponse { topic, instrument: instr.clone(), success: true }).await;
+                // 1) Drain any pending requests without blocking
+                while let Ok(req) = req_rx.try_recv() {
+                    use tt_types::wire::Request;
+                    match req {
+                        Request::SubscribeKey(skreq) => {
+                            // Acknowledge subscribe immediately
+                            let instr = skreq.key.instrument.clone();
+                            let topic = skreq.topic;
+                            let provider = skreq.key.provider;
+                            let _ = bus_clone
+                                .route_response(Response::SubscribeResponse {
+                                    topic,
+                                    instrument: instr.clone(),
+                                    success: true,
+                                })
+                                .await;
 
-                                // Determine start time from DB extent (earliest available); fallback to epoch if none
-                                let (earliest_opt, _latest_opt) = match tt_database::queries::get_extent(&conn, provider, &instr, topic).await {
+                            // Determine start time from DB extent (earliest available); fallback to epoch if none
+                            let (earliest_opt, _latest_opt) =
+                                match tt_database::queries::get_extent(
+                                    &conn, provider, &instr, topic,
+                                )
+                                .await
+                                {
                                     Ok(e) => {
-                                        info!("{:?}",e);
+                                        info!("{:?}", e);
                                         e
-                                    },
+                                    }
                                     Err(e) => {
                                         warn!("feeder: get_extent error: {:?}", e);
                                         (None, None)
                                     }
                                 };
-                                let start = earliest_opt.unwrap_or_else(|| Utc.timestamp_opt(0,0).unwrap());
+                            let start =
+                                earliest_opt.unwrap_or_else(|| Utc.timestamp_opt(0, 0).unwrap());
 
-                                // Initialize KeyState at start
-                                let mut ks = KeyState {
-                                    provider,
-                                    instrument: instr.clone(),
-                                    topic,
-                                    cursor: start,
-                                    window_end: start,
-                                    buf: BTreeMap::new(),
-                                    first_emitted: false,
-                                };
+                            // Initialize KeyState at start
+                            let mut ks = KeyState {
+                                provider,
+                                instrument: instr.clone(),
+                                topic,
+                                cursor: start,
+                                window_end: start,
+                                buf: BTreeMap::new(),
+                                first_emitted: false,
+                            };
 
-                                // Warmup prefetch and emit if configured (from start - warmup up to start)
-                                if !cfg.warmup.is_zero() {
-                                    let warm_start = start.checked_sub_signed(cfg.warmup).unwrap_or(start);
-                                    match tt_database::queries::get_time_indexed(&conn, provider, &instr, topic, warm_start, start).await {
-                                        Ok(map) => {
-                                            for (_t, vec) in map.iter() {
-                                                for item in vec {
-                                                    emit_one(&bus_clone, item, provider).await;
-                                                }
+                            // Warmup prefetch and emit if configured (from start - warmup up to start)
+                            if !cfg.warmup.is_zero() {
+                                let warm_start =
+                                    start.checked_sub_signed(cfg.warmup).unwrap_or(start);
+                                match tt_database::queries::get_time_indexed(
+                                    &conn, provider, &instr, topic, warm_start, start,
+                                )
+                                .await
+                                {
+                                    Ok(map) => {
+                                        for (_t, vec) in map.iter() {
+                                            for item in vec {
+                                                emit_one(&bus_clone, item, provider).await;
                                             }
                                         }
-                                        Err(e) => warn!("feeder warmup error: {:?}", e),
                                     }
+                                    Err(e) => warn!("feeder warmup error: {:?}", e),
                                 }
-                                // Prime first window after start
-                                ks.cursor = start;
-                                ensure_window(&mut ks, &conn, &cfg).await;
-                                push_next_for_key(&mut heap, topic, &skreq.key, &ks);
-                                keys.insert((topic, skreq.key.clone()), ks);
                             }
-                            Request::UnsubscribeKey(ureq) => {
-                                keys.remove(&(ureq.topic, ureq.key.clone()));
-                                // No specific unsubscribe response in wire; engine will see UnsubscribeResponse only from server in live.
-                                let _ = bus_clone.route_response(Response::UnsubscribeResponse { topic: ureq.topic, instrument: ureq.key.instrument.clone() }).await;
-                            }
-                            // Ignore others in backtest feeder
-                            _ => {}
+                            // Prime first window after start
+                            ks.cursor = start;
+                            ensure_window(&mut ks, &conn, &cfg).await;
+                            push_next_for_key(&mut heap, topic, &skreq.key, &ks);
+                            keys.insert((topic, skreq.key.clone()), ks);
                         }
-                    }
-                    else => {
-                        // If we have any data, emit the next earliest event across all keys
-                        if let Some(HeapEntry{ t, key: (topic, sk) }) = heap.pop() {
-                            if let Some(ks) = keys.get_mut(&(topic, sk.clone())) {
-                                if let Some(mut vec) = ks.buf.remove(&t) {
-                                    // First emission log for this key
-                                    if !ks.first_emitted {
-                                        info!(topic=?topic, inst=%ks.instrument, ts=%t, count=%vec.len(), "backtest_feeder: emitting first data batch for key");
-                                        ks.first_emitted = true;
-                                    }
-                                    // Advance clock deterministically to event time
-                                    if let Some(ref clock) = clock {
-                                        let ns = t.timestamp_nanos_opt().unwrap_or(0) as u64; // negative times clamp to 0
-                                        clock.advance_to_at_least(ns);
-                                        clock.bump_ns(1);
-                                    }
-                                    // Emit all items at this timestamp in recorded order
-                                    for item in vec.drain(..) {
-                                        emit_one(&bus_clone, &item, ks.provider).await;
-                                    }
-                                    // Move cursor up to at least this t
-                                    if t > ks.cursor { ks.cursor = t; }
-                                    // Refill window if close to end
-                                    if ks.cursor + ChronoDuration::seconds(1) >= ks.window_end {
-                                        ensure_window(ks, &conn, &cfg).await;
-                                    }
-                                }
-                                // Push next time for this key, if any
-                                push_next_for_key(&mut heap, topic, &sk, ks);
-                            }
-                        } else {
-                            // idle yield
-                            tokio::task::yield_now().await;
+                        Request::UnsubscribeKey(ureq) => {
+                            keys.remove(&(ureq.topic, ureq.key.clone()));
+                            // No specific unsubscribe response in wire; engine will see UnsubscribeResponse only from server in live.
+                            let _ = bus_clone
+                                .route_response(Response::UnsubscribeResponse {
+                                    topic: ureq.topic,
+                                    instrument: ureq.key.instrument.clone(),
+                                })
+                                .await;
                         }
+                        // Ignore others in backtest feeder
+                        _ => {}
                     }
+                }
+
+                // 2) Emit the next earliest event across all keys if available
+                if let Some(HeapEntry {
+                    t,
+                    key: (topic, sk),
+                }) = heap.pop()
+                {
+                    if let Some(ks) = keys.get_mut(&(topic, sk.clone())) {
+                        if let Some(mut vec) = ks.buf.remove(&t) {
+                            // First emission log for this key
+                            if !ks.first_emitted {
+                                info!(topic=?topic, inst=%ks.instrument, ts=%t, count=%vec.len(), "backtest_feeder: emitting first data batch for key");
+                                ks.first_emitted = true;
+                            }
+                            // Advance clock deterministically to event time
+                            if let Some(ref clock) = clock {
+                                let ns = t.timestamp_nanos_opt().unwrap_or(0) as u64; // negative times clamp to 0
+                                clock.advance_to_at_least(ns);
+                                clock.bump_ns(1);
+                            }
+                            // Emit all items at this timestamp in recorded order
+                            for item in vec.drain(..) {
+                                emit_one(&bus_clone, &item, ks.provider).await;
+                            }
+                            // Move cursor up to at least this t
+                            if t > ks.cursor {
+                                ks.cursor = t;
+                            }
+                            // Refill window if close to end
+                            if ks.cursor + ChronoDuration::seconds(1) >= ks.window_end {
+                                ensure_window(ks, &conn, &cfg).await;
+                            }
+                        }
+                        // Push next time for this key, if any
+                        push_next_for_key(&mut heap, topic, &sk, ks);
+                    }
+                } else {
+                    // idle yield
+                    tokio::task::yield_now().await;
                 }
             }
         });
