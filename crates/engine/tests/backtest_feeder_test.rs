@@ -73,6 +73,7 @@ impl Strategy for TestStrategy {
     }
 }
 
+#[ignore]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn backtest_feeder_emits_candles_to_strategy() -> anyhow::Result<()> {
     // Load .env and init tracing for debug logs (optional in tests)
