@@ -333,7 +333,7 @@ pub struct BracketWire {
     /// Number of ticks for bracket
     pub ticks: i32,
     /// Order type
-    pub r#type: OrderType,
+    pub order_type: OrderType,
 }
 
 /// Place a new order
@@ -349,7 +349,7 @@ pub struct PlaceOrder {
     /// Quantity
     pub qty: i64,
     /// Order type
-    pub r#type: OrderType,
+    pub order_type: OrderType,
     /// Limit price (if applicable)
     pub limit_price: Option<f64>,
     /// Stop price (if applicable)

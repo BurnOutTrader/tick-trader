@@ -139,7 +139,6 @@ pub enum Currency {
     JPY,
     TRY,
     USDT,
-    Other,
 }
 impl Currency {
     #[allow(clippy::should_implement_trait)]

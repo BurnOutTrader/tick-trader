@@ -1,7 +1,14 @@
+use chrono::{DateTime, Utc};
 use dotenvy::dotenv;
+use rust_decimal::Decimal;
+use std::borrow::Cow;
 use std::time::Instant;
+use tt_types::accounts::account::AccountName;
+use tt_types::accounts::events::Side;
 use tt_types::keys::{SymbolKey, Topic};
+use tt_types::securities::symbols::Instrument;
 use tt_types::server_side::traits::ProviderParams;
+use tt_types::wire::PlaceOrder;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubState {
@@ -152,4 +159,66 @@ pub enum Command {
     Place(tt_types::wire::PlaceOrder),
     Cancel(tt_types::wire::CancelOrder),
     Replace(tt_types::wire::ReplaceOrder),
+}
+
+/// Proposed portfolio change for margin checks.
+#[derive(Debug, Clone)]
+pub struct ProposedPortfolioChange {
+    /// Signed quantity change per instrument (net effect), simplified for now.
+    pub instrument: Instrument,
+    pub delta_qty: i64,
+    pub avg_price: Option<Decimal>,
+}
+
+/// Fill record exposed to fee/risk.
+#[derive(Debug, Clone)]
+pub struct Fill {
+    pub account_name: AccountName,
+    pub instrument: Instrument,
+    pub side: Side,
+    pub qty: i64,
+    pub price: Decimal,
+    /// Whether this interacted as maker (true) or taker (false).
+    pub maker: bool,
+}
+
+/// Context for fee calculations.
+#[derive(Debug, Clone)]
+pub struct FeeCtx {
+    pub sim_time: DateTime<Utc>,
+    pub instrument: Instrument,
+    pub account: AccountName,
+    /// If true, apply bankers rounding; otherwise venue-specific rounding may apply elsewhere.
+    pub rounding_bankers: bool,
+}
+
+/// Context provided to risk decisions.
+#[derive(Debug, Clone)]
+pub struct RiskCtx {
+    pub sim_time: DateTime<Utc>,
+    pub equity: Decimal,
+    pub day_realized_pnl: Decimal,
+    pub open_pnl: Decimal,
+    // Extend with positions, pending orders, symbol info as needed later.
+}
+
+/// Risk engine decision on incoming requests.
+#[derive(Debug, Clone)]
+pub enum RiskDecision {
+    Allow,
+    Revise(PlaceOrder),
+    Reject { reason: Cow<'static, str> },
+}
+
+/// Post-fill actions requested by risk (e.g., flatten after breach).
+#[derive(Debug, Clone)]
+pub enum PostFillAction {
+    None,
+    FlattenAll {
+        reason: &'static str,
+    },
+    FlattenInstr {
+        instrument: Instrument,
+        reason: &'static str,
+    },
 }

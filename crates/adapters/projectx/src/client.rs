@@ -615,7 +615,7 @@ impl ExecutionProvider for PXClient {
         let s = spec.clone();
         use crate::http::models::{BracketCfg, PlaceOrderReq};
         // Map typed spec to ProjectX PlaceOrderReq
-        let type_i = match spec.r#type {
+        let type_i = match spec.order_type {
             tt_types::wire::OrderType::Limit => 1,
             tt_types::wire::OrderType::Market => 2,
             tt_types::wire::OrderType::Stop => 4,
@@ -641,11 +641,11 @@ impl ExecutionProvider for PXClient {
         }
         let stop_loss_bracket = spec.stop_loss.map(|b| BracketCfg {
             ticks: b.ticks,
-            type_: map_type(b.r#type),
+            type_: map_type(b.order_type),
         });
         let take_profit_bracket = spec.take_profit.map(|b| BracketCfg {
             ticks: b.ticks,
-            type_: map_type(b.r#type),
+            type_: map_type(b.order_type),
         });
 
         if let Some(contract) = self.instruments.get(&spec.key.instrument) {

@@ -261,7 +261,7 @@ impl EngineRuntime {
         key: tt_types::keys::SymbolKey,
         side: tt_types::accounts::events::Side,
         qty: i64,
-        r#type: tt_types::wire::OrderType,
+        order_type: tt_types::wire::OrderType,
         limit_price: Option<rust_decimal::Decimal>,
         stop_price: Option<rust_decimal::Decimal>,
         trail_price: Option<rust_decimal::Decimal>,
@@ -274,7 +274,7 @@ impl EngineRuntime {
             key,
             side,
             qty,
-            r#type,
+            order_type,
             limit_price: limit_price.and_then(|d| d.to_f64()),
             stop_price: stop_price.and_then(|d| d.to_f64()),
             trail_price: trail_price.and_then(|d| d.to_f64()),
@@ -717,9 +717,9 @@ impl EngineRuntime {
                                 .consolidators
                                 .get_mut(&key)
                                 && let Some(out) = cons.on_tick(&t)
-                                && let tt_types::consolidators::ConsolidatedOut::Candle(c) = out
+                                && let tt_types::consolidators::ConsolidatedOut::Candle(ref c) = out
                             {
-                                strategy_for_task.on_bar(&c, provider_kind);
+                                strategy_for_task.on_bar(c, provider_kind);
                             }
                         }
                     }
@@ -737,9 +737,9 @@ impl EngineRuntime {
                                 .consolidators
                                 .get_mut(&key)
                                 && let Some(out) = cons.on_bbo(&q)
-                                && let tt_types::consolidators::ConsolidatedOut::Candle(c) = out
+                                && let tt_types::consolidators::ConsolidatedOut::Candle(ref c) = out
                             {
-                                strategy_for_task.on_bar(&c, provider_kind);
+                                strategy_for_task.on_bar(c, provider_kind);
                             }
                         }
                     }
@@ -765,9 +765,9 @@ impl EngineRuntime {
                             if let Some(mut cons) =
                                 handle_inner_for_task.consolidators.get_mut(&key)
                                 && let Some(out) = cons.on_candle(&b)
-                                && let tt_types::consolidators::ConsolidatedOut::Candle(c) = out
+                                && let tt_types::consolidators::ConsolidatedOut::Candle(ref c) = out
                             {
-                                strategy_for_task.on_bar(&c, provider_kind);
+                                strategy_for_task.on_bar(c, provider_kind);
                             }
                         }
                     }
