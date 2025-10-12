@@ -218,14 +218,14 @@ cargo run -p tt-server
 ```
 
 ### 3) Prepare .env with your provider credentials (ProjectX example):
-Warning: do not change db path unless you are experienced, It should remain a local address.
-If you change the db path for the main .env, you will also need to change the docker-compose.yml in tick-trader/pg
+Warning: do not change db connection unless you are experienced; it should remain a local address.
+If you change the DB mapping for the main .env, you will also need to change the docker-compose.yml in tick-trader/pg
 ```env
 PX_TOPSTEP_USERNAME=your_user
 PX_TOPSTEP_APIKEY=your_key
 PX_TOPSTEP_FIRM=topstep
 TT_BUS_ADDR=/tmp/tick-trader.sock
-DB_PATH=127.0.0.1:5432:5432 
+DATABASE_URL=127.0.0.1:5432:5432
 ```
 
 ### 4) Run the test strategy (client) in another terminal:

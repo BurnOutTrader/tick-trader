@@ -6,11 +6,10 @@ Quick start (local Postgres via Docker):
 1. cd pg && cp .env.example .env
 2. chmod +x init/01-init.sh
 3. docker compose up -d
-4. Export DATABASE_URL (or rely on DB_PATH fallback described below)
+4. Set DATABASE_URL. Short form like 127.0.0.1:5432:5432 is accepted and expanded automatically.
 
 Environment:
-- DATABASE_URL: postgres://user:pass@host:port/tick_trader
-- If not set, components synthesize a URL from DB_PATH like host:host_port:container_port (default 127.0.0.1:5432:5432) and pg/.env.example defaults.
+- DATABASE_URL: Either a full postgres URL (postgres://user:pass@host:port/tick_trader) or a short form host[:port[:container_port]] like 127.0.0.1:5432:5432 which is expanded using pg/.env defaults (POSTGRES_USER, POSTGRES_PASSWORD, TT_DB).
 
 Schema overview (see crates/database/src/schema.rs):
 - instrument(id BIGSERIAL, sym TEXT UNIQUE)

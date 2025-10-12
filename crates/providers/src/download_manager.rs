@@ -112,46 +112,9 @@ impl DownloadManager {
     pub fn new() -> Self {
         // Load .env first
         dotenv().ok();
-        // Try to read DATABASE_URL; else synthesize from DB_PATH fallback and pg defaults
-        let fallback_url = if std::env::var("DATABASE_URL").is_err() {
-            // DB_PATH format like "127.0.0.1:5432:5432" (host:host_port:container_port)
-            let db_path =
-                std::env::var("DB_PATH").unwrap_or_else(|_| "127.0.0.1:5432:5432".to_string());
-            let parts: Vec<&str> = db_path.split(':').collect();
-            let (host, port) = match parts.as_slice() {
-                [h, p_host, _p_container] => (*h, *p_host),
-                [h, p] => (*h, *p),
-                [h] => (*h, "5432"),
-                _ => ("127.0.0.1", "5432"),
-            };
-            let user = std::env::var("POSTGRES_USER").unwrap_or_else(|_| "postgres".to_string());
-            let pass = std::env::var("POSTGRES_PASSWORD")
-                .unwrap_or_else(|_| "change-this-super-secret".to_string());
-            let db = std::env::var("TT_DB").unwrap_or_else(|_| "tick_trader".to_string());
-            Some(format!(
-                "postgres://{}:{}@{}:{}/{}",
-                user, pass, host, port, db
-            ))
-        } else {
-            None
-        };
-        let db = match tt_database::init::pool_from_env() {
-            Ok(p) => p,
-            Err(_) => {
-                let url = fallback_url.unwrap_or_else(|| {
-                    panic!("DATABASE_URL not set and no fallback could be constructed")
-                });
-                sqlx::postgres::PgPoolOptions::new()
-                    .max_connections(
-                        std::env::var("TT_DB_MAX_CONNS")
-                            .ok()
-                            .and_then(|s| s.parse().ok())
-                            .unwrap_or(8),
-                    )
-                    .connect_lazy(&url)
-                    .expect("failed to create Postgres pool from fallback URL")
-            }
-        };
+        // Rely on centralized DATABASE_URL handling (supports short-form) in tt_database::init
+        let db = tt_database::init::pool_from_env()
+            .expect("failed to initialize Postgres pool from env (check DATABASE_URL)");
         Self {
             inner: std::sync::Arc::new(DownloadManagerInner {
                 inflight: Arc::new(RwLock::new(HashMap::new())),

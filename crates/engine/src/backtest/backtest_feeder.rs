@@ -4,18 +4,19 @@ use std::collections::{BTreeMap, BinaryHeap, HashMap, VecDeque};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-use tracing::warn;
+use tracing::{info, warn};
 use tt_bus::ClientMessageBus;
 use tt_types::keys::{SymbolKey, Topic};
 use tt_types::providers::ProviderKind;
 use tt_types::securities::symbols::Instrument;
-use tt_types::wire::Response;
+use tt_types::wire::{Response, BarBatch};
 
 use crate::backtest::backtest_clock::BacktestClock;
 
 /// Windowed DB feeder that simulates a provider by emitting Responses over an in-process bus.
 /// It listens for SubscribeKey/UnsubscribeKey requests on a request channel you provide when
 /// constructing the bus via ClientMessageBus::new_with_transport(req_tx).
+#[derive(Clone)]
 pub struct BacktestFeederConfig {
     /// Size of prefetch window for each key (e.g., 30 minutes)
     pub window: ChronoDuration,
@@ -27,9 +28,11 @@ pub struct BacktestFeederConfig {
 }
 impl Default for BacktestFeederConfig {
     fn default() -> Self {
+        // Default to fetching one month at a time to reduce query fan-out and round-trips
+        // for historical backtests. Lookahead provides a small buffer to avoid tight refills.
         Self {
-            window: ChronoDuration::minutes(60),
-            lookahead: ChronoDuration::minutes(5),
+            window: ChronoDuration::days(5),
+            lookahead: ChronoDuration::days(1),
             warmup: ChronoDuration::zero(),
         }
     }
@@ -46,6 +49,8 @@ struct KeyState {
     window_end: DateTime<Utc>,
     /// Buffered events from DB for this key
     buf: BTreeMap<DateTime<Utc>, Vec<tt_database::queries::TopicDataEnum>>, // ordered by time
+    /// Emit info log once on first data emission to confirm flow
+    first_emitted: bool,
 }
 
 /// Min-heap entry used to merge across keys by next event time
@@ -126,9 +131,12 @@ impl BacktestFeeder {
                 .await
                 {
                     Ok(map) => {
+                        let mut rows = 0usize;
                         for (t, v) in map.into_iter() {
+                            rows += v.len();
                             ks.buf.entry(t).or_default().extend(v);
                         }
+                        info!(topic=?ks.topic, inst=%ks.instrument, start=%start, end=%end, rows, "backtest_feeder: fetched window");
                         ks.window_end = end;
                     }
                     Err(e) => {
@@ -154,6 +162,20 @@ impl BacktestFeeder {
             }
 
             // helper: normalize and emit a single TopicDataEnum as Response
+            // Map candle resolution to a Topic variant for batching
+            fn topic_for_candle(c: &tt_types::data::core::Candle) -> Topic {
+                use tt_types::data::models::Resolution;
+                match c.resolution {
+                    Resolution::Seconds(1) => Topic::Candles1s,
+                    Resolution::Minutes(1) => Topic::Candles1m,
+                    Resolution::Hours(h) => {
+                        if h == 1 { Topic::Candles1h } else { Topic::Candles1h }
+                    }
+                    Resolution::Daily => Topic::Candles1d,
+                    _ => Topic::Candles1m,
+                }
+            }
+
             async fn emit_one(
                 bus: &Arc<ClientMessageBus>,
                 tde: &tt_database::queries::TopicDataEnum,
@@ -185,12 +207,9 @@ impl BacktestFeeder {
                             .await;
                     }
                     tt_database::queries::TopicDataEnum::Candle(c) => {
-                        let _ = bus
-                            .route_response(Response::Bar {
-                                candle: c.clone(),
-                                provider_kind: provider,
-                            })
-                            .await;
+                        // Emit as a BarBatch (even for a single candle) to carry a topic for routing
+                        let batch = BarBatch { topic: topic_for_candle(c), seq: 0, bars: vec![c.clone()], provider_kind: provider };
+                        let _ = bus.route_response(Response::BarBatch(batch)).await;
                     }
                 }
             }
@@ -208,21 +227,34 @@ impl BacktestFeeder {
                                 let provider = skreq.key.provider;
                                 let _ = bus_clone.route_response(Response::SubscribeResponse { topic, instrument: instr.clone(), success: true }).await;
 
-                                // Initialize KeyState
-                                let now = Utc.timestamp_opt(0,0).unwrap();
+                                // Determine start time from DB extent (earliest available); fallback to epoch if none
+                                let (earliest_opt, _latest_opt) = match tt_database::queries::get_extent(&conn, provider, &instr, topic).await {
+                                    Ok(e) => {
+                                        info!("{:?}",e);
+                                        e
+                                    },
+                                    Err(e) => {
+                                        warn!("feeder: get_extent error: {:?}", e);
+                                        (None, None)
+                                    }
+                                };
+                                let start = earliest_opt.unwrap_or_else(|| Utc.timestamp_opt(0,0).unwrap());
+
+                                // Initialize KeyState at start
                                 let mut ks = KeyState {
                                     provider,
                                     instrument: instr.clone(),
                                     topic,
-                                    cursor: now,
-                                    window_end: now,
+                                    cursor: start,
+                                    window_end: start,
                                     buf: BTreeMap::new(),
+                                    first_emitted: false,
                                 };
 
-                                // Warmup prefetch and emit if configured
+                                // Warmup prefetch and emit if configured (from start - warmup up to start)
                                 if !cfg.warmup.is_zero() {
-                                    let start = now - cfg.warmup;
-                                    match tt_database::queries::get_time_indexed(&conn, provider, &instr, topic, start, now).await {
+                                    let warm_start = start.checked_sub_signed(cfg.warmup).unwrap_or(start);
+                                    match tt_database::queries::get_time_indexed(&conn, provider, &instr, topic, warm_start, start).await {
                                         Ok(map) => {
                                             for (_t, vec) in map.iter() {
                                                 for item in vec {
@@ -233,8 +265,8 @@ impl BacktestFeeder {
                                         Err(e) => warn!("feeder warmup error: {:?}", e),
                                     }
                                 }
-                                // Prime first window after now
-                                ks.cursor = now;
+                                // Prime first window after start
+                                ks.cursor = start;
                                 ensure_window(&mut ks, &conn, &cfg).await;
                                 push_next_for_key(&mut heap, topic, &skreq.key, &ks);
                                 keys.insert((topic, skreq.key.clone()), ks);
@@ -253,6 +285,11 @@ impl BacktestFeeder {
                         if let Some(HeapEntry{ t, key: (topic, sk) }) = heap.pop() {
                             if let Some(ks) = keys.get_mut(&(topic, sk.clone())) {
                                 if let Some(mut vec) = ks.buf.remove(&t) {
+                                    // First emission log for this key
+                                    if !ks.first_emitted {
+                                        info!(topic=?topic, inst=%ks.instrument, ts=%t, count=%vec.len(), "backtest_feeder: emitting first data batch for key");
+                                        ks.first_emitted = true;
+                                    }
                                     // Advance clock deterministically to event time
                                     if let Some(ref clock) = clock {
                                         let ns = t.timestamp_nanos_opt().unwrap_or(0) as u64; // negative times clamp to 0

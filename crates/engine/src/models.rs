@@ -66,7 +66,8 @@ impl Default for EngineConfig {
             bars1s_window_secs: crate::helpers::env_u64("TT_BARS1S_WINDOW_SECS", 600),
             bars1m_window_secs: crate::helpers::env_u64("TT_BARS1M_WINDOW_SECS", 3600),
             depth_ring_secs: crate::helpers::env_u64("TT_DEPTH_RING_SECS", 5),
-            db_path: crate::helpers::env_string("DB_PATH", "./storage"),
+            // Deprecated: this used to read DB_PATH. Now we mirror DATABASE_URL (which may be a short form)
+            db_path: crate::helpers::env_string("DATABASE_URL", ""),
         }
     }
 }
