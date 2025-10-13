@@ -2,8 +2,8 @@ use chrono::Utc;
 use std::str::FromStr;
 use std::time::Duration;
 use tokio::time::sleep;
-use tracing::level_filters::LevelFilter;
 use tracing::info;
+use tracing::level_filters::LevelFilter;
 
 use tt_engine::backtest::orchestrator::{BacktestConfig, start_backtest};
 use tt_engine::handle::EngineHandle;
