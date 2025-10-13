@@ -109,14 +109,7 @@ async fn main() -> anyhow::Result<()> {
 
     let mut engine = EngineRuntime::new(bus.clone(), Some(500_000));
     let strategy = DataTestStrategy::default();
-    let handle = engine.start(strategy).await?;
-    handle
-        .update_historical_latest_by_key_async(
-            ProviderKind::ProjectX(ProjectXTenant::Topstep),
-            Topic::Candles1s,
-            Instrument::from_str("MNQ.Z25")?,
-        )
-        .await?;
+    let _handle = engine.start(strategy).await?;
 
     sleep(Duration::from_secs(60)).await;
 

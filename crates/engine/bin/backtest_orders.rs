@@ -89,7 +89,7 @@ impl Strategy for BacktestOrdersStrategy {
     fn on_start(&mut self, h: EngineHandle) {
         println!("backtest orders strategy start");
         // Subscribe to a modest data stream so marks update
-        h.subscribe_now(DataTopic::Candles1s, self.sk.clone());
+        h.subscribe_now(DataTopic::Candles1m, self.sk.clone());
         self.engine = Some(h);
     }
 
@@ -136,7 +136,7 @@ impl Strategy for BacktestOrdersStrategy {
                     None,
                 );
             }
-            2 => {
+            20 => {
                 let tag = "MKT_SELL";
                 self.record_expect(tag, true);
                 let _ = h.place_order(
@@ -153,7 +153,7 @@ impl Strategy for BacktestOrdersStrategy {
                     None,
                 );
             }
-            3 => {
+            30 => {
                 let tag = "LIM_BUY";
                 self.record_expect(tag, true);
                 let _ = h.place_order(
@@ -170,7 +170,7 @@ impl Strategy for BacktestOrdersStrategy {
                     None,
                 );
             }
-            4 => {
+            40 => {
                 let tag = "LIM_SELL";
                 self.record_expect(tag, true);
                 let _ = h.place_order(
@@ -187,7 +187,7 @@ impl Strategy for BacktestOrdersStrategy {
                     None,
                 );
             }
-            5 => {
+            50 => {
                 let tag = "STP_BUY";
                 self.record_expect(tag, true);
                 let _ = h.place_order(
@@ -204,7 +204,7 @@ impl Strategy for BacktestOrdersStrategy {
                     None,
                 );
             }
-            6 => {
+            60 => {
                 let tag = "STP_SELL";
                 self.record_expect(tag, true);
                 let _ = h.place_order(
@@ -221,7 +221,7 @@ impl Strategy for BacktestOrdersStrategy {
                     None,
                 );
             }
-            7 => {
+            70 => {
                 let tag = "STPLMT_BUY";
                 self.record_expect(tag, true);
                 let _ = h.place_order(
@@ -238,7 +238,7 @@ impl Strategy for BacktestOrdersStrategy {
                     None,
                 );
             }
-            8 => {
+            80 => {
                 let tag = "STPLMT_SELL";
                 self.record_expect(tag, true);
                 let _ = h.place_order(
@@ -255,7 +255,7 @@ impl Strategy for BacktestOrdersStrategy {
                     None,
                 );
             }
-            9 => {
+            90 => {
                 let tag = "JOIN_BID_BUY";
                 self.record_expect(tag, false);
                 let _ = h.place_order(
@@ -272,7 +272,7 @@ impl Strategy for BacktestOrdersStrategy {
                     None,
                 );
             }
-            10 => {
+            100 => {
                 let tag = "JOIN_ASK_SELL";
                 self.record_expect(tag, false);
                 let _ = h.place_order(
@@ -289,7 +289,7 @@ impl Strategy for BacktestOrdersStrategy {
                     None,
                 );
             }
-            11 => {
+            110 => {
                 let tag = "TRAIL_BUY";
                 self.record_expect(tag, false);
                 let _ = h.place_order(
@@ -306,7 +306,7 @@ impl Strategy for BacktestOrdersStrategy {
                     None,
                 );
             }
-            12 => {
+            120 => {
                 let tag = "TRAIL_SELL";
                 self.record_expect(tag, false);
                 let _ = h.place_order(
@@ -419,12 +419,12 @@ async fn main() -> anyhow::Result<()> {
     let start_date = end_date - chrono::Duration::days(30);
 
     // Configure and start backtest
-    let cfg = BacktestConfig::from_to(chrono::Duration::milliseconds(100), start_date, end_date);
+    let cfg = BacktestConfig::from_to(chrono::Duration::milliseconds(250), start_date, end_date);
     let strategy = BacktestOrdersStrategy::default();
     let (_engine_handle, _feeder_handle) = start_backtest(db, cfg, strategy).await?;
 
     // Allow time for data and order lifecycle to flow
-    sleep(Duration::from_secs(400)).await;
+    sleep(Duration::from_secs(500)).await;
 
     Ok(())
 }

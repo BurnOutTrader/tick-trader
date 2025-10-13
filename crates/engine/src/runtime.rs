@@ -880,13 +880,6 @@ impl EngineRuntime {
                             }
                             strategy_for_task.on_positions_batch(&pb2);
                             // In backtest mode, whenever positions structurally change, emit an account snapshot too.
-                            if handle_inner_for_task.backtest_mode {
-                                let now_bt = last_bt_now.unwrap_or_else(chrono::Utc::now);
-                                let ab = pm.accounts_snapshot(now_bt);
-                                if !ab.accounts.is_empty() {
-                                    let _ = tx_internal.try_send(Response::AccountDeltaBatch(ab));
-                                }
-                            }
                         }
                     }
                     Response::AccountDeltaBatch(ab) => {
