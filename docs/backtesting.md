@@ -120,7 +120,6 @@ SessionCalendar (default: HoursCalendar)
 - No queue priority modeling at touch; no order book queue position.
 - Default slippage is none; consider custom models for gap/impact.
 - TIF (IOC/FOK) and bracket orders are not yet simulated end-to-end.
-- Maker rebates are not modeled by default, though maker attribution exists for future fee tiers.
 
 
 ## Links
