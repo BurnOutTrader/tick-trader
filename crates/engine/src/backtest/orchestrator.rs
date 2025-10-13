@@ -12,6 +12,9 @@ use std::sync::Arc;
 /// Configuration for launching a backtest session.
 #[derive(Clone)]
 pub struct BacktestConfig {
+    /// Fixed step duration for orchestrated time advancement. The orchestrator
+    /// will advance logical time by this duration, requesting the feeder to emit up to each step.
+    pub step: chrono::Duration,
     /// Feeder (historical DB) parameters.
     pub feeder: BacktestFeederConfig,
     /// Optional slow-spin (in microseconds) to throttle internal loops for debugging.
@@ -25,8 +28,19 @@ pub struct BacktestConfig {
 }
 
 impl BacktestConfig {
-    pub fn from_to(start: NaiveDate, end: NaiveDate) -> BacktestConfig {
+    pub fn new(step: chrono::Duration) -> BacktestConfig {
         Self {
+            step,
+            feeder: BacktestFeederConfig::default(),
+            slow_spin: None,
+            clock: None,
+            start_date: None,
+            end_date: None,
+        }
+    }
+    pub fn from_to(step: chrono::Duration, start: NaiveDate, end: NaiveDate) -> BacktestConfig {
+        Self {
+            step,
             feeder: BacktestFeederConfig::default(),
             slow_spin: None,
             clock: None,
@@ -40,6 +54,7 @@ impl BacktestConfig {
 impl Default for BacktestConfig {
     fn default() -> Self {
         Self {
+            step: chrono::Duration::seconds(1),
             feeder: BacktestFeederConfig::default(),
             slow_spin: None,
             clock: None,
@@ -83,6 +98,45 @@ pub async fn start_backtest<S: Strategy>(
 
     // Start the strategy.
     let handle = rt.start(strategy).await?;
+
+    // Validate step > 0 and spawn orchestrator loop to advance time in discrete steps.
+    if cfg.step <= chrono::Duration::zero() {
+        anyhow::bail!("BacktestConfig.step must be positive");
+    }
+    let step = cfg.step;
+    let bus = feeder.bus.clone();
+    let sub_id = handle.inner.sub_id.clone();
+    let start = cfg
+        .feeder
+        .range_start
+        .unwrap_or_else(|| Utc.timestamp_opt(0, 0).unwrap());
+    let end_opt = cfg.feeder.range_end;
+    tokio::spawn(async move {
+        let mut now = start;
+        loop {
+            if let Some(end) = end_opt
+                && now >= end
+            {
+                break;
+            }
+            now += step;
+            // Request feeder to emit up to `now`
+            let _ = bus
+                .handle_request(
+                    &sub_id,
+                    tt_types::wire::Request::BacktestAdvanceTo(tt_types::wire::BacktestAdvanceTo {
+                        to: now,
+                    }),
+                )
+                .await;
+            // Let runtime know logical time advanced; feeder will also emit this after draining
+            let _ = bus
+                .route_response(tt_types::wire::Response::BacktestTimeUpdated { now })
+                .await;
+            // Yield to allow feeder/engine to process
+            tokio::task::yield_now().await;
+        }
+    });
 
     Ok((handle, feeder))
 }

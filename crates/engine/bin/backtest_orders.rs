@@ -193,7 +193,7 @@ async fn main() -> anyhow::Result<()> {
     let start_date = end_date - chrono::Duration::days(30);
 
     // Configure and start backtest
-    let cfg = BacktestConfig::from_to(start_date, end_date);
+    let cfg = BacktestConfig::from_to(chrono::Duration::minutes(1), start_date, end_date);
     let strategy = BacktestOrdersStrategy::default();
     let (_engine_handle, _feeder_handle) = start_backtest(db, cfg, strategy).await?;
 

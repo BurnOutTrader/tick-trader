@@ -123,6 +123,8 @@ impl BacktestFeeder {
             let mut _out_q: VecDeque<Response> = VecDeque::new();
             // Last known mark price per (provider,instrument) to price synthetic fills
             let mut marks: HashMap<(ProviderKind, Instrument), Decimal> = HashMap::new();
+            // Orchestrator-controlled logical time watermark; only emit events <= this time.
+            let mut watermark: Option<DateTime<Utc>> = None;
 
             // helper: ensure a key has data loaded up to cursor+window
             async fn ensure_window(
@@ -354,6 +356,92 @@ impl BacktestFeeder {
                             // Backtest: no backend; portfolio updates will be driven by our synthetic orders
                             // We could emit an initial empty snapshot in the future.
                         }
+                        Request::BacktestAdvanceTo(bta) => {
+                            // Update watermark and drain events up to this time
+                            watermark = Some(bta.to);
+                            // Drain in-order up to watermark
+                            'drain: loop {
+                                if let Some(next) = heap.peek() {
+                                    if let Some(wm) = watermark {
+                                        if next.t > wm {
+                                            break 'drain;
+                                        }
+                                    } else {
+                                        break 'drain;
+                                    }
+                                } else {
+                                    break 'drain;
+                                }
+                                // Safe to unwrap due to peek above
+                                if let Some(HeapEntry {
+                                    t,
+                                    key: (topic, sk),
+                                }) = heap.pop()
+                                    && let Some(ks) = keys.get_mut(&(topic, sk.clone()))
+                                {
+                                    if let Some(mut vec) = ks.buf.remove(&t) {
+                                        if let Some(hs) = ks.hard_stop
+                                            && t > hs
+                                        {
+                                            ks.done = true;
+                                            info!(topic=?topic, inst=%ks.instrument, stop=%hs, "backtest_feeder: reached hard stop; completing key");
+                                            keys.remove(&(topic, sk.clone()));
+                                            continue;
+                                        }
+                                        if !ks.first_emitted {
+                                            info!(topic=?topic, inst=%ks.instrument, ts=%t, count=%vec.len(), "backtest_feeder: emitting first data batch for key");
+                                            ks.first_emitted = true;
+                                        }
+                                        if let Some(ref clock) = clock {
+                                            let ns = t.timestamp_nanos_opt().unwrap_or(0) as u64;
+                                            clock.advance_to_at_least(ns);
+                                            clock.bump_ns(1);
+                                        }
+                                        for item in vec.drain(..) {
+                                            match &item {
+                                                tt_database::queries::TopicDataEnum::Tick(tk) => {
+                                                    marks.insert(
+                                                        (ks.provider, tk.instrument.clone()),
+                                                        tk.price,
+                                                    );
+                                                }
+                                                tt_database::queries::TopicDataEnum::Bbo(bbo) => {
+                                                    marks.insert(
+                                                        (ks.provider, bbo.instrument.clone()),
+                                                        bbo.bid,
+                                                    );
+                                                }
+                                                tt_database::queries::TopicDataEnum::Candle(c) => {
+                                                    marks.insert(
+                                                        (ks.provider, c.instrument.clone()),
+                                                        c.close,
+                                                    );
+                                                }
+                                                tt_database::queries::TopicDataEnum::Mbp10(_m) => {}
+                                            }
+                                            emit_one(&bus_clone, &item, ks.provider).await;
+                                        }
+                                        if t > ks.cursor {
+                                            ks.cursor = t;
+                                        }
+                                        let can_refill =
+                                            ks.hard_stop.map(|hs| ks.cursor < hs).unwrap_or(true);
+                                        if can_refill
+                                            && ks.cursor + ChronoDuration::seconds(1)
+                                                >= ks.window_end
+                                        {
+                                            ensure_window(ks, &conn, &cfg).await;
+                                        }
+                                    }
+                                    // Push next
+                                    push_next_for_key(&mut heap, topic, &sk, ks);
+                                }
+                            }
+                            // After draining up to watermark, notify runtime of logical time
+                            let _ = bus_clone
+                                .route_response(Response::BacktestTimeUpdated { now: bta.to })
+                                .await;
+                        }
                         Request::PlaceOrder(spec) => {
                             // Synthesize an immediate fill at last known mark
                             let prov = spec.account_key.provider;
@@ -425,12 +513,16 @@ impl BacktestFeeder {
                     }
                 }
 
-                // 2) Emit the next earliest event across all keys if available
-                if let Some(HeapEntry {
-                    t,
-                    key: (topic, sk),
-                }) = heap.pop()
+                // 2) Emit the next earliest event across all keys if available AND <= watermark
+                let mut did_work = false;
+                if let Some(peek) = heap.peek()
+                    && let Some(wm) = watermark
+                    && peek.t <= wm
                 {
+                    let HeapEntry {
+                        t,
+                        key: (topic, sk),
+                    } = heap.pop().unwrap();
                     if let Some(ks) = keys.get_mut(&(topic, sk.clone())) {
                         if let Some(mut vec) = ks.buf.remove(&t) {
                             // If we have a hard stop and this timestamp is beyond it, complete this key
@@ -487,8 +579,10 @@ impl BacktestFeeder {
                         }
                         // Push next time for this key, if any
                         push_next_for_key(&mut heap, topic, &sk, ks);
+                        did_work = true;
                     }
-                } else {
+                }
+                if !did_work {
                     // idle yield
                     tokio::task::yield_now().await;
                 }

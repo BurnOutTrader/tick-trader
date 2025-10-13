@@ -630,6 +630,10 @@ impl EngineRuntime {
         let slow_spin_ns = self.slow_spin_ns;
         let handle_task = tokio::spawn(async move {
             let mut rx = rx;
+            // Track last time we emitted a positions snapshot in backtest mode
+            let mut last_pos_emit_bt: Option<chrono::DateTime<chrono::Utc>> = None;
+            // Determine snapshot cadence from latency model //todo[latency] not sure how i will handle acual models yet. maybe overkill??
+            let pos_refresh_every = Duration::from_millis(500);
             // Initial drain to process any commands enqueued during on_start (e.g., subscribe_now)
             Self::drain_commands_for_task(
                 cmd_q_for_task.clone(),
@@ -665,25 +669,22 @@ impl EngineRuntime {
                     biased;
                     // Drive time-based consolidation first if due
                     _ = ticker.tick() => {
-                        if !handle_inner_for_task.backtest_mode && !handle_inner_for_task.consolidators.is_empty() {
+                        if !handle_inner_for_task.backtest_mode {
                             let now = chrono::Utc::now();
-
                             // 1) Walk consolidators mutably and collect outputs.
-                            //    We *don't* call strategy while holding any shard lock.
-                            let mut outs: SmallVec<[(ProviderKind, Candle); 16]> = SmallVec::new();
-
-                            for mut entry in handle_inner_for_task.consolidators.iter_mut() {
-                                let provider = entry.key().provider;        // read key (cheap)
-                                if let Some(tt_types::consolidators::ConsolidatedOut::Candle(c)) =
-                                    entry.value_mut().on_time(now)
-                                {
-                                    outs.push((provider, c));
+                            if !handle_inner_for_task.consolidators.is_empty() {
+                                let mut outs: SmallVec<[(ProviderKind, Candle); 16]> = SmallVec::new();
+                                for mut entry in handle_inner_for_task.consolidators.iter_mut() {
+                                    let provider = entry.key().provider;        // read key (cheap)
+                                    if let Some(tt_types::consolidators::ConsolidatedOut::Candle(c)) =
+                                        entry.value_mut().on_time(now)
+                                    {
+                                        outs.push((provider, c));
+                                    }
+                                } // all MapRefMut guards dropped here; no locks held
+                                for (prov, c) in outs {
+                                    strategy_for_task.on_bar(&c, prov);
                                 }
-                            } // all MapRefMut guards dropped here; no locks held
-
-                            // 2) Now do marks + callbacks outside of DashMap locks.
-                            for (prov, c) in outs {
-                                strategy_for_task.on_bar(&c, prov);
                             }
                         }
                     },
@@ -720,17 +721,41 @@ impl EngineRuntime {
                             }
                 match resp {
                     Response::BacktestTimeUpdated { now } => {
-                        if handle_inner_for_task.backtest_mode && !handle_inner_for_task.consolidators.is_empty() {
-                            // Drive time-based consolidators using orchestrator-provided logical time
-                            let mut outs: SmallVec<[(ProviderKind, Candle); 16]> = SmallVec::new();
-                            for mut entry in handle_inner_for_task.consolidators.iter_mut() {
-                                let provider = entry.key().provider;
-                                if let Some(tt_types::consolidators::ConsolidatedOut::Candle(c)) = entry.value_mut().on_time(now) {
-                                    outs.push((provider, c));
+                        if handle_inner_for_task.backtest_mode {
+                            // 1) Drive time-based consolidators using orchestrator-provided logical time
+                            if !handle_inner_for_task.consolidators.is_empty() {
+                                let mut outs: SmallVec<[(ProviderKind, Candle); 16]> = SmallVec::new();
+                                for mut entry in handle_inner_for_task.consolidators.iter_mut() {
+                                    let provider = entry.key().provider;
+                                    if let Some(tt_types::consolidators::ConsolidatedOut::Candle(c)) = entry.value_mut().on_time(now) {
+                                        outs.push((provider, c));
+                                    }
+                                }
+                                for (prov, c) in outs {
+                                    strategy_for_task.on_bar(&c, prov);
                                 }
                             }
-                            for (prov, c) in outs {
-                                strategy_for_task.on_bar(&c, prov);
+                            // 2) Throttle position updates to once per second using logical time.
+                            //    Build a snapshot from the portfolio manager and route to strategy/bus.
+                            {
+                                use chrono::Duration as ChronoDuration;
+                                let interval = ChronoDuration::from_std(pos_refresh_every).unwrap_or_else(|_| ChronoDuration::seconds(1));
+                                let should_emit = match  last_pos_emit_bt {
+                                    None => { last_pos_emit_bt = Some(now); true },
+                                    Some(prev) => {
+                                        if now - prev >= interval {
+                                            last_pos_emit_bt = Some(now);
+                                            true
+                                        } else { false }
+                                    }
+                                };
+                                if should_emit {
+                                    let snapshot = pm.positions_snapshot(now);
+                                    // Only emit if there is at least one position tracked
+                                    if !snapshot.positions.is_empty() {
+                                        let _ = bus_for_task.route_response(Response::PositionsBatch(snapshot)).await;
+                                    }
+                                }
                             }
                         }
                     },

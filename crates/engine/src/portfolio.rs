@@ -443,6 +443,39 @@ impl PortfolioManager {
         self.last_accounts.read().expect("poisoned").clone()
     }
 
+    /// Build a snapshot of all known per-account positions with open_pnl recomputed from last marks.
+    /// The position times are set to `now` to reflect the snapshot emission time.
+    pub fn positions_snapshot(&self, now: DateTime<Utc>) -> PositionsBatch {
+        let mut out: Vec<PositionDelta> = Vec::new();
+        for acct_entry in self.positions_by_account.iter() {
+            for p in acct_entry.value().iter() {
+                let mut pd = p.value().clone();
+                // Recompute open_pnl from last mark if available
+                if let Some(mark) = self
+                    .last_price
+                    .get(&(pd.provider_kind, pd.instrument.clone()))
+                {
+                    pd.open_pnl = (*mark - pd.average_price) * pd.net_qty;
+                }
+                // Update side based on qty and set time to snapshot time
+                pd.side = if pd.net_qty.is_zero() {
+                    PositionSide::Flat
+                } else if pd.net_qty > Decimal::ZERO {
+                    PositionSide::Long
+                } else {
+                    PositionSide::Short
+                };
+                pd.time = now;
+                out.push(pd);
+            }
+        }
+        PositionsBatch {
+            topic: tt_types::keys::Topic::Positions,
+            seq: 0,
+            positions: out,
+        }
+    }
+
     #[allow(dead_code)]
     /// Adjust a PositionsBatch by recomputing open_pnl using last known marks in the portfolio.
     /// Does not mutate internal state; purely transforms the batch for downstream consumers.

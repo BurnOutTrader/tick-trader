@@ -150,6 +150,7 @@ pub struct OrderUpdate {
 pub enum PositionSide {
     Long,
     Short,
+    Flat,
 }
 #[derive(Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize)]
 #[archive(check_bytes)]

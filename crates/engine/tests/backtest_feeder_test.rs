@@ -132,7 +132,7 @@ async fn backtest_feeder_emits_candles_to_strategy() -> anyhow::Result<()> {
     };
 
     // Start backtest with the chosen date range
-    let cfg = BacktestConfig::from_to(start_date, end_date);
+    let cfg = BacktestConfig::from_to(chrono::Duration::minutes(1), start_date, end_date);
     let (_engine_handle, feeder_handle) = start_backtest(db, cfg, strategy).await?;
 
     // Wait until the strategy sees a few bars or timeout

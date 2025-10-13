@@ -45,4 +45,8 @@ impl LatencyModel for PxLatency {
     fn replace_rtt(&mut self) -> Duration {
         Duration::from_millis(self.replace_rtt_ms)
     }
+    fn positions_refresh_interval(&mut self) -> Duration {
+        // Tie the snapshot cadence to order acknowledgment granularity by default.
+        Duration::from_millis(self.submit_ack_ms.clamp(1, 250))
+    }
 }

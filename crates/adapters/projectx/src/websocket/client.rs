@@ -1336,7 +1336,9 @@ impl PxWebSocketClient {
                                         };
                                         self.positions
                                             .insert(instrument_id.clone(), position.clone());
-                                        let (net, side) = if position.r#type
+                                        let (net, side) = if position.size == 0 {
+                                            (Decimal::ZERO, PositionSide::Flat)
+                                        } else if position.r#type
                                             == models::PositionType::Short as i32
                                         {
                                             (-Decimal::from(position.size), PositionSide::Short)

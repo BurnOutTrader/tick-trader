@@ -52,6 +52,12 @@ pub trait LatencyModel: Send + Sync {
     fn replace_rtt(&mut self) -> Duration {
         Duration::from_millis(1)
     }
+    /// Frequency for emitting non-change position snapshots (throttle interval).
+    /// Engine uses this to periodically publish position states that haven't structurally changed
+    /// (i.e., only marks/PNL moving). Defaults to 1 second.
+    fn positions_refresh_interval(&mut self) -> Duration {
+        Duration::from_secs(1)
+    }
 }
 
 /// Fee model (maker/taker or flat)
