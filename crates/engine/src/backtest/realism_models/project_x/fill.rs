@@ -44,7 +44,7 @@ impl FillModel for CmeFillModel {
         order: &mut PlaceOrder,
         slip: &mut dyn SlippageModel,
         cal: &dyn SessionCalendar,
-        fee_model: &dyn FeeModel,
+        _fee_model: &dyn FeeModel,
     ) -> Vec<Fill> {
         let mut out = Vec::new();
         if !cal.is_open(&order.instrument, now) {
@@ -66,7 +66,7 @@ impl FillModel for CmeFillModel {
         } else {
             (None, None, None)
         };
-        let fee_ctx = FeeCtx {
+        let _fee_ctx = FeeCtx {
             sim_time: now,
             instrument: order.instrument.clone(),
         };
@@ -111,49 +111,77 @@ impl FillModel for CmeFillModel {
                 match order.side {
                     Side::Buy => {
                         if let Some(b) = book {
-                            let mut always_ok = |_p: Decimal| true;
-                            let rem = walk_depth(&b.ask_px, &b.ask_sz, &mut always_ok, Side::Buy);
-                            if rem > 0 && out.is_empty() {
-                                // No visible book or zero sizes: fall back to last price for a single fill
-                                let px_adj = slip.adjust(Side::Buy, last_price, spread, rem);
-                                out.push(Fill {
-                                    instrument: order.instrument.clone(),
-                                    qty: rem,
-                                    price: px_adj,
-                                    maker: false,
-                                });
+                            match self.cfg.market_policy {
+                                MarketPolicy::BookWalk => {
+                                    let mut always_ok = |_p: Decimal| true;
+                                    let rem = walk_depth(&b.ask_px, &b.ask_sz, &mut always_ok, Side::Buy);
+                                    if rem > 0 && out.is_empty() {
+                                        // No visible book or zero sizes: fall back to last price for a single fill
+                                        let px_adj = slip.adjust(Side::Buy, last_price, spread, rem);
+                                        out.push(Fill { instrument: order.instrument.clone(), qty: rem, price: px_adj, maker: false });
+                                    }
+                                }
+                                MarketPolicy::AtTouch => {
+                                    // Only consume level-1 ask, leave remainder (partial fill)
+                                    if let (Some(px0), Some(sz0)) = (b.ask_px.first().cloned(), b.ask_sz.first().cloned()) {
+                                        let take = order.qty.min(sz0.to_i64().unwrap_or(0).max(0));
+                                        if take > 0 {
+                                            let px_adj = slip.adjust(Side::Buy, px0, spread, take);
+                                            out.push(Fill { instrument: order.instrument.clone(), qty: take, price: px_adj, maker: false });
+                                        }
+                                    }
+                                }
+                                MarketPolicy::AtMid => {
+                                    if let (Some(bb), Some(ba)) = (best_bid, best_ask) {
+                                        let mid = (bb + ba) / Decimal::from(2i32);
+                                        let px_adj = slip.adjust(Side::Buy, mid, spread, order.qty);
+                                        out.push(Fill { instrument: order.instrument.clone(), qty: order.qty, price: px_adj, maker: false });
+                                    } else {
+                                        // Fallback to last price
+                                        let px_adj = slip.adjust(Side::Buy, last_price, spread, order.qty);
+                                        out.push(Fill { instrument: order.instrument.clone(), qty: order.qty, price: px_adj, maker: false });
+                                    }
+                                }
                             }
                         } else {
                             let px_adj = slip.adjust(Side::Buy, last_price, spread, order.qty);
-                            out.push(Fill {
-                                instrument: order.instrument.clone(),
-                                qty: order.qty,
-                                price: px_adj,
-                                maker: false,
-                            });
+                            out.push(Fill { instrument: order.instrument.clone(), qty: order.qty, price: px_adj, maker: false });
                         }
                     }
                     Side::Sell => {
                         if let Some(b) = book {
-                            let mut always_ok = |_p: Decimal| true;
-                            let rem = walk_depth(&b.bid_px, &b.bid_sz, &mut always_ok, Side::Sell);
-                            if rem > 0 && out.is_empty() {
-                                let px_adj = slip.adjust(Side::Sell, last_price, spread, rem);
-                                out.push(Fill {
-                                    instrument: order.instrument.clone(),
-                                    qty: rem,
-                                    price: px_adj,
-                                    maker: false,
-                                });
+                            match self.cfg.market_policy {
+                                MarketPolicy::BookWalk => {
+                                    let mut always_ok = |_p: Decimal| true;
+                                    let rem = walk_depth(&b.bid_px, &b.bid_sz, &mut always_ok, Side::Sell);
+                                    if rem > 0 && out.is_empty() {
+                                        let px_adj = slip.adjust(Side::Sell, last_price, spread, rem);
+                                        out.push(Fill { instrument: order.instrument.clone(), qty: rem, price: px_adj, maker: false });
+                                    }
+                                }
+                                MarketPolicy::AtTouch => {
+                                    if let (Some(px0), Some(sz0)) = (b.bid_px.first().cloned(), b.bid_sz.first().cloned()) {
+                                        let take = order.qty.min(sz0.to_i64().unwrap_or(0).max(0));
+                                        if take > 0 {
+                                            let px_adj = slip.adjust(Side::Sell, px0, spread, take);
+                                            out.push(Fill { instrument: order.instrument.clone(), qty: take, price: px_adj, maker: false });
+                                        }
+                                    }
+                                }
+                                MarketPolicy::AtMid => {
+                                    if let (Some(bb), Some(ba)) = (best_bid, best_ask) {
+                                        let mid = (bb + ba) / Decimal::from(2i32);
+                                        let px_adj = slip.adjust(Side::Sell, mid, spread, order.qty);
+                                        out.push(Fill { instrument: order.instrument.clone(), qty: order.qty, price: px_adj, maker: false });
+                                    } else {
+                                        let px_adj = slip.adjust(Side::Sell, last_price, spread, order.qty);
+                                        out.push(Fill { instrument: order.instrument.clone(), qty: order.qty, price: px_adj, maker: false });
+                                    }
+                                }
                             }
                         } else {
                             let px_adj = slip.adjust(Side::Sell, last_price, spread, order.qty);
-                            out.push(Fill {
-                                instrument: order.instrument.clone(),
-                                qty: order.qty,
-                                price: px_adj,
-                                maker: false,
-                            });
+                            out.push(Fill { instrument: order.instrument.clone(), qty: order.qty, price: px_adj, maker: false });
                         }
                     }
                 }

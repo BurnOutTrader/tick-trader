@@ -614,7 +614,7 @@ impl BacktestFeeder {
                                 }
                                 if !so.done && now >= so.fill_at {
                                     // Price at last mark; use fill model to allow overrides
-                                    let (last_px, spread_opt) = {
+                                    let (last_px, _spread_opt) = {
                                         let key =
                                             SymbolKey::new(so.spec.instrument.clone(), so.provider);
                                         if let Some(m) = marks.get(&key) {
@@ -823,8 +823,8 @@ impl BacktestFeeder {
                             // Instantiate per-order fill/slippage/fee models and normalize on submit
                             let mut fill_model = (cfg.make_fill)();
                             fill_model.on_submit(base, &mut spec);
-                            let mut slip_model = (cfg.make_slippage)();
-                            let mut fee_model = (cfg.make_fee)();
+                            let slip_model = (cfg.make_slippage)();
+                            let fee_model = (cfg.make_fee)();
 
                             // Schedule ack and (first) fill per latency
                             let ack_at = base + to_chrono(lat.submit_to_ack());
