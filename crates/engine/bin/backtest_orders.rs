@@ -105,7 +105,7 @@ impl Strategy for BacktestOrdersStrategy {
                         None,
                         None,
                         None,
-                        Some("total_live_test".to_string()),
+                        Some("buy".to_string()),
                         None,
                         None,
                     )
@@ -126,7 +126,7 @@ impl Strategy for BacktestOrdersStrategy {
                         None,
                         None,
                         None,
-                        Some("total_live_test".to_string()),
+                        Some("sell".to_string()),
                         None,
                         None,
                     )

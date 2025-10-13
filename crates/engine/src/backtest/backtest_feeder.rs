@@ -610,21 +610,11 @@ impl BacktestFeeder {
 
                             // Basic validation: quantity sign must match side and be non-zero
                             let mut reject = false;
-                            if spec.qty == 0 {
+                            if spec.qty <= 0 {
                                 reject = true;
                             } else {
-                                match spec.side {
-                                    tt_types::accounts::events::Side::Buy => {
-                                        if spec.qty < 0 {
-                                            reject = true;
-                                        }
-                                    }
-                                    tt_types::accounts::events::Side::Sell => {
-                                        if spec.qty > 0 {
-                                            reject = true;
-                                        }
-                                    }
-                                }
+                                // Normalize to positive quantity to keep fills/leaves non-negative across the engine
+                                if spec.qty < 0 { spec.qty = spec.qty*-1; }
                             }
 
                             // Logic validation for order types (when we have a mark)
