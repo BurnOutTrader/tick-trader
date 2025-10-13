@@ -102,16 +102,19 @@ struct Mark {
     last: Option<Decimal>,
 }
 impl Mark {
+    #[allow(dead_code)]
     #[inline]
     fn with_last(mut self, px: Decimal) -> Self {
         self.last = Some(px);
         self
     }
+    #[allow(dead_code)]
     #[inline]
     fn with_bid(mut self, px: Decimal) -> Self {
         self.bid = Some(px);
         self
     }
+    #[allow(dead_code)]
     #[inline]
     fn with_ask(mut self, px: Decimal) -> Self {
         self.ask = Some(px);
@@ -226,6 +229,13 @@ impl BacktestFeeder {
                 orig_qty: i64,
                 cum_qty: i64,
                 cum_vwap_num: Decimal,
+                // Cancel state
+                cancel_at: Option<DateTime<Utc>>,
+                cancel_pending: bool,
+                // Replace state
+                replace_at: Option<DateTime<Utc>>,
+                replace_pending: bool,
+                replace_req: Option<tt_types::wire::ReplaceOrder>,
                 // Per-order models
                 fill_model: Box<dyn FillModel>,
                 slip_model: Box<dyn SlippageModel>,
@@ -612,6 +622,61 @@ impl BacktestFeeder {
                                     });
                                     so.ack_emitted = true;
                                 }
+                                // Handle pending cancellation first
+                                if !so.done && so.cancel_pending {
+                                    if let Some(at) = so.cancel_at {
+                                        if now >= at {
+                                            // Emit canceled and finish
+                                            due.push(OrderUpdate {
+                                                name: so.spec.account_key.account_name.clone(),
+                                                instrument: so.spec.instrument.clone(),
+                                                provider_kind: so.provider,
+                                                provider_order_id: Some(so.provider_order_id.clone()),
+                                                order_id: *oid,
+                                                state: OrderState::Canceled,
+                                                leaves: so.spec.qty,
+                                                cum_qty: so.cum_qty,
+                                                avg_fill_px: if so.cum_qty > 0 { so.cum_vwap_num / Decimal::from(so.cum_qty) } else { Decimal::ZERO },
+                                                tag: so.user_tag.clone(),
+                                                time: at,
+                                            });
+                                            so.done = true;
+                                            finished.push(*oid);
+                                        }
+                                    }
+                                    // Do not attempt fills while cancel is pending
+                                    continue;
+                                }
+
+                                // Handle pending replace next
+                                if !so.done && so.replace_pending {
+                                    if let Some(at) = so.replace_at {
+                                        if now >= at {
+                                            if let Some(req) = so.replace_req.clone() {
+                                                // Apply qty change if present
+                                                if let Some(new_qty_raw) = req.new_qty {
+                                                    let mut new_qty = new_qty_raw.abs();
+                                                    if new_qty < so.cum_qty { new_qty = so.cum_qty; }
+                                                    so.orig_qty = new_qty;
+                                                    let leaves = so.orig_qty - so.cum_qty;
+                                                    so.spec.qty = leaves.max(0);
+                                                }
+                                                // Apply price fields if present
+                                                if let Some(p) = req.new_limit_price { so.spec.limit_price = Some(p); }
+                                                if let Some(p) = req.new_stop_price { so.spec.stop_price = Some(p); }
+                                                if let Some(p) = req.new_trail_price { so.spec.trail_price = Some(p); }
+                                                // After replace, schedule next fill attempt slightly later
+                                                so.fill_at = now + ChronoDuration::milliseconds(5);
+                                            }
+                                            so.replace_pending = false;
+                                            so.replace_at = None;
+                                            so.replace_req = None;
+                                        }
+                                    }
+                                    // Do not attempt fills while replace is pending
+                                    continue;
+                                }
+
                                 if !so.done && now >= so.fill_at {
                                     // Price at last mark; use fill model to allow overrides
                                     let (last_px, _spread_opt) = {
@@ -846,6 +911,13 @@ impl BacktestFeeder {
                                 orig_qty: orig_qty,
                                 cum_qty: 0,
                                 cum_vwap_num: Decimal::ZERO,
+                                // cancel state
+                                cancel_at: None,
+                                cancel_pending: false,
+                                // replace state
+                                replace_at: None,
+                                replace_pending: false,
+                                replace_req: None,
                                 // models
                                 fill_model,
                                 slip_model,
@@ -853,6 +925,43 @@ impl BacktestFeeder {
                                 fees: Decimal::ZERO,
                             };
                             sim_orders.entry(engine_order_id).or_insert(sim);
+                        }
+                        Request::CancelOrder(cxl) => {
+                            // Schedule a cancel using provider_order_id; ignore if not found
+                            let base = watermark.unwrap_or_else(Utc::now);
+                            // Create a latency model instance for timing
+                            let mut lat = (cfg.make_latency)();
+                            let when = base + to_chrono(lat.cancel_rtt());
+                            // Find matching order by provider_order_id and account name
+                            let target_id = cxl.provider_order_id;
+                            let acct = cxl.account_name;
+                            for (_eid, so) in sim_orders.iter_mut() {
+                                if so.provider_order_id.0 == target_id && so.spec.account_key.account_name == acct {
+                                    so.cancel_at = Some(when);
+                                    so.cancel_pending = true;
+                                    // While cancel pending, block fills by pushing fill_at beyond cancel time
+                                    if so.fill_at < when { so.fill_at = when; }
+                                    break;
+                                }
+                            }
+                        }
+                        Request::ReplaceOrder(rpl) => {
+                            // Schedule a replace using provider_order_id; ignore if not found
+                            let base = watermark.unwrap_or_else(Utc::now);
+                            let mut lat = (cfg.make_latency)();
+                            let when = base + to_chrono(lat.replace_rtt());
+                            let target_id = rpl.provider_order_id.clone();
+                            let acct = rpl.account_name.clone();
+                            for (_eid, so) in sim_orders.iter_mut() {
+                                if so.provider_order_id.0 == target_id && so.spec.account_key.account_name == acct {
+                                    so.replace_at = Some(when);
+                                    so.replace_pending = true;
+                                    so.replace_req = Some(rpl.clone());
+                                    // Block fills until replace takes effect
+                                    if so.fill_at < when { so.fill_at = when; }
+                                    break;
+                                }
+                            }
                         }
                         _ => {}
                     }
