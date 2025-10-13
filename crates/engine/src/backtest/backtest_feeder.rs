@@ -59,7 +59,7 @@ impl Default for BacktestFeederConfig {
         Self {
             window: ChronoDuration::days(2),
             lookahead: ChronoDuration::days(1),
-            warmup: ChronoDuration::zero(),
+            warmup: ChronoDuration::days(1),
             range_start: None,
             range_end: None,
             make_latency: Arc::new(|| Box::new(PxLatency::default())),
@@ -1020,9 +1020,14 @@ impl BacktestFeeder {
                             }
 
                             match spec.order_type {
-                                tt_types::wire::OrderType::Stop
-                                | tt_types::wire::OrderType::TrailingStop => {
+                                tt_types::wire::OrderType::Stop => {
                                     if spec.stop_price.is_none() {
+                                        reject = true;
+                                    }
+                                }
+                                tt_types::wire::OrderType::TrailingStop => {
+                                    // Trailing stops require a trail distance; initial stop_price is derived/ratcheted by the fill model
+                                    if spec.trail_price.is_none() {
                                         reject = true;
                                     }
                                 }

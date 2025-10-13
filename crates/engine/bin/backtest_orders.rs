@@ -27,8 +27,6 @@ struct BacktestOrdersStrategy {
     engine: Option<EngineHandle>,
     sk: SymbolKey,
     account: AccountKey,
-    #[allow(dead_code)]
-    placed: bool,
     last_bars: RollingWindow<Candle>,
     is_warmed_up: bool,
     bar_idx: u32,
@@ -58,7 +56,6 @@ impl BacktestOrdersStrategy {
             engine: None,
             sk,
             account,
-            placed: false,
             last_bars: RollingWindow::new(10),
             is_warmed_up: false,
             bar_idx: 0,
@@ -111,7 +108,7 @@ impl Strategy for BacktestOrdersStrategy {
         if !self.is_warmed_up || self.done {
             return;
         }
-        println!("{:?}", c);
+        println!("BAR: {:?}", c);
         self.bar_idx = self.bar_idx.saturating_add(1);
         let last = c.close;
         let h = match &self.engine {
@@ -336,8 +333,13 @@ impl Strategy for BacktestOrdersStrategy {
     fn on_orders_batch(&mut self, b: &wire::OrdersBatch) {
         use tt_types::accounts::order::OrderState;
         for o in &b.orders {
+            println!(
+                "ORDER UPDATE: tag={:?} state={:?} leaves={} cum={} avg={}",
+                o.tag, o.state, o.leaves, o.cum_qty, o.avg_fill_px
+            );
             if let Some(tag) = &o.tag
-            && let Some(exp) = self.expect.get_mut(tag) {
+                && let Some(exp) = self.expect.get_mut(tag)
+            {
                 match o.state {
                     OrderState::Acknowledged => {
                         exp.acked = true;
@@ -352,8 +354,10 @@ impl Strategy for BacktestOrdersStrategy {
                 }
             }
         }
-        // Check completion criteria: all expectations must be acknowledged, and those requiring fill must be filled
-        if !self.expect.is_empty()
+        // Check completion criteria only after all test orders have been sent (bar_idx >= 12)
+        // Then: all expectations must be acknowledged, and those requiring fill must be filled
+        if self.bar_idx >= 12
+            && !self.expect.is_empty()
             && self
                 .expect
                 .values()
@@ -414,7 +418,7 @@ async fn main() -> anyhow::Result<()> {
     let start_date = end_date - chrono::Duration::days(30);
 
     // Configure and start backtest
-    let cfg = BacktestConfig::from_to(chrono::Duration::seconds(1), start_date, end_date);
+    let cfg = BacktestConfig::from_to(chrono::Duration::milliseconds(500), start_date, end_date);
     let strategy = BacktestOrdersStrategy::default();
     let (_engine_handle, _feeder_handle) = start_backtest(db, cfg, strategy).await?;
 
