@@ -26,6 +26,18 @@ pub struct EngineHandle {
 }
 
 impl EngineHandle {
+    // === TIME ===
+    /// Current engine time. In backtests, this is the deterministic simulation clock; in live, system time.
+    #[inline]
+    pub fn time(&self) -> chrono::DateTime<chrono::Utc> {
+        self.inner.now_dt()
+    }
+    /// Current engine time in nanoseconds since UNIX_EPOCH.
+    #[inline]
+    pub fn time_ns(&self) -> u64 {
+        self.inner.now_ns()
+    }
+
     // === REGISTRATION ===
     /// Register a consolidator to be driven by the engine for the given data stream key.
     /// The consolidator will be invoked whenever data for (topic,key) arrives.

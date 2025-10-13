@@ -54,6 +54,31 @@ pub(crate) struct EngineRuntimeShared {
     pub(crate) backtest_clock: Option<Arc<BacktestClock>>,
 }
 
+impl EngineRuntimeShared {
+    #[inline]
+    pub fn now_ns(&self) -> u64 {
+        if let Some(ref bt) = self.backtest_clock {
+            bt.now_ns()
+        } else {
+            // system time in ns
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default();
+            now.as_secs()
+                .saturating_mul(1_000_000_000)
+                .saturating_add(now.subsec_nanos() as u64)
+        }
+    }
+    #[inline]
+    pub fn now_dt(&self) -> chrono::DateTime<chrono::Utc> {
+        if let Some(ref bt) = self.backtest_clock {
+            bt.now_dt()
+        } else {
+            chrono::Utc::now()
+        }
+    }
+}
+
 pub struct EngineRuntime {
     backtest_mode: bool,
     backtest_notify: Option<Arc<Notify>>,
@@ -647,7 +672,7 @@ impl EngineRuntime {
                     // Drive time-based consolidation first if due
                     _ = ticker.tick() => {
                         if !handle_inner_for_task.backtest_mode {
-                            let now = chrono::Utc::now();
+                            let now = handle_inner_for_task.now_dt();
                             // 1) Walk consolidators mutably and collect outputs.
                             if !handle_inner_for_task.consolidators.is_empty() {
                                 let mut outs: SmallVec<[(ProviderKind, Candle); 16]> = SmallVec::new();
@@ -751,7 +776,7 @@ impl EngineRuntime {
                     }) => {
                         for t in ticks {
                             // Update portfolio marks then deliver to strategy
-                            pm.update_apply_last_price(provider_kind, &t.instrument, t.price);
+                            pm.update_apply_last_price(provider_kind, &t.instrument, t.price, handle_inner_for_task.now_dt());
                             strategy_for_task.on_tick(&t, provider_kind);
                             // Drive any consolidators registered for ticks on this key
                             let key = ConsolidatorKey::new(t.instrument.clone(), provider_kind, Topic::Ticks);
@@ -772,7 +797,7 @@ impl EngineRuntime {
                     }) => {
                         for q in quotes {
                             // Drive consolidators for quotes (BBO)
-                            pm.update_apply_last_price(provider_kind, &q.instrument, q.bid);
+                            pm.update_apply_last_price(provider_kind, &q.instrument, q.bid, handle_inner_for_task.now_dt());
                             strategy_for_task.on_quote(&q, provider_kind);
                             let key = ConsolidatorKey::new(q.instrument.clone(), provider_kind, Topic::Quotes);
                             if let Some(mut cons) = handle_inner_for_task
@@ -792,7 +817,7 @@ impl EngineRuntime {
                     }) => {
                         for b in bars {
                             // Use close as mark
-                            pm.update_apply_last_price(provider_kind, &b.instrument, b.close);
+                            pm.update_apply_last_price(provider_kind, &b.instrument, b.close, handle_inner_for_task.now_dt());
                             strategy_for_task.on_bar(&b, provider_kind);
                             // Drive consolidators for incoming candles (candle-to-candle)
                             let tpc = match b.resolution {
@@ -817,14 +842,14 @@ impl EngineRuntime {
                         //todo, the way we apply Mpd10 will not actually be this way, it will be broken down by types.
                          // trades and bbo can build bars from the single feed.
                         let resp2 =
-                            pm.process_response(tt_types::wire::Response::MBP10Batch(ob.clone()));
+                            pm.process_response(tt_types::wire::Response::MBP10Batch(ob.clone()), handle_inner_for_task.now_dt());
                         if let tt_types::wire::Response::MBP10Batch(ob2) = resp2 {
                             strategy_for_task.on_mbp10(&ob2.event, ob2.provider_kind);
                         }
                     }
                     Response::OrdersBatch(ob) => {
                         let resp2 =
-                            pm.process_response(tt_types::wire::Response::OrdersBatch(ob.clone()));
+                            pm.process_response(tt_types::wire::Response::OrdersBatch(ob.clone()), handle_inner_for_task.now_dt());
                         if let tt_types::wire::Response::OrdersBatch(ob2) = resp2 {
                             {
                                 let mut g =
@@ -866,7 +891,7 @@ impl EngineRuntime {
                     }
                     Response::PositionsBatch(pb) => {
                         let resp2 = pm
-                            .process_response(tt_types::wire::Response::PositionsBatch(pb.clone()));
+                            .process_response(tt_types::wire::Response::PositionsBatch(pb.clone()), handle_inner_for_task.now_dt());
                         if let tt_types::wire::Response::PositionsBatch(pb2) = resp2 {
                             {
                                 let mut g = state
@@ -889,9 +914,7 @@ impl EngineRuntime {
                         }
                     }
                     Response::AccountDeltaBatch(ab) => {
-                        let resp2 = pm.process_response(
-                            tt_types::wire::Response::AccountDeltaBatch(ab.clone()),
-                        );
+                        let resp2 = pm.process_response(tt_types::wire::Response::AccountDeltaBatch(ab.clone()), handle_inner_for_task.now_dt());
                         if let tt_types::wire::Response::AccountDeltaBatch(ab2) = resp2 {
                             {
                                 let mut g =
@@ -903,7 +926,7 @@ impl EngineRuntime {
                     }
                     Response::ClosedTrades(t) => {
                         let resp2 =
-                            pm.process_response(tt_types::wire::Response::ClosedTrades(t.clone()));
+                            pm.process_response(tt_types::wire::Response::ClosedTrades(t.clone()), handle_inner_for_task.now_dt());
                         if let tt_types::wire::Response::ClosedTrades(t2) = resp2 {
                             strategy_for_task.on_trades_closed(t2);
                         }
@@ -912,19 +935,19 @@ impl EngineRuntime {
                         tick,
                         provider_kind,
                     } => {
-                        pm.update_apply_last_price(provider_kind, &tick.instrument, tick.price);
+                        pm.update_apply_last_price(provider_kind, &tick.instrument, tick.price, handle_inner_for_task.now_dt());
                         strategy_for_task.on_tick(&tick, provider_kind);
                     }
                     Response::Quote { bbo, provider_kind } => {
                         let mid = (bbo.bid + bbo.ask) / rust_decimal::Decimal::from(2);
-                        pm.update_apply_last_price(provider_kind, &bbo.instrument, mid);
+                        pm.update_apply_last_price(provider_kind, &bbo.instrument, mid, handle_inner_for_task.now_dt());
                         strategy_for_task.on_quote(&bbo, provider_kind);
                     }
                     Response::Bar {
                         candle,
                         provider_kind,
                     } => {
-                        pm.update_apply_last_price(provider_kind, &candle.instrument, candle.close);
+                        pm.update_apply_last_price(provider_kind, &candle.instrument, candle.close, handle_inner_for_task.now_dt());
                         strategy_for_task.on_bar(&candle, provider_kind);
                     }
                     Response::Mbp10 {
@@ -933,7 +956,7 @@ impl EngineRuntime {
                     } => {
                         //todo, the way we apply Mpd10 will not actually be this way, it will be broken down by types.
                         // trades and bbo can build bars from the single feed.
-                        pm.update_apply_last_price(provider_kind, &mbp10.instrument, mbp10.price);
+                        pm.update_apply_last_price(provider_kind, &mbp10.instrument, mbp10.price, handle_inner_for_task.now_dt());
                         strategy_for_task.on_mbp10(&mbp10, provider_kind);
                     }
                     Response::AnnounceShm(ann) => {

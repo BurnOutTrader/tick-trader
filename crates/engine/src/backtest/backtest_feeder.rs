@@ -1,5 +1,6 @@
 use chrono::{DateTime, Duration as ChronoDuration, TimeZone, Utc};
 use rust_decimal::Decimal;
+use rust_decimal::prelude::ToPrimitive;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BinaryHeap, HashMap, VecDeque};
 use std::sync::Arc;
@@ -606,6 +607,103 @@ impl BacktestFeeder {
                             };
                             let provider_order_id =
                                 ProviderOrderId(format!("bt-{}", engine_order_id));
+
+                            // Basic validation: quantity sign must match side and be non-zero
+                            let mut reject = false;
+                            if spec.qty == 0 {
+                                reject = true;
+                            } else {
+                                match spec.side {
+                                    tt_types::accounts::events::Side::Buy => {
+                                        if spec.qty < 0 {
+                                            reject = true;
+                                        }
+                                    }
+                                    tt_types::accounts::events::Side::Sell => {
+                                        if spec.qty > 0 {
+                                            reject = true;
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Logic validation for order types (when we have a mark)
+                            let last_mark = marks
+                                .get(&(prov, spec.instrument.clone()))
+                                .and_then(|d| d.to_f64());
+
+                            match spec.order_type {
+                                tt_types::wire::OrderType::Stop => {
+                                    // Must have a stop price
+                                    if spec.stop_price.is_none() {
+                                        reject = true;
+                                    } else if let Some(m) = last_mark {
+                                        let sp = spec.stop_price.unwrap();
+                                        match spec.side {
+                                            tt_types::accounts::events::Side::Buy => {
+                                                if sp <= m {
+                                                    reject = true;
+                                                }
+                                            }
+                                            tt_types::accounts::events::Side::Sell => {
+                                                if sp >= m {
+                                                    reject = true;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                tt_types::wire::OrderType::StopLimit => {
+                                    if spec.stop_price.is_none() || spec.limit_price.is_none() {
+                                        reject = true;
+                                    } else if let Some(m) = last_mark {
+                                        let sp = spec.stop_price.unwrap();
+                                        match spec.side {
+                                            tt_types::accounts::events::Side::Buy => {
+                                                if sp <= m {
+                                                    reject = true;
+                                                }
+                                            }
+                                            tt_types::accounts::events::Side::Sell => {
+                                                if sp >= m {
+                                                    reject = true;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                tt_types::wire::OrderType::TrailingStop => {
+                                    if spec.trail_price.map(|p| p <= 0.0).unwrap_or(true) {
+                                        reject = true;
+                                    }
+                                }
+                                _ => {}
+                            }
+
+                            if reject {
+                                // Immediately emit a rejected order update with user's original tag
+                                let upd = OrderUpdate {
+                                    name: spec.account_key.account_name.clone(),
+                                    instrument: spec.instrument.clone(),
+                                    provider_kind: prov,
+                                    provider_order_id: Some(provider_order_id.clone()),
+                                    order_id: engine_order_id,
+                                    state: OrderState::Rejected,
+                                    leaves: 0,
+                                    cum_qty: 0,
+                                    avg_fill_px: Decimal::ZERO,
+                                    tag: user_tag.clone(),
+                                    time: base,
+                                };
+                                let ob = tt_types::wire::OrdersBatch {
+                                    topic: Topic::Orders,
+                                    seq: 0,
+                                    orders: vec![upd],
+                                };
+                                let _ = bus_clone.route_response(Response::OrdersBatch(ob)).await;
+                                await_ack(&notify).await;
+                                continue;
+                            }
 
                             // Initialize models (defaults for now)
                             let mut lat = PxLatency::default();

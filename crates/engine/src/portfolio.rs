@@ -75,7 +75,7 @@ impl PortfolioManager {
     /// Centralized pre-strategy processing of incoming responses.
     /// This applies portfolio updates and returns a possibly adjusted response
     /// (e.g., with recalculated open_pnl for positions or filled PnL fields for accounts).
-    pub fn process_response(&self, resp: Response) -> Response {
+    pub fn process_response(&self, resp: Response, now: DateTime<Utc>) -> Response {
         match resp {
             Response::MBP10Batch(ob) => {
                 let ev = &ob.event;
@@ -88,7 +88,7 @@ impl PortfolioManager {
                 } else {
                     ev.price
                 };
-                self.update_apply_last_price(ob.provider_kind, &ev.instrument, mark);
+                self.update_apply_last_price(ob.provider_kind, &ev.instrument, mark, now);
                 Response::MBP10Batch(ob)
             }
             Response::OrdersBatch(ob) => {
@@ -111,7 +111,7 @@ impl PortfolioManager {
                         seq: pb.seq,
                         positions,
                     };
-                    self.apply_positions_batch_for(provider, account, batch);
+                    self.apply_positions_batch_for(provider, account, batch, now);
                 }
                 // Return adjusted open_pnl values based on last_price
                 let adj = self.adjust_positions_batch_open_pnl(pb.clone());
@@ -122,11 +122,7 @@ impl PortfolioManager {
                 for a in ab.accounts.iter_mut() {
                     if a.day_realized_pnl.is_zero() && a.open_pnl.is_zero() {
                         let open = self.account_open_pnl_sum(&a.provider_kind, &a.name);
-                        let day = self.account_day_realized_pnl_utc(
-                            &a.provider_kind,
-                            &a.name,
-                            Utc::now(),
-                        );
+                        let day = self.account_day_realized_pnl_utc(&a.provider_kind, &a.name, now);
                         a.open_pnl = open;
                         a.day_realized_pnl = day;
                     }
@@ -157,7 +153,7 @@ impl PortfolioManager {
 
     #[allow(dead_code)]
     // Helper: recompute synthetic totals for one instrument across all accounts/providers
-    fn recompute_synthetic_for(&self, instrument: &Instrument) {
+    fn recompute_synthetic_for(&self, instrument: &Instrument, now: DateTime<Utc>) {
         let mut sum_qty = Decimal::ZERO;
         let mut sum_pq = Decimal::ZERO; // sum(avg_price * qty_signed)
         let mut sum_open = Decimal::ZERO;
@@ -200,7 +196,7 @@ impl PortfolioManager {
             net_qty: sum_qty,
             average_price: avg_px,
             open_pnl: sum_open,
-            time: latest_ts.unwrap_or_else(Utc::now),
+            time: latest_ts.unwrap_or(now),
             side,
         };
         self.positions_total_delta.insert(instrument.clone(), pd);
@@ -232,6 +228,7 @@ impl PortfolioManager {
         provider_kind: ProviderKind,
         account: AccountName,
         batch: PositionsBatch,
+        now: DateTime<Utc>,
     ) {
         // Track which instruments changed to recompute synthetic totals afterward
         let mut touched: ahash::AHashSet<Instrument> = ahash::AHashSet::new();
@@ -266,7 +263,7 @@ impl PortfolioManager {
 
         // Recompute synthetic totals for changed instruments (no entry guard held now)
         for instr in touched.iter() {
-            self.recompute_synthetic_for(instr);
+            self.recompute_synthetic_for(instr, now);
         }
         *self.last_positions.write().expect("poisoned") = Some(batch);
     }
@@ -303,6 +300,7 @@ impl PortfolioManager {
         provider_kind: ProviderKind,
         instrument: &Instrument,
         price: Decimal,
+        now: DateTime<Utc>,
     ) {
         let key = (provider_kind, instrument.clone());
         self.last_price.insert(key, price);
@@ -327,7 +325,7 @@ impl PortfolioManager {
             }
         }
         // Recompute synthetic totals after updates
-        self.recompute_synthetic_for(instrument);
+        self.recompute_synthetic_for(instrument, now);
     }
 
     pub fn net_qty(&self, instrument: &Instrument) -> Decimal {
@@ -660,7 +658,7 @@ mod tests {
             seq: 1,
             positions: vec![long.clone(), short.clone(), flat.clone()],
         };
-        pm.apply_positions_batch_for(provider, account.clone(), batch);
+        pm.apply_positions_batch_for(provider, account.clone(), batch, Utc::now());
 
         assert!(pm.is_long(&long.instrument));
         assert!(!pm.is_short(&long.instrument));
@@ -700,6 +698,7 @@ mod tests {
                 seq: 1,
                 positions: vec![pd],
             },
+            Utc::now(),
         );
         assert_eq!(
             pm.account_open_pnl_sum(&provider, &account),

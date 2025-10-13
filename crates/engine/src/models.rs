@@ -19,13 +19,6 @@ pub enum SubState {
     Error,
 }
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub enum StrategyMode {
-    Backtest,
-    LivePaper,
-    Live,
-}
-
 #[derive(Debug, Clone)]
 pub struct EngineConfig {
     // health thresholds (defaults; env override)
