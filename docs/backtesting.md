@@ -1,12 +1,28 @@
-# Tick Trader Backtesting Guide
+# 📈🔁 Tick Trader Backtesting Guide
 
 This page summarizes the backtesting subsystem: key parameters, realism models, lifecycle semantics, and how to run a quick demo. For a broader project overview, see the main README at the repository root.
 
-- Project overview and architecture: ../README.md
+> ℹ️ Project overview and architecture: ../README.md
 
 
-## Quick start
-### [see strategy examples](/crates/a_strategies/examples)
+## 🧭 Table of contents
+- [🚀 Quick start](#-quick-start)
+- [⏱️ Orchestrator and time](#%EF%B8%8F-orchestrator-and-time)
+- [📦 Historical feeder (BacktestFeederConfig)](#-historical-feeder-backtestfeederconfig)
+- [🧪 Realism models (defaults and behavior)](#-realism-models-defaults-and-behavior)
+- [🔄 Order lifecycle semantics](#-order-lifecycle-semantics)
+- [📊 Snapshots and portfolio](#-snapshots-and-portfolio)
+- [▶️ Running the demo](#%EF%B8%8F-running-the-demo)
+- [⚙️ Configuration tips](#-configuration-tips)
+- [⚠️ Known modeling limitations (v1)](#-known-modeling-limitations-v1)
+- [🔗 Links](#-links)
+
+---
+
+## 🚀 Quick start
+
+> 💡 Tip: See strategy examples at /crates/a_strategies/examples
+
 - Minimal programmatic start (pseudocode using helpers already in the repo):
   - Create a DB pool (Postgres), ensure schema
   - Build BacktestConfig (step, date range)
@@ -18,21 +34,30 @@ Relevant entry points in the codebase:
 - crates/engine/bin/backtest_orders.rs (end-to-end demo exercising order types)
 
 
-## Orchestrator and time
+## ⏱️ Orchestrator and time
 
 Backtests are driven by a deterministic, logical clock advanced by the orchestrator.
+
+```mermaid
+flowchart LR
+  OC[Orchestrator ⏱️] -->|advance(step)| FEED[Feeder 📦]
+  FEED -->|emit data ≤ watermark| MODELS[Realism Models 🧪]
+  MODELS -->|simulate fills/fees/slippage/latency| ORDERS[Orders Engine 🧩]
+  ORDERS -->|updates| SNAP[Snapshots 📊]
+```
+
 - BacktestConfig
   - step: chrono::Duration – advance logical time by this step; feeder emits data <= now each step.
   - feeder: BacktestFeederConfig – parameters for historical fetch and realism models.
   - start_date, end_date (optional): map to feeder.range_start/range_end (UTC) for clamping.
   - clock: optional shared BacktestClock (advanced deterministically alongside emissions).
 
-Determinism
-- All scheduling (ack, first-fill, cancel/replace effects) is relative to the logical watermark set by BacktestAdvanceTo.
-- There are no Utc::now() fallbacks in the backtest path; timestamps come from the orchestrator or data.
+> 🔒 Determinism
+> - All scheduling (ack, first-fill, cancel/replace effects) is relative to the logical watermark set by BacktestAdvanceTo.
+> - There are no Utc::now() fallbacks in the backtest path; timestamps come from the orchestrator or data.
 
 
-## Historical feeder (BacktestFeederConfig)
+## 📦 Historical feeder (BacktestFeederConfig)
 
 Controls windowing and realism model factories. Defaults are sensible for CME-style futures.
 - window: prefetch window size (e.g., 2 days) used to bulk load data chunks per key.
@@ -52,7 +77,19 @@ The feeder:
 - Emits position/account snapshots on fills; the runtime also synthesizes periodic snapshots (<= 1 Hz) only when content changes.
 
 
-## Realism models (defaults and behavior)
+## 🧪 Realism models (defaults and behavior)
+
+Quick look:
+
+| Model | Default | What it does | Key knobs |
+|---|---|---|---|
+| LatencyModel | PxLatency | Models submit/ack/fill/cxl/replace timing | submit_to_ack, ack_to_first_fill, cancel_rtt, replace_rtt |
+| FillModel | CmeFillModel + FillConfig | Matches orders vs. last price + MBP10 | Market policy, Limit policy, price-limit guard |
+| SlippageModel | NoSlippage | Adjusts execution price | Customizable for spread/impact |
+| FeeModel | PxFlatFee | Applies per-fill fees/rebates | Per-account accumulation |
+| SessionCalendar | HoursCalendar | Open/halting/limit-lock gating | is_open, next_open_after, is_limit_locked |
+
+Details:
 
 LatencyModel (default: PxLatency)
 - submit_to_ack(): delay from submission to acknowledgment.
@@ -79,48 +116,56 @@ SessionCalendar (default: HoursCalendar)
 - is_open/is_halt gates fills; next_open_after defers work when closed; optional limit-lock checks.
 
 
-## Order lifecycle semantics
+## 🔄 Order lifecycle semantics
 
-- Submit -> Ack: scheduled by submit_to_ack().
-- Ack -> First fill: scheduled by ack_to_first_fill().
+- Submit → Ack: scheduled by submit_to_ack().
+- Ack → First fill: scheduled by ack_to_first_fill().
 - Matching uses current MBP10 book (if present) and last mark to price.
 - Partials: if book depth can’t satisfy full qty, partial fills emit OrderState::PartiallyFilled and the remainder keeps working.
 - Cancel/Replace: effects occur at cancel_rtt()/replace_rtt() after request; orders remain live and fillable until the effect timestamp.
 - No forced fills: if matching produces zero fills, the order remains working (resting) and is retried on subsequent ticks.
 
 
-## Snapshots and portfolio
+## 📊 Snapshots and portfolio
 
 - Positions: maintained per-account/instrument; PositionsBatch emitted on fill ticks (and periodically by runtime when content changes, throttled to ≤ 1/s).
 - Accounts: AccountDeltaBatch snapshots reflect fee cash flows and timing; realized PnL from trades is computed by the portfolio from executions/positions and last prices.
 
 
-## Running the demo
+## ▶️ Running the demo
 
-- Ensure Postgres is available and the schema is initialized (ensure_schema is called in the demo).
-- Build and run:
-  - cargo run -p tt-engine --bin tt-backtest_orders
-- What it does:
-  - Subscribes to 1m candles for MNQ.Z25 (ProjectX/Topstep), walks bars, and places a series of orders (Market, Limit, Stop, StopLimit, JoinBid/JoinAsk, TrailingStop) driven by a bar counter.
-  - Asserts acks for all orders; expects fills for market/crossing orders; prints bars, order updates, and positions.
+> ✅ Prereqs: Ensure Postgres is available and the schema is initialized (ensure_schema is called in the demo).
 
+Run:
 
-## Configuration tips
+```zsh
+# Build and run the orders backtest demo
+cargo run -p tt-engine --bin tt-backtest_orders
+```
 
-- Step size: choose a step consistent with your data frequency (e.g., 250 ms–1 s for 1s/1m bars).
-- Policies: adjust FillConfig to switch market/limit policies.
-- Fees/Slippage: plug different model factories via BacktestFeederConfig to run scenario analyses.
-- Calendar: use your venue’s session calendar for correct open/halting and price limits.
+What it does:
+- Subscribes to 1m candles for MNQ.Z25 (ProjectX/Topstep), walks bars, and places a series of orders (Market, Limit, Stop, StopLimit, JoinBid/JoinAsk, TrailingStop) driven by a bar counter.
+- Asserts acks for all orders; expects fills for market/crossing orders; prints bars, order updates, and positions.
 
 
-## Known modeling limitations (v1)
+## ⚙️ Configuration tips
+
+- ⏱️ Step size: choose a step consistent with your data frequency (e.g., 250 ms–1 s for 1s/1m bars).
+- 🧭 Policies: adjust FillConfig to switch market/limit policies.
+- 💸 Fees/Slippage: plug different model factories via BacktestFeederConfig to run scenario analyses.
+- 🗓️ Calendar: use your venue’s session calendar for correct open/halting and price limits.
+
+
+## ⚠️ Known modeling limitations (v1)
+
+> 🟠 These are known and on the roadmap; contributions welcome.
 
 - No queue priority modeling at touch; no order book queue position.
 - Default slippage is none; consider custom models for gap/impact.
 - TIF (IOC/FOK) and bracket orders are not yet simulated end-to-end.
 
 
-## Links
+## 🔗 Links
 
 - Main project README: ../README.md
 - Engine Orchestrator: crates/engine/src/backtest/orchestrator.rs
