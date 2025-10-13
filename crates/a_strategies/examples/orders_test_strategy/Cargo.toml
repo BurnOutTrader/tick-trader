@@ -1,0 +1,21 @@
+[package]
+name = "orders_test_strategy"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+chrono = "0.4.42"
+tokio = "1.47.1"
+tracing = "0.1.41"
+anyhow = "1.0.100"
+tracing-subscriber = "0.3.20"
+colored = {workspace = true}
+tt-types = { path = "../../../types" }
+tt-bus = { path = "../../../bus" }
+tt_engine = { package = "tt-engine", path = "../../../engine" }
+tt_database = {package = "tt-database", path = "../../../database"}
+dotenvy = { workspace = true }
+rust_decimal = {workspace = true}
+[lints]
+workspace = true
