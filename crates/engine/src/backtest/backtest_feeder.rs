@@ -261,7 +261,11 @@ impl BacktestFeeder {
             > = HashMap::new();
             // Per-account/instrument positions ledger for PositionsBatch snapshots
             let mut positions_ledger: HashMap<
-                (ProviderKind, tt_types::accounts::account::AccountName, Instrument),
+                (
+                    ProviderKind,
+                    tt_types::accounts::account::AccountName,
+                    Instrument,
+                ),
                 tt_types::accounts::events::PositionDelta,
             > = HashMap::new();
 
@@ -707,33 +711,50 @@ impl BacktestFeeder {
                                     // Update positions ledger per fill and collect touched positions
                                     for f in &fills {
                                         let acct_name = so.spec.account_key.account_name.clone();
-                                        let key = (so.provider, acct_name.clone(), f.instrument.clone());
-                                        let entry = positions_ledger.entry(key.clone()).or_insert(tt_types::accounts::events::PositionDelta {
-                                            instrument: f.instrument.clone(),
-                                            account_name: acct_name.clone(),
-                                            provider_kind: so.provider,
-                                            net_qty: Decimal::ZERO,
-                                            average_price: Decimal::ZERO,
-                                            open_pnl: Decimal::ZERO,
-                                            time: now,
-                                            side: tt_types::accounts::events::PositionSide::Flat,
-                                        });
-                                        let side_sign: i64 = match so.spec.side { tt_types::accounts::events::Side::Buy => 1, tt_types::accounts::events::Side::Sell => -1 };
+                                        let key =
+                                            (so.provider, acct_name.clone(), f.instrument.clone());
+                                        let entry = positions_ledger.entry(key.clone()).or_insert(
+                                            tt_types::accounts::events::PositionDelta {
+                                                instrument: f.instrument.clone(),
+                                                account_name: acct_name.clone(),
+                                                provider_kind: so.provider,
+                                                net_qty: Decimal::ZERO,
+                                                average_price: Decimal::ZERO,
+                                                open_pnl: Decimal::ZERO,
+                                                time: now,
+                                                side:
+                                                    tt_types::accounts::events::PositionSide::Flat,
+                                            },
+                                        );
+                                        let side_sign: i64 = match so.spec.side {
+                                            tt_types::accounts::events::Side::Buy => 1,
+                                            tt_types::accounts::events::Side::Sell => -1,
+                                        };
                                         let delta_qty = Decimal::from(f.qty * side_sign);
                                         let old_qty = entry.net_qty;
                                         let new_qty = old_qty + delta_qty;
                                         // Update average price
-                                        if old_qty.is_zero() || (old_qty > Decimal::ZERO && new_qty < Decimal::ZERO) || (old_qty < Decimal::ZERO && new_qty > Decimal::ZERO) {
+                                        if old_qty.is_zero()
+                                            || (old_qty > Decimal::ZERO && new_qty < Decimal::ZERO)
+                                            || (old_qty < Decimal::ZERO && new_qty > Decimal::ZERO)
+                                        {
                                             entry.average_price = f.price;
                                         } else if new_qty != Decimal::ZERO {
-                                            let pq = entry.average_price * old_qty + f.price * delta_qty;
+                                            let pq =
+                                                entry.average_price * old_qty + f.price * delta_qty;
                                             entry.average_price = pq / new_qty;
                                         } else {
                                             entry.average_price = Decimal::ZERO;
                                         }
                                         entry.net_qty = new_qty;
                                         entry.time = now;
-                                        entry.side = if new_qty > Decimal::ZERO { tt_types::accounts::events::PositionSide::Long } else if new_qty < Decimal::ZERO { tt_types::accounts::events::PositionSide::Short } else { tt_types::accounts::events::PositionSide::Flat };
+                                        entry.side = if new_qty > Decimal::ZERO {
+                                            tt_types::accounts::events::PositionSide::Long
+                                        } else if new_qty < Decimal::ZERO {
+                                            tt_types::accounts::events::PositionSide::Short
+                                        } else {
+                                            tt_types::accounts::events::PositionSide::Flat
+                                        };
                                         touched_positions.push(key);
                                     }
 
@@ -922,7 +943,9 @@ impl BacktestFeeder {
                                     tt_types::accounts::account::AccountName,
                                     Instrument,
                                 )> = HashSet::new();
-                                let mut positions_vec: Vec<tt_types::accounts::events::PositionDelta> = Vec::new();
+                                let mut positions_vec: Vec<
+                                    tt_types::accounts::events::PositionDelta,
+                                > = Vec::new();
                                 for key in touched_positions.drain(..) {
                                     if seen.insert(key.clone()) {
                                         if let Some(pd) = positions_ledger.get(&key) {

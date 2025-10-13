@@ -73,7 +73,8 @@ impl FillModel for CmeFillModel {
             instrument: order.instrument.clone(),
         };
         // Limit-lock guard helper: no fills if venue is price-limit locked at candidate px
-        let mut price_limit_ok = |px: Decimal| -> bool { !cal.is_limit_locked(&order.instrument, px, now) };
+        let mut price_limit_ok =
+            |px: Decimal| -> bool { !cal.is_limit_locked(&order.instrument, px, now) };
         // Walks the opposite side of the book accumulating fills up to qty_remaining.
         let mut walk_depth = |prices: &[Decimal],
                               sizes: &[Decimal],
@@ -141,9 +142,11 @@ impl FillModel for CmeFillModel {
                                         (b.ask_px.first().cloned(), b.ask_sz.first().cloned())
                                     {
                                         if price_limit_ok(px0) {
-                                            let take = order.qty.min(sz0.to_i64().unwrap_or(0).max(0));
+                                            let take =
+                                                order.qty.min(sz0.to_i64().unwrap_or(0).max(0));
                                             if take > 0 {
-                                                let px_adj = slip.adjust(Side::Buy, px0, spread, take);
+                                                let px_adj =
+                                                    slip.adjust(Side::Buy, px0, spread, take);
                                                 out.push(Fill {
                                                     instrument: order.instrument.clone(),
                                                     qty: take,
@@ -216,9 +219,11 @@ impl FillModel for CmeFillModel {
                                         (b.bid_px.first().cloned(), b.bid_sz.first().cloned())
                                     {
                                         if price_limit_ok(px0) {
-                                            let take = order.qty.min(sz0.to_i64().unwrap_or(0).max(0));
+                                            let take =
+                                                order.qty.min(sz0.to_i64().unwrap_or(0).max(0));
                                             if take > 0 {
-                                                let px_adj = slip.adjust(Side::Sell, px0, spread, take);
+                                                let px_adj =
+                                                    slip.adjust(Side::Sell, px0, spread, take);
                                                 out.push(Fill {
                                                     instrument: order.instrument.clone(),
                                                     qty: take,
