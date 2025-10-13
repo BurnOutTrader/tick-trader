@@ -164,7 +164,7 @@ impl FillModel for CmeFillModel {
                                             price: px_adj,
                                             maker: false,
                                         });
-                                    } else {
+                                    } else if price_limit_ok(last_price) {
                                         // Fallback to last price
                                         let px_adj =
                                             slip.adjust(Side::Buy, last_price, spread, order.qty);
@@ -198,7 +198,7 @@ impl FillModel for CmeFillModel {
                                         &mut always_ok,
                                         Side::Sell,
                                     );
-                                    if rem > 0 && out.is_empty() {
+                                    if rem > 0 && out.is_empty() && price_limit_ok(last_price) {
                                         let px_adj =
                                             slip.adjust(Side::Sell, last_price, spread, rem);
                                         out.push(Fill {
@@ -237,7 +237,7 @@ impl FillModel for CmeFillModel {
                                             price: px_adj,
                                             maker: false,
                                         });
-                                    } else {
+                                    } else if price_limit_ok(last_price) {
                                         let px_adj =
                                             slip.adjust(Side::Sell, last_price, spread, order.qty);
                                         out.push(Fill {
@@ -434,7 +434,10 @@ impl FillModel for CmeFillModel {
                                                 &mut always_ok,
                                                 Side::Buy,
                                             );
-                                            if rem > 0 && out.is_empty() {
+                                            if rem > 0
+                                                && out.is_empty()
+                                                && price_limit_ok(last_price)
+                                            {
                                                 let px_adj =
                                                     slip.adjust(Side::Buy, last_price, spread, rem);
                                                 out.push(Fill {
@@ -444,7 +447,7 @@ impl FillModel for CmeFillModel {
                                                     maker: false,
                                                 });
                                             }
-                                        } else {
+                                        } else if price_limit_ok(last_price) {
                                             let px_adj = slip.adjust(
                                                 Side::Buy,
                                                 last_price,
@@ -468,7 +471,10 @@ impl FillModel for CmeFillModel {
                                                 &mut always_ok,
                                                 Side::Sell,
                                             );
-                                            if rem > 0 && out.is_empty() {
+                                            if rem > 0
+                                                && out.is_empty()
+                                                && price_limit_ok(last_price)
+                                            {
                                                 let px_adj = slip.adjust(
                                                     Side::Sell,
                                                     last_price,
@@ -482,7 +488,7 @@ impl FillModel for CmeFillModel {
                                                     maker: false,
                                                 });
                                             }
-                                        } else {
+                                        } else if price_limit_ok(last_price) {
                                             let px_adj = slip.adjust(
                                                 Side::Sell,
                                                 last_price,
@@ -514,7 +520,9 @@ impl FillModel for CmeFillModel {
                                                 &mut ok,
                                                 Side::Buy,
                                             );
-                                        } else if eff_lim >= last_price {
+                                        } else if eff_lim >= last_price
+                                            && price_limit_ok(last_price)
+                                        {
                                             let px_adj = slip.adjust(
                                                 Side::Buy,
                                                 last_price,
@@ -538,7 +546,9 @@ impl FillModel for CmeFillModel {
                                                 &mut ok,
                                                 Side::Sell,
                                             );
-                                        } else if eff_lim <= last_price {
+                                        } else if eff_lim <= last_price
+                                            && price_limit_ok(last_price)
+                                        {
                                             let px_adj = slip.adjust(
                                                 Side::Sell,
                                                 last_price,
@@ -596,7 +606,7 @@ impl FillModel for CmeFillModel {
                                             &mut always_ok,
                                             Side::Buy,
                                         );
-                                        if rem > 0 && out.is_empty() {
+                                        if rem > 0 && out.is_empty() && price_limit_ok(last_price) {
                                             let px_adj =
                                                 slip.adjust(Side::Buy, last_price, spread, rem);
                                             out.push(Fill {
@@ -606,7 +616,7 @@ impl FillModel for CmeFillModel {
                                                 maker: false,
                                             });
                                         }
-                                    } else {
+                                    } else if price_limit_ok(last_price) {
                                         let px_adj =
                                             slip.adjust(Side::Buy, last_price, spread, order.qty);
                                         out.push(Fill {
@@ -637,7 +647,7 @@ impl FillModel for CmeFillModel {
                                             &mut always_ok,
                                             Side::Sell,
                                         );
-                                        if rem > 0 && out.is_empty() {
+                                        if rem > 0 && out.is_empty() && price_limit_ok(last_price) {
                                             let px_adj =
                                                 slip.adjust(Side::Sell, last_price, spread, rem);
                                             out.push(Fill {
@@ -647,7 +657,7 @@ impl FillModel for CmeFillModel {
                                                 maker: false,
                                             });
                                         }
-                                    } else {
+                                    } else if price_limit_ok(last_price) {
                                         let px_adj =
                                             slip.adjust(Side::Sell, last_price, spread, order.qty);
                                         out.push(Fill {
