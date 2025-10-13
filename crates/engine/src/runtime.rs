@@ -741,6 +741,55 @@ impl EngineRuntime {
                                 strategy_for_task.on_bar(&c, prov);
                             }
                         }
+                        // 2) In backtests, periodically synthesize and emit snapshots only if content changed
+                        if handle_inner_for_task.backtest_mode {
+                            let should_emit = match last_snapshot_emit { Some(prev) => (now - prev) >= chrono::Duration::seconds(1), None => true };
+                            if should_emit {
+                                // Positions snapshot (content signature ignoring time)
+                                let pb = pm.positions_snapshot(now);
+                                let mut pos_sig_now: Vec<String> = Vec::with_capacity(pb.positions.len());
+                                for p in &pb.positions {
+                                    pos_sig_now.push(format!(
+                                        "{:?}|{}|{}|{}|{}|{}",
+                                        p.provider_kind, p.account_name, p.instrument, p.net_qty, p.average_price, p.open_pnl
+                                    ));
+                                }
+                                let mut emitted_any = false;
+                                if last_pos_sig.as_ref().map(|s| s != &pos_sig_now).unwrap_or(!pos_sig_now.is_empty()) {
+                                    // Update engine state and notify strategy
+                                    {
+                                        let mut g = state.last_positions.write().expect("positions lock poisoned");
+                                        *g = Some(pb.clone());
+                                    }
+                                    if !pb.positions.is_empty() {
+                                        strategy_for_task.on_positions_batch(&pb);
+                                        emitted_any = true;
+                                    }
+                                    last_pos_sig = Some(pos_sig_now);
+                                }
+                                // Accounts snapshot (content signature ignoring time)
+                                let ab = pm.accounts_snapshot(now);
+                                let mut acct_sig_now: Vec<String> = Vec::with_capacity(ab.accounts.len());
+                                for a in &ab.accounts {
+                                    acct_sig_now.push(format!(
+                                        "{:?}|{}|{}|{}",
+                                        a.provider_kind, a.name, a.equity, a.day_realized_pnl
+                                    ));
+                                }
+                                if last_acct_sig.as_ref().map(|s| s != &acct_sig_now).unwrap_or(!acct_sig_now.is_empty()) {
+                                    {
+                                        let mut g = state.last_accounts.write().expect("accounts lock poisoned");
+                                        *g = Some(ab.clone());
+                                    }
+                                    if !ab.accounts.is_empty() {
+                                        strategy_for_task.on_account_delta(&ab.accounts);
+                                        emitted_any = true;
+                                    }
+                                    last_acct_sig = Some(acct_sig_now);
+                                }
+                                if emitted_any { last_snapshot_emit = Some(now); }
+                            }
+                        }
                         // 3) Flat-by-close enforcement is handled by backtest risk models; do not enforce in runtime
                     },
                     Response::BacktestCompleted { end: _ } => {
