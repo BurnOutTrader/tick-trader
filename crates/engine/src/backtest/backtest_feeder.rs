@@ -614,7 +614,9 @@ impl BacktestFeeder {
                                 reject = true;
                             } else {
                                 // Normalize to positive quantity to keep fills/leaves non-negative across the engine
-                                if spec.qty < 0 { spec.qty = spec.qty*-1; }
+                                if spec.qty < 0 {
+                                    spec.qty = -spec.qty;
+                                }
                             }
 
                             // Logic validation for order types (when we have a mark)
