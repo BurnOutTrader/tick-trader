@@ -346,7 +346,7 @@ pub struct PlaceOrder {
     pub instrument: Instrument,
     /// Side (buy/sell)
     pub side: crate::accounts::events::Side,
-    /// Quantity
+    /// Quantity (positive magnitude; use `side` to indicate direction)
     pub qty: i64,
     /// Order type
     pub order_type: OrderType,

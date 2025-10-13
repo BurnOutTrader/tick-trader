@@ -27,6 +27,24 @@ impl Side {
             Side::Sell => -1,
         }
     }
+    /// Normalize a quantity to the platform-wide convention:
+    /// - Quantities are always positive magnitudes
+    /// - Side conveys direction (Buy vs Sell)
+    /// - Zero is invalid and returned as zero for caller to validate
+    #[inline]
+    pub fn normalize_qty(self, qty: i64) -> i64 {
+        qty.abs()
+    }
+    /// Returns true if the given quantity follows the standard convention (positive, non-zero)
+    #[inline]
+    pub fn is_qty_sign_valid(self, qty: i64) -> bool {
+        qty > 0
+    }
+    /// Returns the magnitude of the quantity (always non-negative)
+    #[inline]
+    pub fn unsigned_qty(_self: Self, qty: i64) -> u64 {
+        qty.unsigned_abs()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize)]

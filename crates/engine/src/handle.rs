@@ -376,11 +376,13 @@ impl EngineHandle {
         let engine_uuid = EngineUuid::new();
         let tag = EngineUuid::append_engine_tag(custom_tag, engine_uuid);
         let account_key_clone = account_key.clone();
+        // Normalize quantity sign to platform standard
+        let qty_norm = side.normalize_qty(qty);
         let spec = tt_types::wire::PlaceOrder {
             account_key,
             instrument,
             side,
-            qty,
+            qty: qty_norm,
             order_type,
             limit_price: limit_price.and_then(|d| d.to_f64()),
             stop_price: stop_price.and_then(|d| d.to_f64()),

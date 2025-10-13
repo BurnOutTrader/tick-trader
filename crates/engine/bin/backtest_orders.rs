@@ -121,7 +121,7 @@ impl Strategy for BacktestOrdersStrategy {
                         self.account.clone(),
                         self.sk.instrument.clone(),
                         tt_types::accounts::events::Side::Sell,
-                        -qty,
+                        qty,
                         OrderType::Market,
                         None,
                         None,
@@ -182,7 +182,7 @@ async fn main() -> anyhow::Result<()> {
     // Load env for DATABASE_URL etc.
     let _ = dotenvy::dotenv();
     tracing_subscriber::fmt()
-        .with_max_level(LevelFilter::WARN)
+        .with_max_level(LevelFilter::INFO)
         .init();
 
     // Create DB pool from env (Postgres) and ensure schema
