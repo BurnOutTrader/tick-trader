@@ -136,17 +136,7 @@ SessionCalendar (default: HoursCalendar)
 
 > ✅ Prereqs: Ensure Postgres is available and the schema is initialized (ensure_schema is called in the demo).
 
-Run:
-
-```zsh
-# Build and run the orders backtest demo
-cargo run -p tt-engine --bin tt-backtest_orders
-```
-
-What it does:
-- Subscribes to 1m candles for MNQ.Z25 (ProjectX/Topstep), walks bars, and places a series of orders (Market, Limit, Stop, StopLimit, JoinBid/JoinAsk, TrailingStop) driven by a bar counter.
-- Asserts acks for all orders; expects fills for market/crossing orders; prints bars, order updates, and positions.
-
+See: [see strategy examples](/crates/a_strategies/examples)
 
 ## ⚙️ Configuration tips
 
