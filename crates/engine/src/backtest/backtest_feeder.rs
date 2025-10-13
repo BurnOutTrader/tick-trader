@@ -21,7 +21,9 @@ use crate::backtest::realism_models::project_x::calander::HoursCalendar;
 use crate::backtest::realism_models::project_x::fill::{CmeFillModel, FillConfig};
 use crate::backtest::realism_models::project_x::latency::PxLatency;
 use crate::backtest::realism_models::project_x::slippage::NoSlippage;
-use crate::backtest::realism_models::traits::{FillModel, LatencyModel};
+use crate::backtest::realism_models::traits::{
+    FillModel, LatencyModel, SessionCalendar, SlippageModel,
+};
 
 /// Windowed DB feeder that simulates a provider by emitting Responses over an in-process bus.
 /// It listens for SubscribeKey/UnsubscribeKey requests on a request channel you provide when
@@ -39,6 +41,14 @@ pub struct BacktestFeederConfig {
     pub range_start: Option<DateTime<Utc>>,
     /// Optional absolute end time (UTC) to clamp backtest range.
     pub range_end: Option<DateTime<Utc>>,
+    /// Factory for latency model instances used by the feeder
+    pub make_latency: Arc<dyn Fn() -> Box<dyn LatencyModel> + Send + Sync>,
+    /// Factory for per-order fill model instances
+    pub make_fill: Arc<dyn Fn() -> Box<dyn FillModel> + Send + Sync>,
+    /// Factory for per-order slippage model instances
+    pub make_slippage: Arc<dyn Fn() -> Box<dyn SlippageModel> + Send + Sync>,
+    /// Shared session calendar
+    pub calendar: Arc<dyn SessionCalendar>,
 }
 impl Default for BacktestFeederConfig {
     fn default() -> Self {
@@ -50,6 +60,14 @@ impl Default for BacktestFeederConfig {
             warmup: ChronoDuration::zero(),
             range_start: None,
             range_end: None,
+            make_latency: Arc::new(|| Box::new(PxLatency::default())),
+            make_fill: Arc::new(|| {
+                Box::new(CmeFillModel {
+                    cfg: FillConfig::default(),
+                })
+            }),
+            make_slippage: Arc::new(|| Box::new(NoSlippage::new())),
+            calendar: Arc::new(HoursCalendar::default()),
         }
     }
 }
@@ -146,13 +164,10 @@ impl BacktestFeeder {
                 ChronoDuration::from_std(d)
                     .unwrap_or_else(|_| ChronoDuration::milliseconds(d.as_millis() as i64))
             }
-            // Instantiate shared realism models (defaults for now)
-            let _lat_model = PxLatency::default();
-            let mut fill_model: CmeFillModel = CmeFillModel {
-                cfg: FillConfig::default(),
-            };
-            let mut slip_model = NoSlippage::new();
-            let cal_model = HoursCalendar::default();
+            // Instantiate shared realism models from config
+            let mut fill_model: Box<dyn FillModel> = (cfg.make_fill)();
+            let mut slip_model: Box<dyn SlippageModel> = (cfg.make_slippage)();
+            let cal_model: Arc<dyn SessionCalendar> = cfg.calendar.clone();
             // Simulated orders
             let mut sim_orders: HashMap<EngineUuid, SimOrder> = HashMap::new();
 
@@ -162,8 +177,8 @@ impl BacktestFeeder {
             let mut heap: BinaryHeap<HeapEntry> = BinaryHeap::new();
             // Pending outgoing events (after normalization) awaiting emission order
             let mut _out_q: VecDeque<Response> = VecDeque::new();
-            // Last known mark price per (provider,instrument) to price synthetic fills
-            let mut marks: HashMap<(ProviderKind, Instrument), Decimal> = HashMap::new();
+            // Last known mark price per symbol_ket to price synthetic fills
+            let mut marks: HashMap<SymbolKey, Decimal> = HashMap::new();
             // Orchestrator-controlled logical time watermark; only emit events <= this time.
             let mut watermark: Option<DateTime<Utc>> = None;
             // Ensure we emit BacktestCompleted exactly once when end is reached
@@ -453,19 +468,28 @@ impl BacktestFeeder {
                                             match &item {
                                                 tt_database::queries::TopicDataEnum::Tick(tk) => {
                                                     marks.insert(
-                                                        (ks.provider, tk.instrument.clone()),
+                                                        SymbolKey::new(
+                                                            tk.instrument.clone(),
+                                                            ks.provider,
+                                                        ),
                                                         tk.price,
                                                     );
                                                 }
                                                 tt_database::queries::TopicDataEnum::Bbo(bbo) => {
                                                     marks.insert(
-                                                        (ks.provider, bbo.instrument.clone()),
+                                                        SymbolKey::new(
+                                                            bbo.instrument.clone(),
+                                                            ks.provider,
+                                                        ),
                                                         bbo.bid,
                                                     );
                                                 }
                                                 tt_database::queries::TopicDataEnum::Candle(c) => {
                                                     marks.insert(
-                                                        (ks.provider, c.instrument.clone()),
+                                                        SymbolKey::new(
+                                                            c.instrument.clone(),
+                                                            ks.provider,
+                                                        ),
                                                         c.close,
                                                     );
                                                 }
@@ -513,7 +537,10 @@ impl BacktestFeeder {
                                 if !so.done && now >= so.fill_at {
                                     // Price at last mark; use fill model to allow overrides
                                     let last_px = marks
-                                        .get(&(so.provider, so.spec.instrument.clone()))
+                                        .get(&SymbolKey::new(
+                                            so.spec.instrument.clone(),
+                                            so.provider,
+                                        ))
                                         .cloned()
                                         .unwrap_or(Decimal::ZERO);
                                     // Try model matching (no book view for now)
@@ -522,8 +549,8 @@ impl BacktestFeeder {
                                         None,
                                         last_px,
                                         &mut so.spec,
-                                        &mut slip_model,
-                                        &cal_model,
+                                        &mut *slip_model,
+                                        &*cal_model,
                                     );
                                     let mut total_qty: i64 = 0;
                                     let mut vwap_num = Decimal::ZERO;
@@ -618,7 +645,7 @@ impl BacktestFeeder {
                             }
                             // Logic validation for order types (when we have a mark)
                             let last_mark = marks
-                                .get(&(prov, spec.instrument.clone()))
+                                .get(&SymbolKey::new(spec.instrument.clone(), prov))
                                 .and_then(|d| d.to_f64());
 
                             match spec.order_type {
@@ -694,14 +721,9 @@ impl BacktestFeeder {
                                 continue;
                             }
 
-                            // Initialize models (defaults for now)
-                            let mut lat = PxLatency::default();
-                            let mut fill_model = CmeFillModel {
-                                cfg: FillConfig::default(),
-                            };
-                            let _slip = NoSlippage::new();
-                            let _cal = HoursCalendar::default();
-                            // Normalize order on submit
+                            // Initialize per-order latency model; use shared fill/slip/calendar
+                            let mut lat = (cfg.make_latency)();
+                            // Normalize order on submit using configured fill model
                             fill_model.on_submit(base, &mut spec);
 
                             // Schedule ack and (first) fill per latency
@@ -764,16 +786,23 @@ impl BacktestFeeder {
                                 // Update last marks for synthetic fills
                                 match &item {
                                     tt_database::queries::TopicDataEnum::Tick(tk) => {
-                                        marks
-                                            .insert((ks.provider, tk.instrument.clone()), tk.price);
+                                        marks.insert(
+                                            SymbolKey::new(tk.instrument.clone(), ks.provider),
+                                            tk.price,
+                                        );
                                     }
                                     tt_database::queries::TopicDataEnum::Bbo(bbo) => {
                                         // Use bid as a conservative mark for simplicity
-                                        marks
-                                            .insert((ks.provider, bbo.instrument.clone()), bbo.bid);
+                                        marks.insert(
+                                            SymbolKey::new(bbo.instrument.clone(), ks.provider),
+                                            bbo.bid,
+                                        );
                                     }
                                     tt_database::queries::TopicDataEnum::Candle(c) => {
-                                        marks.insert((ks.provider, c.instrument.clone()), c.close);
+                                        marks.insert(
+                                            SymbolKey::new(c.instrument.clone(), ks.provider),
+                                            c.close,
+                                        );
                                     }
                                     tt_database::queries::TopicDataEnum::Mbp10(_m) => {}
                                 }
