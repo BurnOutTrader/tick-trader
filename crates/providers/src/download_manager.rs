@@ -102,19 +102,20 @@ impl DownloadTaskHandle {
     }
 }
 
-impl Default for DownloadManager {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl DownloadManager {
     pub fn new() -> Self {
         // Load .env first
         dotenv().ok();
         // Rely on centralized DATABASE_URL handling (supports short-form) in tt_database::init
-        let db = tt_database::init::pool_from_env()
-            .expect("failed to initialize Postgres pool from env (check DATABASE_URL)");
+        let db = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("failed to build single-thread runtime")
+            .block_on(async {
+                tt_database::init::pool_from_env()
+                    .await
+                    .expect("failed to initialize Postgres pool from env (check DATABASE_URL)")
+            });
         Self {
             inner: std::sync::Arc::new(DownloadManagerInner {
                 inflight: Arc::new(RwLock::new(HashMap::new())),
