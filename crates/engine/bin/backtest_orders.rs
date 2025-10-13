@@ -21,6 +21,7 @@ use tt_types::rolling_window::RollingWindow;
 use tt_types::securities::symbols::Instrument;
 use tt_types::wire::{self, OrderType, Trade};
 
+use colored::Colorize;
 use std::collections::HashMap;
 use tt_database::schema::ensure_schema;
 
@@ -109,7 +110,18 @@ impl Strategy for BacktestOrdersStrategy {
         if !self.is_warmed_up || self.done {
             return;
         }
-        println!("BAR: {:?}", c);
+        let candle_msg = format!(
+            "C: {}, H:{}, L:{}, O:{}, C:{}, @{}",
+            c.instrument, c.high, c.low, c.open, c.close, c.time_end
+        );
+        if c.close > c.open {
+            println!("{}", candle_msg.as_str().bright_green());
+        } else if c.close < c.open {
+            println!("{}", candle_msg.as_str().bright_red());
+        } else {
+            println!("{:?}", candle_msg);
+        }
+
         self.bar_idx = self.bar_idx.saturating_add(1);
         let last = c.close;
         let h = match &self.engine {
@@ -334,10 +346,8 @@ impl Strategy for BacktestOrdersStrategy {
     fn on_orders_batch(&mut self, b: &wire::OrdersBatch) {
         use tt_types::accounts::order::OrderState;
         for o in &b.orders {
-            println!(
-                "ORDER UPDATE: tag={:?} state={:?} leaves={} cum={} avg={}",
-                o.tag, o.state, o.leaves, o.cum_qty, o.avg_fill_px
-            );
+            let o_msg = o.to_clean_string();
+            println!("{}", o_msg.bright_blue());
             if let Some(tag) = &o.tag
                 && let Some(exp) = self.expect.get_mut(tag)
             {
@@ -374,13 +384,15 @@ impl Strategy for BacktestOrdersStrategy {
 
     fn on_positions_batch(&mut self, b: &wire::PositionsBatch) {
         for p in &b.positions {
-            println!("{:?}", p);
+            let p_msg = p.to_clean_string();
+            println!("{}", p_msg.as_str().cyan());
         }
     }
 
     fn on_account_delta(&mut self, accounts: &[AccountDelta]) {
         for a in accounts {
-            println!("{:?}", a);
+            let acc_msg = a.to_clean_string();
+            println!("{}", acc_msg.purple());
         }
     }
 
@@ -417,7 +429,7 @@ async fn main() -> anyhow::Result<()> {
     ensure_schema(&db).await?;
     // Backtest for a recent 30-day period
     let end_date = Utc::now().date_naive();
-    let start_date = end_date - chrono::Duration::days(3);
+    let start_date = end_date - chrono::Duration::minutes(60);
 
     // Configure and start backtest
     let cfg = BacktestConfig::from_to(chrono::Duration::milliseconds(250), start_date, end_date);

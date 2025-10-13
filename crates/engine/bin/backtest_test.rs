@@ -1,6 +1,7 @@
 mod backtest_orders;
 
 use chrono::Utc;
+use colored::Colorize;
 use std::str::FromStr;
 use std::time::Duration;
 use tokio::time::sleep;
@@ -51,8 +52,18 @@ impl Strategy for BacktestDataStrategy {
         println!("{:?}", q);
     }
 
-    fn on_bar(&mut self, b: &tt_types::data::core::Candle, _provider_kind: ProviderKind) {
-        println!("{:?}", b)
+    fn on_bar(&mut self, c: &tt_types::data::core::Candle, _provider_kind: ProviderKind) {
+        let candle_msg = format!(
+            "C: {}, H:{}, L:{}, O:{}, C:{}, @{}",
+            c.instrument, c.high, c.low, c.open, c.close, c.time_end
+        );
+        if c.close > c.open {
+            println!("{}", candle_msg.as_str().bright_green());
+        } else if c.close < c.open {
+            println!("{}", candle_msg.as_str().bright_red());
+        } else {
+            println!("{:?}", candle_msg);
+        }
     }
 
     fn on_mbp10(&mut self, d: &Mbp10, _provider_kind: ProviderKind) {

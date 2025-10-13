@@ -1,6 +1,7 @@
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
+use strum_macros::Display;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Archive, RkyvDeserialize, RkyvSerialize)]
+#[derive(Debug, Clone, Display, Copy, PartialEq, Eq, Archive, RkyvDeserialize, RkyvSerialize)]
 #[archive(check_bytes)]
 pub enum OrderState {
     New,

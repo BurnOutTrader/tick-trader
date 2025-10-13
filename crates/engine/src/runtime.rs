@@ -633,7 +633,11 @@ impl EngineRuntime {
             // Track last time we emitted snapshots in backtest mode
             // Track last logical backtest time announced by orchestrator
             let mut last_bt_now: Option<chrono::DateTime<chrono::Utc>> = None;
-            // Determine snapshot cadence from latency model //todo[latency] not sure how i will handle acual models yet. maybe overkill??
+            // Throttled snapshot emission state (for backtests)
+            let mut last_snapshot_emit: Option<chrono::DateTime<chrono::Utc>> = None;
+            // Content signatures (ignore time fields) to avoid re-sending unchanged snapshots
+            let mut last_pos_sig: Option<Vec<String>> = None;
+            let mut last_acct_sig: Option<Vec<String>> = None;
             // Initial drain to process any commands enqueued during on_start (e.g., subscribe_now)
             Self::drain_commands_for_task(
                 cmd_q_for_task.clone(),

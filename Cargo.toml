@@ -50,5 +50,6 @@ lazy_static = "1.5.0"
 rustls = { version = "0.23.20", default-features = false, features = ["ring"] }
 crossbeam = "0.8"
 sqlx = { version = "0.8.6", features = ["runtime-tokio", "postgres", "time", "chrono", "rust_decimal"] }
+colored = "3.0.0"
 [workspace.lints.rust]
 missing_docs = "allow"

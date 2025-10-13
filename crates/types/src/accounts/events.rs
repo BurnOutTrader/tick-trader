@@ -7,6 +7,7 @@ use crate::wire::Bytes;
 use chrono::{DateTime, Utc};
 use rkyv::{AlignedVec, Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use rust_decimal::Decimal;
+use strum_macros::Display;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
 #[archive(check_bytes)]
@@ -163,7 +164,15 @@ pub struct OrderUpdate {
 
     pub time: DateTime<Utc>,
 }
-#[derive(Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize)]
+impl OrderUpdate {
+    pub fn to_clean_string(&self) -> String {
+        format!(
+            "Order Update: {}, {}:{}:{} remaining:{} @{} ",
+            self.provider_kind, self.instrument, self.state, self.cum_qty, self.leaves, self.time
+        )
+    }
+}
+#[derive(Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize, Display)]
 #[archive(check_bytes)]
 pub enum PositionSide {
     Long,
@@ -182,6 +191,21 @@ pub struct PositionDelta {
     pub time: DateTime<Utc>,
     pub side: PositionSide,
 }
+impl PositionDelta {
+    pub fn to_clean_string(&self) -> String {
+        format!(
+            "Position Delta: {}:{}, {}, {}:{}@{} open pnl:{}@{} ",
+            self.provider_kind,
+            self.account_name,
+            self.account_name,
+            self.side,
+            self.net_qty,
+            self.average_price,
+            self.open_pnl,
+            self.time
+        )
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize)]
 #[archive(check_bytes)]
@@ -199,4 +223,18 @@ pub struct AccountDelta {
     pub time: DateTime<Utc>,
 
     pub can_trade: bool,
+}
+impl AccountDelta {
+    pub fn to_clean_string(&self) -> String {
+        format!(
+            "Account Delta: {}:{}, equity:{}, day_pnl:{}, open_pnl:{}, can_trade:{}, @{}",
+            self.provider_kind,
+            self.name,
+            self.equity,
+            self.day_realized_pnl,
+            self.open_pnl,
+            self.can_trade,
+            self.time
+        )
+    }
 }
