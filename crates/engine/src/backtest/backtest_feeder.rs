@@ -9,12 +9,12 @@ use tracing::{info, warn};
 use tt_bus::ClientMessageBus;
 use tt_types::accounts::events::{AccountDelta, OrderUpdate, ProviderOrderId};
 use tt_types::accounts::order::OrderState;
+use tt_types::data::mbp10::BookLevels;
 use tt_types::engine_id::EngineUuid;
 use tt_types::keys::{SymbolKey, Topic};
 use tt_types::providers::ProviderKind;
 use tt_types::securities::symbols::Instrument;
 use tt_types::wire::{AccountDeltaBatch, BarBatch, Response};
-use tt_types::data::mbp10::BookLevels;
 
 use crate::backtest::backtest_clock::BacktestClock;
 use crate::backtest::realism_models::project_x::calander::HoursCalendar;
@@ -252,7 +252,10 @@ impl BacktestFeeder {
             // Simulated orders
             let mut sim_orders: HashMap<EngineUuid, SimOrder> = HashMap::new();
             // Per-account ledger for AccountDelta snapshots
-            let mut accounts_ledger: HashMap<(ProviderKind, tt_types::accounts::account::AccountName), AccountDelta> = HashMap::new();
+            let mut accounts_ledger: HashMap<
+                (ProviderKind, tt_types::accounts::account::AccountName),
+                AccountDelta,
+            > = HashMap::new();
 
             // Active subscriptions
             let mut keys: HashMap<(Topic, SymbolKey), KeyState> = HashMap::new();
@@ -607,7 +610,10 @@ impl BacktestFeeder {
                             let now = bta.to;
                             let mut due: Vec<OrderUpdate> = Vec::new();
                             let mut finished: Vec<EngineUuid> = Vec::new();
-                            let mut updated_accounts: Vec<(ProviderKind, tt_types::accounts::account::AccountName)> = Vec::new();
+                            let mut updated_accounts: Vec<(
+                                ProviderKind,
+                                tt_types::accounts::account::AccountName,
+                            )> = Vec::new();
                             for (oid, so) in sim_orders.iter_mut() {
                                 if !so.ack_emitted && now >= so.ack_at {
                                     due.push(OrderUpdate {
@@ -625,61 +631,6 @@ impl BacktestFeeder {
                                     });
                                     so.ack_emitted = true;
                                 }
-                                // Handle pending cancellation first
-                                if !so.done && so.cancel_pending {
-                                    if let Some(at) = so.cancel_at {
-                                        if now >= at {
-                                            // Emit canceled and finish
-                                            due.push(OrderUpdate {
-                                                name: so.spec.account_key.account_name.clone(),
-                                                instrument: so.spec.instrument.clone(),
-                                                provider_kind: so.provider,
-                                                provider_order_id: Some(so.provider_order_id.clone()),
-                                                order_id: *oid,
-                                                state: OrderState::Canceled,
-                                                leaves: so.spec.qty,
-                                                cum_qty: so.cum_qty,
-                                                avg_fill_px: if so.cum_qty > 0 { so.cum_vwap_num / Decimal::from(so.cum_qty) } else { Decimal::ZERO },
-                                                tag: so.user_tag.clone(),
-                                                time: at,
-                                            });
-                                            so.done = true;
-                                            finished.push(*oid);
-                                        }
-                                    }
-                                    // Do not attempt fills while cancel is pending
-                                    continue;
-                                }
-
-                                // Handle pending replace next
-                                if !so.done && so.replace_pending {
-                                    if let Some(at) = so.replace_at {
-                                        if now >= at {
-                                            if let Some(req) = so.replace_req.clone() {
-                                                // Apply qty change if present
-                                                if let Some(new_qty_raw) = req.new_qty {
-                                                    let mut new_qty = new_qty_raw.abs();
-                                                    if new_qty < so.cum_qty { new_qty = so.cum_qty; }
-                                                    so.orig_qty = new_qty;
-                                                    let leaves = so.orig_qty - so.cum_qty;
-                                                    so.spec.qty = leaves.max(0);
-                                                }
-                                                // Apply price fields if present
-                                                if let Some(p) = req.new_limit_price { so.spec.limit_price = Some(p); }
-                                                if let Some(p) = req.new_stop_price { so.spec.stop_price = Some(p); }
-                                                if let Some(p) = req.new_trail_price { so.spec.trail_price = Some(p); }
-                                                // After replace, schedule next fill attempt slightly later
-                                                so.fill_at = now + ChronoDuration::milliseconds(5);
-                                            }
-                                            so.replace_pending = false;
-                                            so.replace_at = None;
-                                            so.replace_req = None;
-                                        }
-                                    }
-                                    // Do not attempt fills while replace is pending
-                                    continue;
-                                }
-
                                 if !so.done && now >= so.fill_at {
                                     // Price at last mark; use fill model to allow overrides
                                     let (last_px, _spread_opt) = {
@@ -693,7 +644,8 @@ impl BacktestFeeder {
                                     };
                                     // Try model matching with latest book snapshot if available
                                     let book_opt = {
-                                        let key = SymbolKey::new(so.spec.instrument.clone(), so.provider);
+                                        let key =
+                                            SymbolKey::new(so.spec.instrument.clone(), so.provider);
                                         books.get(&key)
                                     };
                                     let fills = so.fill_model.match_book(
@@ -703,7 +655,7 @@ impl BacktestFeeder {
                                         &mut so.spec,
                                         &mut *so.slip_model,
                                         &*cal_model,
-                                        &*so.fee_model
+                                        &*so.fee_model,
                                     );
                                     // Respect session calendar: if closed/halting at this logical time, defer the fill to next open
                                     if !cal_model.is_open(&so.spec.instrument, now)
@@ -742,16 +694,19 @@ impl BacktestFeeder {
                                         fee_delta += money.amount;
                                     }
                                     if !fee_delta.is_zero() {
-                                        let acct_key = (so.provider, so.spec.account_key.account_name.clone());
-                                        let entry = accounts_ledger.entry(acct_key.clone()).or_insert(AccountDelta {
-                                            provider_kind: so.provider,
-                                            name: so.spec.account_key.account_name.clone(),
-                                            equity: Decimal::ZERO,
-                                            day_realized_pnl: Decimal::ZERO,
-                                            open_pnl: Decimal::ZERO,
-                                            time: now,
-                                            can_trade: true,
-                                        });
+                                        let acct_key =
+                                            (so.provider, so.spec.account_key.account_name.clone());
+                                        let entry = accounts_ledger
+                                            .entry(acct_key.clone())
+                                            .or_insert(AccountDelta {
+                                                provider_kind: so.provider,
+                                                name: so.spec.account_key.account_name.clone(),
+                                                equity: Decimal::ZERO,
+                                                day_realized_pnl: Decimal::ZERO,
+                                                open_pnl: Decimal::ZERO,
+                                                time: now,
+                                                can_trade: true,
+                                            });
                                         // Update snapshot fields
                                         entry.day_realized_pnl += fee_delta;
                                         entry.equity += fee_delta;
@@ -804,6 +759,69 @@ impl BacktestFeeder {
                                         finished.push(*oid);
                                     }
                                 }
+                                // Apply pending cancel/replace effects after matching (fills-first ordering)
+                                if !so.done && so.cancel_pending {
+                                    if let Some(at) = so.cancel_at {
+                                        if now >= at {
+                                            due.push(OrderUpdate {
+                                                name: so.spec.account_key.account_name.clone(),
+                                                instrument: so.spec.instrument.clone(),
+                                                provider_kind: so.provider,
+                                                provider_order_id: Some(
+                                                    so.provider_order_id.clone(),
+                                                ),
+                                                order_id: *oid,
+                                                state: OrderState::Canceled,
+                                                leaves: so.spec.qty,
+                                                cum_qty: so.cum_qty,
+                                                avg_fill_px: if so.cum_qty > 0 {
+                                                    so.cum_vwap_num / Decimal::from(so.cum_qty)
+                                                } else {
+                                                    Decimal::ZERO
+                                                },
+                                                tag: so.user_tag.clone(),
+                                                time: at,
+                                            });
+                                            so.done = true;
+                                            finished.push(*oid);
+                                            so.cancel_pending = false;
+                                            so.cancel_at = None;
+                                        }
+                                    }
+                                }
+                                if !so.done && so.replace_pending {
+                                    if let Some(at) = so.replace_at {
+                                        if now >= at {
+                                            if let Some(req) = so.replace_req.clone() {
+                                                // Apply qty change if present
+                                                if let Some(new_qty_raw) = req.new_qty {
+                                                    let mut new_qty = new_qty_raw.abs();
+                                                    if new_qty < so.cum_qty {
+                                                        new_qty = so.cum_qty;
+                                                    }
+                                                    so.orig_qty = new_qty;
+                                                    let leaves = so.orig_qty - so.cum_qty;
+                                                    so.spec.qty = leaves.max(0);
+                                                }
+                                                // Apply price fields if present
+                                                if let Some(p) = req.new_limit_price {
+                                                    so.spec.limit_price = Some(p);
+                                                }
+                                                if let Some(p) = req.new_stop_price {
+                                                    so.spec.stop_price = Some(p);
+                                                }
+                                                if let Some(p) = req.new_trail_price {
+                                                    so.spec.trail_price = Some(p);
+                                                }
+                                                // After replace, schedule next fill attempt slightly later
+                                                so.fill_at = now + ChronoDuration::milliseconds(5);
+                                            }
+                                            so.replace_pending = false;
+                                            so.replace_at = None;
+                                            so.replace_req = None;
+                                        }
+                                    }
+                                }
                             }
                             if !due.is_empty() {
                                 let ob = tt_types::wire::OrdersBatch {
@@ -817,7 +835,10 @@ impl BacktestFeeder {
                             // Emit account snapshots for any accounts updated by fees this tick
                             if !updated_accounts.is_empty() {
                                 // Deduplicate keys without requiring Ord
-                                let mut set: std::collections::HashSet<(ProviderKind, tt_types::accounts::account::AccountName)> = std::collections::HashSet::new();
+                                let mut set: std::collections::HashSet<(
+                                    ProviderKind,
+                                    tt_types::accounts::account::AccountName,
+                                )> = std::collections::HashSet::new();
                                 let mut accounts_vec: Vec<AccountDelta> = Vec::new();
                                 for key in updated_accounts.into_iter() {
                                     if set.insert(key.clone()) {
@@ -827,8 +848,14 @@ impl BacktestFeeder {
                                     }
                                 }
                                 if !accounts_vec.is_empty() {
-                                    let ab = AccountDeltaBatch { topic: Topic::AccountEvt, seq: 0, accounts: accounts_vec };
-                                    let _ = bus_clone.route_response(Response::AccountDeltaBatch(ab)).await;
+                                    let ab = AccountDeltaBatch {
+                                        topic: Topic::AccountEvt,
+                                        seq: 0,
+                                        accounts: accounts_vec,
+                                    };
+                                    let _ = bus_clone
+                                        .route_response(Response::AccountDeltaBatch(ab))
+                                        .await;
                                     await_ack(&notify).await;
                                 }
                             }
@@ -859,7 +886,9 @@ impl BacktestFeeder {
                             let prov = spec.account_key.provider;
                             let acct_name = spec.account_key.account_name.clone();
                             // Logical base time from orchestrator
-                            let base = watermark.unwrap_or_else(Utc::now);
+                            let base = watermark.expect(
+                                "no watermark set; backtest must drive time via BacktestAdvanceTo",
+                            );
                             // Ensure an engine order id exists (prefer embedded tag)
                             let (engine_order_id, user_tag) = if let Some(tag) = &spec.custom_tag {
                                 if let Some((eng, user_tag)) =
@@ -949,7 +978,7 @@ impl BacktestFeeder {
                                 user_tag,
                                 done: false,
                                 // lifecycle
-                                orig_qty: orig_qty,
+                                orig_qty,
                                 cum_qty: 0,
                                 cum_vwap_num: Decimal::ZERO,
                                 // cancel state
@@ -967,20 +996,24 @@ impl BacktestFeeder {
                             };
                             // Ensure ledger entry exists for this account
                             let acct_key = (prov, acct_name.clone());
-                            accounts_ledger.entry(acct_key.clone()).or_insert(AccountDelta {
-                                provider_kind: prov,
-                                name: acct_name.clone(),
-                                equity: Decimal::ZERO,
-                                day_realized_pnl: Decimal::ZERO,
-                                open_pnl: Decimal::ZERO,
-                                time: base,
-                                can_trade: true,
-                            });
+                            accounts_ledger
+                                .entry(acct_key.clone())
+                                .or_insert(AccountDelta {
+                                    provider_kind: prov,
+                                    name: acct_name.clone(),
+                                    equity: Decimal::ZERO,
+                                    day_realized_pnl: Decimal::ZERO,
+                                    open_pnl: Decimal::ZERO,
+                                    time: base,
+                                    can_trade: true,
+                                });
                             sim_orders.entry(engine_order_id).or_insert(sim);
                         }
                         Request::CancelOrder(cxl) => {
                             // Schedule a cancel using provider_order_id; ignore if not found
-                            let base = watermark.unwrap_or_else(Utc::now);
+                            let base = watermark.expect(
+                                "no watermark set; backtest must drive time via BacktestAdvanceTo",
+                            );
                             // Create a latency model instance for timing
                             let mut lat = (cfg.make_latency)();
                             let when = base + to_chrono(lat.cancel_rtt());
@@ -988,29 +1021,35 @@ impl BacktestFeeder {
                             let target_id = cxl.provider_order_id;
                             let acct = cxl.account_name;
                             for (_eid, so) in sim_orders.iter_mut() {
-                                if so.provider_order_id.0 == target_id && so.spec.account_key.account_name == acct {
+                                if so.provider_order_id.0 == target_id
+                                    && so.spec.account_key.account_name == acct
+                                {
                                     so.cancel_at = Some(when);
                                     so.cancel_pending = true;
-                                    // While cancel pending, block fills by pushing fill_at beyond cancel time
-                                    if so.fill_at < when { so.fill_at = when; }
                                     break;
                                 }
                             }
                         }
                         Request::ReplaceOrder(rpl) => {
                             // Schedule a replace using provider_order_id; ignore if not found
-                            let base = watermark.unwrap_or_else(Utc::now);
+                            let base = watermark.expect(
+                                "no watermark set; backtest must drive time via BacktestAdvanceTo",
+                            );
                             let mut lat = (cfg.make_latency)();
                             let when = base + to_chrono(lat.replace_rtt());
                             let target_id = rpl.provider_order_id.clone();
                             let acct = rpl.account_name.clone();
                             for (_eid, so) in sim_orders.iter_mut() {
-                                if so.provider_order_id.0 == target_id && so.spec.account_key.account_name == acct {
+                                if so.provider_order_id.0 == target_id
+                                    && so.spec.account_key.account_name == acct
+                                {
                                     so.replace_at = Some(when);
                                     so.replace_pending = true;
                                     so.replace_req = Some(rpl.clone());
                                     // Block fills until replace takes effect
-                                    if so.fill_at < when { so.fill_at = when; }
+                                    if so.fill_at < when {
+                                        so.fill_at = when;
+                                    }
                                     break;
                                 }
                             }
@@ -1074,10 +1113,7 @@ impl BacktestFeeder {
                                         entry.update_candle_close(c.close, t);
                                     }
                                     tt_database::queries::TopicDataEnum::Mbp10(m) => {
-                                        let key = SymbolKey::new(
-                                            m.instrument.clone(),
-                                            ks.provider,
-                                        );
+                                        let key = SymbolKey::new(m.instrument.clone(), ks.provider);
                                         if let Some(ref b) = m.book {
                                             books.insert(key, b.clone());
                                         }

@@ -14,6 +14,7 @@ pub trait FillModel: Send + Sync {
     /// Called on submit to validate/normalize the order (rounding, IOC/FOK checks, post-only, etc.).
     fn on_submit(&mut self, _now: DateTime<Utc>, _order: &mut PlaceOrder) {}
 
+    #[allow(clippy::too_many_arguments)]
     /// Core matching step: given a book snapshot and the current order, return fills and mutate leaves.
     fn match_book(
         &mut self,
