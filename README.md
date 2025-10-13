@@ -28,6 +28,7 @@ The engine can place live orders and is intended strictly for testing and evalua
 - Expand automated tests and CI coverage
 - Adding rithmic + data bento at a later stage.
 - Support for publishing strategy signals on the bus will be implemented last
+- refactor down engine code into more manageable functions.
 
 
 ## ✨ Brief overview
