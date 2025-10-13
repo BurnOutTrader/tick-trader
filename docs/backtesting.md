@@ -6,9 +6,7 @@ This page summarizes the backtesting subsystem: key parameters, realism models, 
 
 
 ## Quick start
-
-- Example binary that exercises order types against historical bars:
-  - cargo run -p tt-engine --bin tt-backtest_orders
+[see examples](/crates/a_strategies/examples)
 - Minimal programmatic start (pseudocode using helpers already in the repo):
   - Create a DB pool (Postgres), ensure schema
   - Build BacktestConfig (step, date range)
