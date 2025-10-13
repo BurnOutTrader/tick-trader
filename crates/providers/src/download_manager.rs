@@ -102,6 +102,12 @@ impl DownloadTaskHandle {
     }
 }
 
+impl Default for DownloadManager {
+    fn default() -> DownloadManager {
+        Self::new()
+    }
+}
+
 impl DownloadManager {
     pub fn new() -> Self {
         // Load .env first

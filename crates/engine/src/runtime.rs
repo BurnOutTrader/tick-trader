@@ -631,11 +631,9 @@ impl EngineRuntime {
         let handle_task = tokio::spawn(async move {
             let mut rx = rx;
             // Track last time we emitted snapshots in backtest mode
-            let mut last_pos_emit_bt: Option<chrono::DateTime<chrono::Utc>> = None;
             // Track last logical backtest time announced by orchestrator
             let mut last_bt_now: Option<chrono::DateTime<chrono::Utc>> = None;
             // Determine snapshot cadence from latency model //todo[latency] not sure how i will handle acual models yet. maybe overkill??
-            let pos_refresh_every = Duration::from_millis(500);
             // Initial drain to process any commands enqueued during on_start (e.g., subscribe_now)
             Self::drain_commands_for_task(
                 cmd_q_for_task.clone(),
@@ -739,27 +737,6 @@ impl EngineRuntime {
                                 strategy_for_task.on_bar(&c, prov);
                             }
                         }
-                        // 2) Throttle account snapshots using model-defined interval (emit even when flat)
-                        {
-                            use chrono::Duration as ChronoDuration;
-                            let interval = ChronoDuration::from_std(pos_refresh_every).unwrap_or_else(|_| ChronoDuration::seconds(1));
-                            let should_emit = match  last_pos_emit_bt {
-                                None => { last_pos_emit_bt = Some(now); true },
-                                Some(prev) => {
-                                    if now - prev >= interval {
-                                        last_pos_emit_bt = Some(now);
-                                        true
-                                    } else { false }
-                                }
-                            };
-                            if should_emit {
-                                // Accounts snapshot only (positions are emitted on structural changes only)
-                                let acct_snap = pm.accounts_snapshot(now);
-                                if !acct_snap.accounts.is_empty() {
-                                    let _ = tx_internal.try_send(Response::AccountDeltaBatch(acct_snap));
-                                }
-                            }
-                        }
                         // 3) Flat-by-close enforcement is handled by backtest risk models; do not enforce in runtime
                     },
                     Response::BacktestCompleted { end: _ } => {
@@ -769,13 +746,6 @@ impl EngineRuntime {
                     },
                     Response::WarmupComplete{ .. } => {
                        strategy_for_task.on_warmup_complete();
-                       if handle_inner_for_task.backtest_mode {
-                           let now_bt = last_bt_now.unwrap_or_else(chrono::Utc::now);
-                           let ab = pm.accounts_snapshot(now_bt);
-                           if !ab.accounts.is_empty() {
-                               let _ = tx_internal.try_send(Response::AccountDeltaBatch(ab));
-                           }
-                       }
                     },
                     Response::TickBatch(TickBatch {
                         ticks,

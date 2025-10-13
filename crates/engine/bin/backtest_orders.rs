@@ -1,10 +1,10 @@
 use chrono::Utc;
+use rust_decimal::Decimal;
 use std::str::FromStr;
 use std::time::Duration;
 use tokio::time::sleep;
 use tracing::info;
 use tracing::level_filters::LevelFilter;
-use rust_decimal::Decimal;
 
 use tt_engine::backtest::orchestrator::{BacktestConfig, start_backtest};
 use tt_engine::handle::EngineHandle;
@@ -27,6 +27,7 @@ struct BacktestOrdersStrategy {
     engine: Option<EngineHandle>,
     sk: SymbolKey,
     account: AccountKey,
+    #[allow(dead_code)]
     placed: bool,
     last_bars: RollingWindow<Candle>,
     is_warmed_up: bool,
@@ -37,7 +38,11 @@ struct BacktestOrdersStrategy {
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
-struct Expect { require_fill: bool, acked: bool, filled: bool }
+struct Expect {
+    require_fill: bool,
+    acked: bool,
+    filled: bool,
+}
 
 impl BacktestOrdersStrategy {
     fn new() -> Self {
@@ -71,7 +76,14 @@ impl Default for BacktestOrdersStrategy {
 
 impl BacktestOrdersStrategy {
     fn record_expect(&mut self, tag: &str, require_fill: bool) {
-        self.expect.insert(tag.to_string(), Expect { require_fill, acked: false, filled: false });
+        self.expect.insert(
+            tag.to_string(),
+            Expect {
+                require_fill,
+                acked: false,
+                filled: false,
+            },
+        );
     }
 }
 
@@ -86,12 +98,6 @@ impl Strategy for BacktestOrdersStrategy {
     fn on_warmup_complete(&mut self) {
         println!("warmup complete; considering order placement");
         self.is_warmed_up = true;
-        if self.placed {
-            return;
-        }
-        let Some(_) = &self.engine else {
-            return;
-        };
     }
 
     fn on_stop(&mut self) {
@@ -105,6 +111,7 @@ impl Strategy for BacktestOrdersStrategy {
         if !self.is_warmed_up || self.done {
             return;
         }
+        println!("{:?}", c);
         self.bar_idx = self.bar_idx.saturating_add(1);
         let last = c.close;
         let h = match &self.engine {
@@ -329,25 +336,29 @@ impl Strategy for BacktestOrdersStrategy {
     fn on_orders_batch(&mut self, b: &wire::OrdersBatch) {
         use tt_types::accounts::order::OrderState;
         for o in &b.orders {
-            if let Some(tag) = &o.tag {
-                if let Some(exp) = self.expect.get_mut(tag) {
-                    match o.state {
-                        OrderState::Acknowledged => {
-                            exp.acked = true;
-                        }
-                        OrderState::PartiallyFilled | OrderState::Filled => {
-                            exp.filled = true;
-                        }
-                        OrderState::Rejected => {
-                            panic!("Order with tag {} was rejected: {:?}", tag, o);
-                        }
-                        _ => {}
+            if let Some(tag) = &o.tag
+            && let Some(exp) = self.expect.get_mut(tag) {
+                match o.state {
+                    OrderState::Acknowledged => {
+                        exp.acked = true;
                     }
+                    OrderState::PartiallyFilled | OrderState::Filled => {
+                        exp.filled = true;
+                    }
+                    OrderState::Rejected => {
+                        panic!("Order with tag {} was rejected: {:?}", tag, o);
+                    }
+                    _ => {}
                 }
             }
         }
         // Check completion criteria: all expectations must be acknowledged, and those requiring fill must be filled
-        if !self.expect.is_empty() && self.expect.values().all(|e| e.acked && (!e.require_fill || e.filled)) {
+        if !self.expect.is_empty()
+            && self
+                .expect
+                .values()
+                .all(|e| e.acked && (!e.require_fill || e.filled))
+        {
             println!("All order-type checks passed: {:?}", self.expect);
             self.done = true;
             // Exit process cleanly; in CI this acts as a test pass
@@ -397,7 +408,6 @@ async fn main() -> anyhow::Result<()> {
 
     // Create DB pool from env (Postgres) and ensure schema
     let db = tt_database::init::pool_from_env().await?;
-    tt_database::schema::ensure_schema(&db).await?;
 
     // Backtest for a recent 30-day period
     let end_date = Utc::now().date_naive();
