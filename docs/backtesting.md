@@ -38,14 +38,6 @@ Relevant entry points in the codebase:
 
 Backtests are driven by a deterministic, logical clock advanced by the orchestrator.
 
-```mermaid
-flowchart LR
-  OC[Orchestrator ⏱️] -->|advance(step)| FEED[Feeder 📦]
-  FEED -->|emit data ≤ watermark| MODELS[Realism Models 🧪]
-  MODELS -->|simulate fills/fees/slippage/latency| ORDERS[Orders Engine 🧩]
-  ORDERS -->|updates| SNAP[Snapshots 📊]
-```
-
 - BacktestConfig
   - step: chrono::Duration – advance logical time by this step; feeder emits data <= now each step.
   - feeder: BacktestFeederConfig – parameters for historical fetch and realism models.
