@@ -138,6 +138,7 @@ impl BacktestFeeder {
                 ack_at: DateTime<Utc>,
                 fill_at: DateTime<Utc>,
                 ack_emitted: bool,
+                user_tag: Option<String>,
                 done: bool,
             }
             fn to_chrono(d: std::time::Duration) -> ChronoDuration {
@@ -548,7 +549,7 @@ impl BacktestFeeder {
                                         leaves: 0,
                                         cum_qty: total_qty,
                                         avg_fill_px: avg,
-                                        tag: so.spec.custom_tag.clone(),
+                                        tag: so.user_tag.clone(),
                                         time: so.fill_at,
                                     });
                                     so.done = true;
@@ -592,16 +593,16 @@ impl BacktestFeeder {
                             // Logical base time from orchestrator
                             let base = watermark.unwrap_or_else(Utc::now);
                             // Ensure an engine order id exists (prefer embedded tag)
-                            let engine_order_id = if let Some(tag) = &spec.custom_tag {
-                                if let Some((eng, _user_tag)) =
+                            let (engine_order_id, user_tag) = if let Some(tag) = &spec.custom_tag {
+                                if let Some((eng, user_tag)) =
                                     EngineUuid::extract_and_remove_engine_tag(tag)
                                 {
-                                    eng
+                                    (eng, user_tag)
                                 } else {
-                                    EngineUuid::new()
+                                    (EngineUuid::new(), None)
                                 }
                             } else {
-                                EngineUuid::new()
+                                (EngineUuid::new(), None)
                             };
                             let provider_order_id =
                                 ProviderOrderId(format!("bt-{}", engine_order_id));
@@ -630,6 +631,7 @@ impl BacktestFeeder {
                                 fill_at,
                                 ack_emitted: false,
                                 done: false,
+                                user_tag
                             };
                             sim_orders.entry(engine_order_id).or_insert(sim);
                         }
