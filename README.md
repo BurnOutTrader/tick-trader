@@ -29,6 +29,7 @@ The engine can place live orders and is intended strictly for testing and evalua
 - Adding rithmic + data bento at a later stage.
 - Support for publishing strategy signals on the bus will be implemented last
 - refactor down engine code into more manageable functions.
+- complete the automatic historical data update functions.
 
 
 ## ✨ Brief overview
@@ -41,6 +42,7 @@ The engine can place live orders and is intended strictly for testing and evalua
 - 📡 Support for publishing/sharing strategy signals/insights on the bus will be implemented last
 - 🛅 PostgreSQL + Docker Database for storage and query of historical data by strategies and the server. 
 - ⏪Backtesting: Configurable with dynamic realism models, fills models are configurable, can book walk etc. Implementation v1.0, not tested, will likely have some bugs and inaccuracy.
+- 🔽Automatic data downloading and databasing + functions to retrieve historical data from the database for run time analysis.
 
 ### Strategies are straight forward
 [Example Strategy](crates/a_strategies/examples/data_test_strategy/src/main.rs)
