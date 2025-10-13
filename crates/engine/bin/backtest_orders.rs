@@ -417,7 +417,7 @@ async fn main() -> anyhow::Result<()> {
     ensure_schema(&db).await?;
     // Backtest for a recent 30-day period
     let end_date = Utc::now().date_naive();
-    let start_date = end_date - chrono::Duration::days(30);
+    let start_date = end_date - chrono::Duration::days(3);
 
     // Configure and start backtest
     let cfg = BacktestConfig::from_to(chrono::Duration::milliseconds(250), start_date, end_date);
