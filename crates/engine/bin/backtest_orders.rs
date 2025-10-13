@@ -26,6 +26,7 @@ struct BacktestOrdersStrategy {
     account: AccountKey,
     placed: bool,
     last_bars: RollingWindow<Candle>,
+    is_warmed_up: bool,
 }
 
 #[allow(dead_code)]
@@ -45,6 +46,7 @@ impl BacktestOrdersStrategy {
             account,
             placed: false,
             last_bars: RollingWindow::new(10),
+            is_warmed_up: false,
         }
     }
 }
@@ -57,14 +59,15 @@ impl Default for BacktestOrdersStrategy {
 
 impl Strategy for BacktestOrdersStrategy {
     fn on_start(&mut self, h: EngineHandle) {
-        info!("backtest orders strategy start");
+        println!("backtest orders strategy start");
         // Subscribe to a modest data stream so marks update
         h.subscribe_now(DataTopic::Candles1m, self.sk.clone());
         self.engine = Some(h);
     }
 
     fn on_warmup_complete(&mut self) {
-        info!("warmup complete; considering order placement");
+        println!("warmup complete; considering order placement");
+        self.is_warmed_up = true;
         if self.placed {
             return;
         }
@@ -74,13 +77,17 @@ impl Strategy for BacktestOrdersStrategy {
     }
 
     fn on_stop(&mut self) {
-        info!("backtest orders strategy stop");
+        println!("backtest orders strategy stop");
     }
 
     fn on_tick(&mut self, _t: &tt_types::data::core::Tick, _provider_kind: ProviderKind) {}
     fn on_quote(&mut self, _q: &tt_types::data::core::Bbo, _provider_kind: ProviderKind) {}
 
     fn on_bar(&mut self, c: &tt_types::data::core::Candle, _provider_kind: ProviderKind) {
+        if !self.is_warmed_up {
+            return;
+        }
+        println!("{:?}", c);
         if let Some(last_candle) = self.last_bars.get(0) {
             let h = self.engine.as_ref().unwrap();
             if c.close > last_candle.close && !h.is_long(&self.account, &self.sk.instrument) {
@@ -114,7 +121,7 @@ impl Strategy for BacktestOrdersStrategy {
                         self.account.clone(),
                         self.sk.instrument.clone(),
                         tt_types::accounts::events::Side::Sell,
-                        qty,
+                        -qty,
                         OrderType::Market,
                         None,
                         None,
@@ -133,41 +140,35 @@ impl Strategy for BacktestOrdersStrategy {
     fn on_mbp10(&mut self, _d: &Mbp10, _provider_kind: ProviderKind) {}
 
     fn on_orders_batch(&mut self, b: &wire::OrdersBatch) {
-        info!(orders = b.orders.len(), "orders batch");
         for o in &b.orders {
-            info!(
-                status = ?o.state,
-                qty = o.cum_qty,
-                leaves = o.leaves,
-                avg_px = ?o.avg_fill_px,
-                provider_order_id = ?o.provider_order_id,
-                instr = %o.instrument,
-                "order update"
-            );
+            println!("{:?}", o);
         }
     }
 
     fn on_positions_batch(&mut self, b: &wire::PositionsBatch) {
-        info!(positions = b.positions.len(), "positions batch");
         for p in &b.positions {
-            info!(instr = %p.instrument, side = ?p.side, qty = p.net_qty.to_string(), avg_px = %p.average_price, "position");
+            println!("{:?}", p);
         }
     }
 
     fn on_account_delta(&mut self, accounts: &[AccountDelta]) {
         for a in accounts {
-            info!(account = %a.name, pnl = %a.day_realized_pnl, cash = %a.equity, "account delta");
+            println!("{:?}", a);
         }
     }
 
-    fn on_trades_closed(&mut self, _trades: Vec<Trade>) {}
-
-    fn on_subscribe(&mut self, instrument: Instrument, data_topic: DataTopic, success: bool) {
-        info!(%instrument, ?data_topic, success, "subscribe ack");
+    fn on_trades_closed(&mut self, trades: Vec<Trade>) {
+        for t in trades {
+            info!("{:?}", t)
+        }
     }
 
-    fn on_unsubscribe(&mut self, _instrument: Instrument, data_topic: DataTopic) {
-        info!(?data_topic, "unsubscribe ack");
+    fn on_subscribe(&mut self, instrument: Instrument, data_topic: DataTopic, _success: bool) {
+        println!("Subscribed: {:?} {:?}", instrument, data_topic);
+    }
+
+    fn on_unsubscribe(&mut self, instrument: Instrument, data_topic: DataTopic) {
+        println!("Unsubscribed: {:?} {:?}", instrument, data_topic);
     }
 
     fn accounts(&self) -> Vec<AccountKey> {
@@ -193,7 +194,7 @@ async fn main() -> anyhow::Result<()> {
     let start_date = end_date - chrono::Duration::days(30);
 
     // Configure and start backtest
-    let cfg = BacktestConfig::from_to(chrono::Duration::minutes(1), start_date, end_date);
+    let cfg = BacktestConfig::from_to(chrono::Duration::seconds(1), start_date, end_date);
     let strategy = BacktestOrdersStrategy::default();
     let (_engine_handle, _feeder_handle) = start_backtest(db, cfg, strategy).await?;
 

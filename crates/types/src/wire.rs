@@ -560,6 +560,10 @@ pub enum Response {
     BacktestTimeUpdated {
         now: DateTime<Utc>,
     },
+    // Signal that a backtest session has reached its configured end; consumers should stop gracefully.
+    BacktestCompleted {
+        end: DateTime<Utc>,
+    },
     // Historical DB update completion notification (response to DbUpdateKeyLatest)
     DbUpdateComplete {
         provider: ProviderKind,

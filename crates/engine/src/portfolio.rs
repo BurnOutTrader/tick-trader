@@ -287,6 +287,16 @@ impl PortfolioManager {
             .map(|r| r.value().clone())
     }
 
+    /// True if any account currently has at least one non-flat position tracked.
+    pub fn has_open_positions(&self) -> bool {
+        for acct_map in self.positions_by_account.iter() {
+            if !acct_map.value().is_empty() {
+                return true;
+            }
+        }
+        false
+    }
+
     /// This is how we update open pnl from average entry price
     pub fn update_apply_last_price(
         &self,
@@ -473,6 +483,65 @@ impl PortfolioManager {
             topic: tt_types::keys::Topic::Positions,
             seq: 0,
             positions: out,
+        }
+    }
+
+    /// Build a snapshot of account deltas (equity may be taken from last known values if present),
+    /// recomputing open_pnl and day_realized_pnl using current state. Includes accounts that have
+    /// either prior deltas or active positions.
+    pub fn accounts_snapshot(&self, now: DateTime<Utc>) -> AccountDeltaBatch {
+        use ahash::AHashSet;
+        let mut out: Vec<AccountDelta> = Vec::new();
+        let mut seen: AHashSet<(ProviderKind, AccountName)> = AHashSet::new();
+
+        // Include all accounts that currently have positions
+        for acct_entry in self.positions_by_account.iter() {
+            let (provider, name) = acct_entry.key();
+            let provider = *provider;
+            let name = name.clone();
+            seen.insert((provider, name.clone()));
+            let open = self.account_open_pnl_sum(&provider, &name);
+            let day = self.account_day_realized_pnl_utc(&provider, &name, now);
+            let base = self
+                .accounts_by_name
+                .get(&(provider, name.clone()))
+                .map(|r| r.value().clone());
+            let (equity, can_trade) = base
+                .map(|b| (b.equity, b.can_trade))
+                .unwrap_or((Decimal::ZERO, true));
+            out.push(AccountDelta {
+                provider_kind: provider,
+                name,
+                equity,
+                day_realized_pnl: day,
+                open_pnl: open,
+                time: now,
+                can_trade,
+            });
+        }
+        // Include any accounts we have prior deltas for (even if flat now)
+        for acct in self.accounts_by_name.iter() {
+            let key = acct.key();
+            if seen.contains(key) {
+                continue;
+            }
+            let base = acct.value().clone();
+            let open = self.account_open_pnl_sum(&base.provider_kind, &base.name);
+            let day = self.account_day_realized_pnl_utc(&base.provider_kind, &base.name, now);
+            out.push(AccountDelta {
+                provider_kind: base.provider_kind,
+                name: base.name,
+                equity: base.equity,
+                day_realized_pnl: day,
+                open_pnl: open,
+                time: now,
+                can_trade: base.can_trade,
+            });
+        }
+        AccountDeltaBatch {
+            topic: tt_types::keys::Topic::AccountEvt,
+            seq: 0,
+            accounts: out,
         }
     }
 

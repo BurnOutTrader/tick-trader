@@ -8,6 +8,7 @@ use crate::traits::Strategy;
 use anyhow::Result;
 use chrono::{NaiveDate, TimeZone, Utc};
 use std::sync::Arc;
+use tokio::sync::Notify;
 
 /// Configuration for launching a backtest session.
 #[derive(Clone)]
@@ -90,11 +91,18 @@ pub async fn start_backtest<S: Strategy>(
         }
     }
 
+    let notify = Arc::new(Notify::new());
     // Start the DB-backed feeder which gives us an in-process bus.
-    let feeder = BacktestFeeder::start_with_db(conn, cfg.feeder.clone(), cfg.clock.clone());
+    let feeder = BacktestFeeder::start_with_db(
+        conn,
+        cfg.feeder.clone(),
+        cfg.clock.clone(),
+        Some(notify.clone()),
+    );
 
     // Create an engine runtime bound to the same bus in backtest mode.
-    let mut rt = EngineRuntime::new_backtest(feeder.bus.clone(), cfg.slow_spin);
+    let mut rt =
+        EngineRuntime::new_backtest(feeder.bus.clone(), cfg.slow_spin, Some(notify.clone()));
 
     // Start the strategy.
     let handle = rt.start(strategy).await?;
@@ -128,10 +136,6 @@ pub async fn start_backtest<S: Strategy>(
                         to: now,
                     }),
                 )
-                .await;
-            // Let runtime know logical time advanced; feeder will also emit this after draining
-            let _ = bus
-                .route_response(tt_types::wire::Response::BacktestTimeUpdated { now })
                 .await;
             // Yield to allow feeder/engine to process
             tokio::task::yield_now().await;

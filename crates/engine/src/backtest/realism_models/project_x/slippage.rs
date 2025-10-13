@@ -5,6 +5,11 @@ use tt_types::accounts::events::Side;
 /// No additional slippage; execute at touch/reference.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct NoSlippage;
+impl NoSlippage {
+    pub fn new() -> Self {
+        Self
+    }
+}
 
 impl SlippageModel for NoSlippage {
     fn adjust(

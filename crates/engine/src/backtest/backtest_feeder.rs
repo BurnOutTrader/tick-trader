@@ -3,11 +3,11 @@ use rust_decimal::Decimal;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BinaryHeap, HashMap, VecDeque};
 use std::sync::Arc;
-use tokio::sync::mpsc;
+use tokio::sync::{Notify, mpsc};
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 use tt_bus::ClientMessageBus;
-use tt_types::accounts::events::{OrderUpdate, PositionDelta, PositionSide, ProviderOrderId};
+use tt_types::accounts::events::{OrderUpdate, ProviderOrderId};
 use tt_types::accounts::order::OrderState;
 use tt_types::engine_id::EngineUuid;
 use tt_types::keys::{SymbolKey, Topic};
@@ -16,6 +16,11 @@ use tt_types::securities::symbols::Instrument;
 use tt_types::wire::{BarBatch, Response};
 
 use crate::backtest::backtest_clock::BacktestClock;
+use crate::backtest::realism_models::project_x::calander::HoursCalendar;
+use crate::backtest::realism_models::project_x::fill::{CmeFillModel, FillConfig};
+use crate::backtest::realism_models::project_x::latency::PxLatency;
+use crate::backtest::realism_models::project_x::slippage::NoSlippage;
+use crate::backtest::realism_models::traits::{FillModel, LatencyModel};
 
 /// Windowed DB feeder that simulates a provider by emitting Responses over an in-process bus.
 /// It listens for SubscribeKey/UnsubscribeKey requests on a request channel you provide when
@@ -108,6 +113,7 @@ impl BacktestFeeder {
         conn: tt_database::init::Connection,
         cfg: BacktestFeederConfig,
         clock: Option<Arc<BacktestClock>>,
+        backtest_notify: Option<Arc<Notify>>,
     ) -> BacktestFeederHandle {
         // Create a request channel the bus will use for outbound requests
         let (req_tx, mut req_rx) = mpsc::channel::<tt_types::wire::Request>(1024);
@@ -115,6 +121,39 @@ impl BacktestFeeder {
         let bus_clone = bus.clone();
 
         let join = tokio::spawn(async move {
+            let notify = backtest_notify;
+            async fn await_ack(notify: &Option<Arc<Notify>>) {
+                if let Some(n) = notify {
+                    n.notified().await;
+                }
+            }
+            // --- Simple fill engine state (model-driven order lifecycle) ---
+            #[derive(Debug, Clone)]
+            struct SimOrder {
+                spec: tt_types::wire::PlaceOrder,
+                provider: ProviderKind,
+                #[allow(dead_code)]
+                engine_order_id: EngineUuid,
+                provider_order_id: ProviderOrderId,
+                ack_at: DateTime<Utc>,
+                fill_at: DateTime<Utc>,
+                ack_emitted: bool,
+                done: bool,
+            }
+            fn to_chrono(d: std::time::Duration) -> ChronoDuration {
+                ChronoDuration::from_std(d)
+                    .unwrap_or_else(|_| ChronoDuration::milliseconds(d.as_millis() as i64))
+            }
+            // Instantiate shared realism models (defaults for now)
+            let _lat_model = PxLatency::default();
+            let mut fill_model: CmeFillModel = CmeFillModel {
+                cfg: FillConfig::default(),
+            };
+            let mut slip_model = NoSlippage::new();
+            let cal_model = HoursCalendar::default();
+            // Simulated orders
+            let mut sim_orders: HashMap<EngineUuid, SimOrder> = HashMap::new();
+
             // Active subscriptions
             let mut keys: HashMap<(Topic, SymbolKey), KeyState> = HashMap::new();
             // Merge heap of next timestamps per key
@@ -125,6 +164,8 @@ impl BacktestFeeder {
             let mut marks: HashMap<(ProviderKind, Instrument), Decimal> = HashMap::new();
             // Orchestrator-controlled logical time watermark; only emit events <= this time.
             let mut watermark: Option<DateTime<Utc>> = None;
+            // Ensure we emit BacktestCompleted exactly once when end is reached
+            let mut completed_emitted: bool = false;
 
             // helper: ensure a key has data loaded up to cursor+window
             async fn ensure_window(
@@ -209,6 +250,7 @@ impl BacktestFeeder {
                 bus: &Arc<ClientMessageBus>,
                 tde: &tt_database::queries::TopicDataEnum,
                 provider: ProviderKind,
+                notify: &Option<Arc<Notify>>,
             ) {
                 match tde {
                     tt_database::queries::TopicDataEnum::Tick(t) => {
@@ -218,6 +260,7 @@ impl BacktestFeeder {
                                 provider_kind: provider,
                             })
                             .await;
+                        await_ack(notify).await;
                     }
                     tt_database::queries::TopicDataEnum::Bbo(b) => {
                         let _ = bus
@@ -226,6 +269,7 @@ impl BacktestFeeder {
                                 provider_kind: provider,
                             })
                             .await;
+                        await_ack(notify).await;
                     }
                     tt_database::queries::TopicDataEnum::Mbp10(m) => {
                         let _ = bus
@@ -234,6 +278,7 @@ impl BacktestFeeder {
                                 provider_kind: provider,
                             })
                             .await;
+                        await_ack(notify).await;
                     }
                     tt_database::queries::TopicDataEnum::Candle(c) => {
                         // Emit as a BarBatch (even for a single candle) to carry a topic for routing
@@ -244,6 +289,7 @@ impl BacktestFeeder {
                             provider_kind: provider,
                         };
                         let _ = bus.route_response(Response::BarBatch(batch)).await;
+                        await_ack(notify).await;
                     }
                 }
             }
@@ -266,6 +312,7 @@ impl BacktestFeeder {
                                     success: true,
                                 })
                                 .await;
+                            await_ack(&notify).await;
 
                             // Determine start time from DB extent (earliest available); fallback to epoch if none
                             let (earliest_opt, _latest_opt) =
@@ -321,7 +368,8 @@ impl BacktestFeeder {
                                         Ok(map) => {
                                             for (_t, vec) in map.iter() {
                                                 for item in vec {
-                                                    emit_one(&bus_clone, item, provider).await;
+                                                    emit_one(&bus_clone, item, provider, &notify)
+                                                        .await;
                                                 }
                                             }
                                         }
@@ -336,6 +384,7 @@ impl BacktestFeeder {
                                     instrument: instr.clone(),
                                 })
                                 .await;
+                            await_ack(&notify).await;
                             // Prime first window after start
                             ks.cursor = start;
                             ensure_window(&mut ks, &conn, &cfg).await;
@@ -351,6 +400,7 @@ impl BacktestFeeder {
                                     instrument: ureq.key.instrument.clone(),
                                 })
                                 .await;
+                            await_ack(&notify).await;
                         }
                         Request::SubscribeAccount(_sa) => {
                             // Backtest: no backend; portfolio updates will be driven by our synthetic orders
@@ -419,7 +469,7 @@ impl BacktestFeeder {
                                                 }
                                                 tt_database::queries::TopicDataEnum::Mbp10(_m) => {}
                                             }
-                                            emit_one(&bus_clone, &item, ks.provider).await;
+                                            emit_one(&bus_clone, &item, ks.provider, &notify).await;
                                         }
                                         if t > ks.cursor {
                                             ks.cursor = t;
@@ -437,23 +487,113 @@ impl BacktestFeeder {
                                     push_next_for_key(&mut heap, topic, &sk, ks);
                                 }
                             }
-                            // After draining up to watermark, notify runtime of logical time
+                            // After draining market data up to watermark, process simulated orders
+                            let now = bta.to;
+                            let mut due: Vec<OrderUpdate> = Vec::new();
+                            let mut finished: Vec<EngineUuid> = Vec::new();
+                            for (oid, so) in sim_orders.iter_mut() {
+                                if !so.ack_emitted && now >= so.ack_at {
+                                    due.push(OrderUpdate {
+                                        name: so.spec.account_key.account_name.clone(),
+                                        instrument: so.spec.instrument.clone(),
+                                        provider_kind: so.provider,
+                                        provider_order_id: Some(so.provider_order_id.clone()),
+                                        order_id: *oid,
+                                        state: OrderState::Acknowledged,
+                                        leaves: so.spec.qty,
+                                        cum_qty: 0,
+                                        avg_fill_px: Decimal::ZERO,
+                                        tag: so.spec.custom_tag.clone(),
+                                        time: so.ack_at,
+                                    });
+                                    so.ack_emitted = true;
+                                }
+                                if !so.done && now >= so.fill_at {
+                                    // Price at last mark; use fill model to allow overrides
+                                    let last_px = marks
+                                        .get(&(so.provider, so.spec.instrument.clone()))
+                                        .cloned()
+                                        .unwrap_or(Decimal::ZERO);
+                                    // Try model matching (no book view for now)
+                                    let fills = fill_model.match_book(
+                                        now,
+                                        None,
+                                        last_px,
+                                        &mut so.spec,
+                                        &mut slip_model,
+                                        &cal_model,
+                                    );
+                                    let mut total_qty: i64 = 0;
+                                    let mut vwap_num = Decimal::ZERO;
+                                    for f in fills.iter() {
+                                        total_qty += f.qty;
+                                        vwap_num += f.price * Decimal::from(f.qty);
+                                    }
+                                    if total_qty == 0 {
+                                        total_qty = so.spec.qty;
+                                        vwap_num = last_px * Decimal::from(total_qty);
+                                    }
+                                    let avg = if total_qty != 0 {
+                                        vwap_num / Decimal::from(total_qty)
+                                    } else {
+                                        Decimal::ZERO
+                                    };
+                                    due.push(OrderUpdate {
+                                        name: so.spec.account_key.account_name.clone(),
+                                        instrument: so.spec.instrument.clone(),
+                                        provider_kind: so.provider,
+                                        provider_order_id: Some(so.provider_order_id.clone()),
+                                        order_id: *oid,
+                                        state: OrderState::Filled,
+                                        leaves: 0,
+                                        cum_qty: total_qty,
+                                        avg_fill_px: avg,
+                                        tag: so.spec.custom_tag.clone(),
+                                        time: so.fill_at,
+                                    });
+                                    so.done = true;
+                                    finished.push(*oid);
+                                }
+                            }
+                            if !due.is_empty() {
+                                let ob = tt_types::wire::OrdersBatch {
+                                    topic: Topic::Orders,
+                                    seq: 0,
+                                    orders: due,
+                                };
+                                let _ = bus_clone.route_response(Response::OrdersBatch(ob)).await;
+                                await_ack(&notify).await;
+                            }
+                            if !finished.is_empty() {
+                                for id in finished {
+                                    sim_orders.remove(&id);
+                                }
+                            }
+                            // After draining up to watermark (and emitting due orders), notify runtime of logical time
                             let _ = bus_clone
-                                .route_response(Response::BacktestTimeUpdated { now: bta.to })
+                                .route_response(Response::BacktestTimeUpdated { now })
                                 .await;
+                            await_ack(&notify).await;
+                            // If we have an end range and reached/passed it, emit BacktestCompleted once
+                            if !completed_emitted
+                                && let Some(end) = cfg.range_end
+                                && now >= end
+                            {
+                                let _ = bus_clone
+                                    .route_response(Response::BacktestCompleted { end })
+                                    .await;
+                                await_ack(&notify).await;
+                                completed_emitted = true;
+                            }
                         }
-                        Request::PlaceOrder(spec) => {
-                            // Synthesize an immediate fill at last known mark
+                        Request::PlaceOrder(mut spec) => {
+                            // Enqueue into simulation engine; do not emit immediately
                             let prov = spec.account_key.provider;
-                            let instr = spec.instrument.clone();
-                            let now = Utc::now();
-                            let px = marks
-                                .get(&(prov, instr.clone()))
-                                .cloned()
-                                .unwrap_or(Decimal::ZERO);
-                            // Try to extract engine order id from custom tag; otherwise generate one
+                            // Logical base time from orchestrator
+                            let base = watermark.unwrap_or_else(Utc::now);
+                            // Ensure an engine order id exists (prefer embedded tag)
                             let engine_order_id = if let Some(tag) = &spec.custom_tag {
-                                if let Some((eng, _)) =
+                                if let Some((eng, _user_tag)) =
                                     EngineUuid::extract_and_remove_engine_tag(tag)
                                 {
                                     eng
@@ -463,51 +603,35 @@ impl BacktestFeeder {
                             } else {
                                 EngineUuid::new()
                             };
-                            let leaves = 0i64;
-                            let cum_qty = spec.qty;
-                            let ou = OrderUpdate {
-                                name: spec.account_key.account_name.clone(),
-                                instrument: instr.clone(),
-                                provider_kind: prov,
-                                provider_order_id: Some(ProviderOrderId(format!(
-                                    "bt-{}",
-                                    engine_order_id
-                                ))),
-                                order_id: engine_order_id,
-                                state: OrderState::Filled,
-                                leaves,
-                                cum_qty,
-                                avg_fill_px: px,
-                                tag: spec.custom_tag.clone(),
-                                time: now,
+                            let provider_order_id =
+                                ProviderOrderId(format!("bt-{}", engine_order_id));
+
+                            // Initialize models (defaults for now)
+                            let mut lat = PxLatency::default();
+                            let mut fill_model = CmeFillModel {
+                                cfg: FillConfig::default(),
                             };
-                            let ob = tt_types::wire::OrdersBatch {
-                                topic: Topic::Orders,
-                                seq: 0,
-                                orders: vec![ou],
+                            let _slip = NoSlippage::new();
+                            let _cal = HoursCalendar::default();
+                            // Normalize order on submit
+                            fill_model.on_submit(base, &mut spec);
+
+                            // Schedule ack and (first) fill per latency
+                            let ack_at = base + to_chrono(lat.submit_to_ack());
+                            let fill_at = ack_at + to_chrono(lat.ack_to_first_fill());
+
+                            // Stash order
+                            let sim = SimOrder {
+                                spec,
+                                provider: prov,
+                                engine_order_id,
+                                provider_order_id,
+                                ack_at,
+                                fill_at,
+                                ack_emitted: false,
+                                done: false,
                             };
-                            let side = if spec.side == tt_types::accounts::events::Side::Buy {
-                                PositionSide::Long
-                            } else {
-                                PositionSide::Short
-                            };
-                            let pd = PositionDelta {
-                                instrument: instr.clone(),
-                                account_name: spec.account_key.account_name.clone(),
-                                provider_kind: prov,
-                                net_qty: Decimal::from(cum_qty),
-                                average_price: px,
-                                open_pnl: Decimal::ZERO,
-                                time: now,
-                                side,
-                            };
-                            let pb = tt_types::wire::PositionsBatch {
-                                topic: Topic::Positions,
-                                seq: 0,
-                                positions: vec![pd],
-                            };
-                            let _ = bus_clone.route_response(Response::OrdersBatch(ob)).await;
-                            let _ = bus_clone.route_response(Response::PositionsBatch(pb)).await;
+                            sim_orders.entry(engine_order_id).or_insert(sim);
                         }
                         _ => {}
                     }
@@ -564,7 +688,7 @@ impl BacktestFeeder {
                                     }
                                     tt_database::queries::TopicDataEnum::Mbp10(_m) => {}
                                 }
-                                emit_one(&bus_clone, &item, ks.provider).await;
+                                emit_one(&bus_clone, &item, ks.provider, &notify).await;
                             }
                             // Move cursor up to at least this t
                             if t > ks.cursor {

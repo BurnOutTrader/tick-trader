@@ -11,7 +11,7 @@ use smallvec::SmallVec;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Notify, mpsc, oneshot};
 use tracing::info;
 use tt_bus::{ClientMessageBus, ClientSubId};
 use tt_types::accounts::events::PositionSide;
@@ -57,6 +57,7 @@ pub(crate) struct EngineRuntimeShared {
 
 pub struct EngineRuntime {
     backtest_mode: bool,
+    backtest_notify: Option<Arc<Notify>>,
     backtest_clock: Option<Arc<BacktestClock>>,
     bus: Arc<ClientMessageBus>,
     sub_id: Option<ClientSubId>,
@@ -528,6 +529,7 @@ impl EngineRuntime {
         let instruments = Arc::new(DashMap::new());
         Self {
             backtest_mode: false,
+            backtest_notify: None,
             backtest_clock: None,
             bus,
             sub_id: None,
@@ -557,10 +559,15 @@ impl EngineRuntime {
 
     /// Construct an EngineRuntime in Backtest mode.
     /// Live-only features (SHM, Kick, vendor watch timers) are disabled.
-    pub fn new_backtest(bus: Arc<ClientMessageBus>, slow_spin: Option<u64>) -> Self {
+    pub fn new_backtest(
+        bus: Arc<ClientMessageBus>,
+        slow_spin: Option<u64>,
+        backtest_notify: Option<Arc<Notify>>,
+    ) -> Self {
         let mut rt = Self::new(bus, slow_spin);
         rt.backtest_mode = true;
         rt.backtest_clock = Some(Arc::new(BacktestClock::new(0)));
+        rt.backtest_notify = backtest_notify;
         rt
     }
 
@@ -611,6 +618,7 @@ impl EngineRuntime {
         let handle_inner_for_task = handle.inner.clone();
         let securities_by_provider_for_task = handle_inner_for_task.securities_by_provider.clone();
         let cmd_q_for_task = self.cmd_q.clone();
+        let backtest_notify_for_task = self.backtest_notify.clone();
         // Call on_start before moving strategy
         info!("engine: invoking strategy.on_start");
         strategy.on_start(handle.clone());
@@ -630,8 +638,10 @@ impl EngineRuntime {
         let slow_spin_ns = self.slow_spin_ns;
         let handle_task = tokio::spawn(async move {
             let mut rx = rx;
-            // Track last time we emitted a positions snapshot in backtest mode
+            // Track last time we emitted snapshots in backtest mode
             let mut last_pos_emit_bt: Option<chrono::DateTime<chrono::Utc>> = None;
+            // Track last logical backtest time announced by orchestrator
+            let mut last_bt_now: Option<chrono::DateTime<chrono::Utc>> = None;
             // Determine snapshot cadence from latency model //todo[latency] not sure how i will handle acual models yet. maybe overkill??
             let pos_refresh_every = Duration::from_millis(500);
             // Initial drain to process any commands enqueued during on_start (e.g., subscribe_now)
@@ -721,43 +731,48 @@ impl EngineRuntime {
                             }
                 match resp {
                     Response::BacktestTimeUpdated { now } => {
-                        if handle_inner_for_task.backtest_mode {
-                            // 1) Drive time-based consolidators using orchestrator-provided logical time
-                            if !handle_inner_for_task.consolidators.is_empty() {
-                                let mut outs: SmallVec<[(ProviderKind, Candle); 16]> = SmallVec::new();
-                                for mut entry in handle_inner_for_task.consolidators.iter_mut() {
-                                    let provider = entry.key().provider;
-                                    if let Some(tt_types::consolidators::ConsolidatedOut::Candle(c)) = entry.value_mut().on_time(now) {
-                                        outs.push((provider, c));
-                                    }
-                                }
-                                for (prov, c) in outs {
-                                    strategy_for_task.on_bar(&c, prov);
+                        if handle_inner_for_task.backtest_mode && let Some(prev_now) = last_bt_now && prev_now == now { continue; }
+                        // Record logical time for other emissions
+                        last_bt_now = Some(now);
+                        // 1) Drive time-based consolidators using orchestrator-provided logical time
+                        if !handle_inner_for_task.consolidators.is_empty() {
+                            let mut outs: SmallVec<[(ProviderKind, Candle); 16]> = SmallVec::new();
+                            for mut entry in handle_inner_for_task.consolidators.iter_mut() {
+                                let provider = entry.key().provider;
+                                if let Some(tt_types::consolidators::ConsolidatedOut::Candle(c)) = entry.value_mut().on_time(now) {
+                                    outs.push((provider, c));
                                 }
                             }
-                            // 2) Throttle position updates to once per second using logical time.
-                            //    Build a snapshot from the portfolio manager and route to strategy/bus.
-                            {
-                                use chrono::Duration as ChronoDuration;
-                                let interval = ChronoDuration::from_std(pos_refresh_every).unwrap_or_else(|_| ChronoDuration::seconds(1));
-                                let should_emit = match  last_pos_emit_bt {
-                                    None => { last_pos_emit_bt = Some(now); true },
-                                    Some(prev) => {
-                                        if now - prev >= interval {
-                                            last_pos_emit_bt = Some(now);
-                                            true
-                                        } else { false }
-                                    }
-                                };
-                                if should_emit {
-                                    let snapshot = pm.positions_snapshot(now);
-                                    // Only emit if there is at least one position tracked
-                                    if !snapshot.positions.is_empty() {
-                                        let _ = bus_for_task.route_response(Response::PositionsBatch(snapshot)).await;
-                                    }
+                            for (prov, c) in outs {
+                                strategy_for_task.on_bar(&c, prov);
+                            }
+                        }
+                        // 2) Throttle account snapshots using model-defined interval, but only when there are open positions.
+                        {
+                            use chrono::Duration as ChronoDuration;
+                            let interval = ChronoDuration::from_std(pos_refresh_every).unwrap_or_else(|_| ChronoDuration::seconds(1));
+                            let should_emit = match  last_pos_emit_bt {
+                                None => { last_pos_emit_bt = Some(now); true },
+                                Some(prev) => {
+                                    if now - prev >= interval {
+                                        last_pos_emit_bt = Some(now);
+                                        true
+                                    } else { false }
+                                }
+                            };
+                            if should_emit && pm.has_open_positions() {
+                                // Accounts snapshot only (positions are emitted on structural changes only)
+                                let acct_snap = pm.accounts_snapshot(now);
+                                if !acct_snap.accounts.is_empty() {
+                                    let _ = bus_for_task.route_response(Response::AccountDeltaBatch(acct_snap)).await;
                                 }
                             }
                         }
+                    },
+                    Response::BacktestCompleted { end: _ } => {
+                        // Graceful shutdown: stop strategy and terminate engine task
+                        strategy_for_task.on_stop();
+                        return;
                     },
                     Response::WarmupComplete{ .. } => {
                        strategy_for_task.on_warmup_complete();
@@ -894,6 +909,16 @@ impl EngineRuntime {
                                 *g = Some(pb2.clone());
                             }
                             strategy_for_task.on_positions_batch(&pb2);
+                            // In backtest mode, whenever positions structurally change, emit an account snapshot too.
+                            if handle_inner_for_task.backtest_mode {
+                                let now_bt = last_bt_now.unwrap_or_else(chrono::Utc::now);
+                                let ab = pm.accounts_snapshot(now_bt);
+                                if !ab.accounts.is_empty() {
+                                    let _ = bus_for_task
+                                        .route_response(Response::AccountDeltaBatch(ab))
+                                        .await;
+                                }
+                            }
                         }
                     }
                     Response::AccountDeltaBatch(ab) => {
@@ -1088,6 +1113,10 @@ impl EngineRuntime {
                     | Response::VendorData(_)
                     | Response::AccountInfoResponse(_) => {}
                     Response::DbUpdateComplete { .. } => {}
+                }
+                // After processing a message in backtest mode, notify feeder so it can proceed to the next one.
+                if handle_inner_for_task.backtest_mode && let Some(notify) = &backtest_notify_for_task {
+                    notify.notify_one();
                 }
                 // Flush any commands the strategy enqueued during this message
                 Self::drain_commands_for_task(
