@@ -836,67 +836,65 @@ impl BacktestFeeder {
                                     }
                                 }
                                 // Apply pending cancel/replace effects after matching (fills-first ordering)
-                                if !so.done && so.cancel_pending {
-                                    if let Some(at) = so.cancel_at {
-                                        if now >= at {
-                                            due.push(OrderUpdate {
-                                                name: so.spec.account_key.account_name.clone(),
-                                                instrument: so.spec.instrument.clone(),
-                                                provider_kind: so.provider,
-                                                provider_order_id: Some(
-                                                    so.provider_order_id.clone(),
-                                                ),
-                                                order_id: *oid,
-                                                state: OrderState::Canceled,
-                                                leaves: so.spec.qty,
-                                                cum_qty: so.cum_qty,
-                                                avg_fill_px: if so.cum_qty > 0 {
-                                                    so.cum_vwap_num / Decimal::from(so.cum_qty)
-                                                } else {
-                                                    Decimal::ZERO
-                                                },
-                                                tag: so.user_tag.clone(),
-                                                time: at,
-                                            });
-                                            so.done = true;
-                                            finished.push(*oid);
-                                            so.cancel_pending = false;
-                                            so.cancel_at = None;
-                                        }
-                                    }
+                                if !so.done
+                                    && so.cancel_pending
+                                    && let Some(at) = so.cancel_at
+                                    && now >= at
+                                {
+                                    due.push(OrderUpdate {
+                                        name: so.spec.account_key.account_name.clone(),
+                                        instrument: so.spec.instrument.clone(),
+                                        provider_kind: so.provider,
+                                        provider_order_id: Some(so.provider_order_id.clone()),
+                                        order_id: *oid,
+                                        state: OrderState::Canceled,
+                                        leaves: so.spec.qty,
+                                        cum_qty: so.cum_qty,
+                                        avg_fill_px: if so.cum_qty > 0 {
+                                            so.cum_vwap_num / Decimal::from(so.cum_qty)
+                                        } else {
+                                            Decimal::ZERO
+                                        },
+                                        tag: so.user_tag.clone(),
+                                        time: at,
+                                    });
+                                    so.done = true;
+                                    finished.push(*oid);
+                                    so.cancel_pending = false;
+                                    so.cancel_at = None;
                                 }
-                                if !so.done && so.replace_pending {
-                                    if let Some(at) = so.replace_at {
-                                        if now >= at {
-                                            if let Some(req) = so.replace_req.clone() {
-                                                // Apply qty change if present
-                                                if let Some(new_qty_raw) = req.new_qty {
-                                                    let mut new_qty = new_qty_raw.abs();
-                                                    if new_qty < so.cum_qty {
-                                                        new_qty = so.cum_qty;
-                                                    }
-                                                    so.orig_qty = new_qty;
-                                                    let leaves = so.orig_qty - so.cum_qty;
-                                                    so.spec.qty = leaves.max(0);
-                                                }
-                                                // Apply price fields if present
-                                                if let Some(p) = req.new_limit_price {
-                                                    so.spec.limit_price = Some(p);
-                                                }
-                                                if let Some(p) = req.new_stop_price {
-                                                    so.spec.stop_price = Some(p);
-                                                }
-                                                if let Some(p) = req.new_trail_price {
-                                                    so.spec.trail_price = Some(p);
-                                                }
-                                                // After replace, schedule next fill attempt slightly later
-                                                so.fill_at = now + ChronoDuration::milliseconds(5);
+                                if !so.done
+                                    && so.replace_pending
+                                    && let Some(at) = so.replace_at
+                                    && now >= at
+                                {
+                                    if let Some(req) = so.replace_req.clone() {
+                                        // Apply qty change if present
+                                        if let Some(new_qty_raw) = req.new_qty {
+                                            let mut new_qty = new_qty_raw.abs();
+                                            if new_qty < so.cum_qty {
+                                                new_qty = so.cum_qty;
                                             }
-                                            so.replace_pending = false;
-                                            so.replace_at = None;
-                                            so.replace_req = None;
+                                            so.orig_qty = new_qty;
+                                            let leaves = so.orig_qty - so.cum_qty;
+                                            so.spec.qty = leaves.max(0);
                                         }
+                                        // Apply price fields if present
+                                        if let Some(p) = req.new_limit_price {
+                                            so.spec.limit_price = Some(p);
+                                        }
+                                        if let Some(p) = req.new_stop_price {
+                                            so.spec.stop_price = Some(p);
+                                        }
+                                        if let Some(p) = req.new_trail_price {
+                                            so.spec.trail_price = Some(p);
+                                        }
+                                        // After replace, schedule next fill attempt slightly later
+                                        so.fill_at = now + ChronoDuration::milliseconds(5);
                                     }
+                                    so.replace_pending = false;
+                                    so.replace_at = None;
+                                    so.replace_req = None;
                                 }
                             }
                             if !due.is_empty() {
@@ -917,10 +915,10 @@ impl BacktestFeeder {
                                 )> = std::collections::HashSet::new();
                                 let mut accounts_vec: Vec<AccountDelta> = Vec::new();
                                 for key in updated_accounts.into_iter() {
-                                    if set.insert(key.clone()) {
-                                        if let Some(snap) = accounts_ledger.get(&key) {
-                                            accounts_vec.push(snap.clone());
-                                        }
+                                    if set.insert(key.clone())
+                                        && let Some(snap) = accounts_ledger.get(&key)
+                                    {
+                                        accounts_vec.push(snap.clone());
                                     }
                                 }
                                 if !accounts_vec.is_empty() {
@@ -937,7 +935,7 @@ impl BacktestFeeder {
                             }
                             // Emit positions snapshots for touched positions this tick
                             if !touched_positions.is_empty() {
-                                use std::collections::{HashMap as StdHashMap, HashSet};
+                                use std::collections::HashSet;
                                 let mut seen: HashSet<(
                                     ProviderKind,
                                     tt_types::accounts::account::AccountName,
@@ -947,12 +945,12 @@ impl BacktestFeeder {
                                     tt_types::accounts::events::PositionDelta,
                                 > = Vec::new();
                                 for key in touched_positions.drain(..) {
-                                    if seen.insert(key.clone()) {
-                                        if let Some(pd) = positions_ledger.get(&key) {
-                                            let mut snap = pd.clone();
-                                            snap.time = now;
-                                            positions_vec.push(snap);
-                                        }
+                                    if seen.insert(key.clone())
+                                        && let Some(pd) = positions_ledger.get(&key)
+                                    {
+                                        let mut snap = pd.clone();
+                                        snap.time = now;
+                                        positions_vec.push(snap);
                                     }
                                 }
                                 if !positions_vec.is_empty() {
