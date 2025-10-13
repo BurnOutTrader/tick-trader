@@ -1,4 +1,5 @@
 use chrono::{DateTime, Duration as ChronoDuration, TimeZone, Utc};
+use rust_decimal::Decimal;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BinaryHeap, HashMap, VecDeque};
 use std::sync::Arc;
@@ -6,6 +7,9 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 use tt_bus::ClientMessageBus;
+use tt_types::accounts::events::{OrderUpdate, PositionDelta, PositionSide, ProviderOrderId};
+use tt_types::accounts::order::OrderState;
+use tt_types::engine_id::EngineUuid;
 use tt_types::keys::{SymbolKey, Topic};
 use tt_types::providers::ProviderKind;
 use tt_types::securities::symbols::Instrument;
@@ -117,6 +121,8 @@ impl BacktestFeeder {
             let mut heap: BinaryHeap<HeapEntry> = BinaryHeap::new();
             // Pending outgoing events (after normalization) awaiting emission order
             let mut _out_q: VecDeque<Response> = VecDeque::new();
+            // Last known mark price per (provider,instrument) to price synthetic fills
+            let mut marks: HashMap<(ProviderKind, Instrument), Decimal> = HashMap::new();
 
             // helper: ensure a key has data loaded up to cursor+window
             async fn ensure_window(
@@ -344,7 +350,77 @@ impl BacktestFeeder {
                                 })
                                 .await;
                         }
-                        // Ignore others in backtest feeder
+                        Request::SubscribeAccount(_sa) => {
+                            // Backtest: no backend; portfolio updates will be driven by our synthetic orders
+                            // We could emit an initial empty snapshot in the future.
+                        }
+                        Request::PlaceOrder(spec) => {
+                            // Synthesize an immediate fill at last known mark
+                            let prov = spec.account_key.provider;
+                            let instr = spec.instrument.clone();
+                            let now = Utc::now();
+                            let px = marks
+                                .get(&(prov, instr.clone()))
+                                .cloned()
+                                .unwrap_or(Decimal::ZERO);
+                            // Try to extract engine order id from custom tag; otherwise generate one
+                            let engine_order_id = if let Some(tag) = &spec.custom_tag {
+                                if let Some((eng, _)) =
+                                    EngineUuid::extract_and_remove_engine_tag(tag)
+                                {
+                                    eng
+                                } else {
+                                    EngineUuid::new()
+                                }
+                            } else {
+                                EngineUuid::new()
+                            };
+                            let leaves = 0i64;
+                            let cum_qty = spec.qty;
+                            let ou = OrderUpdate {
+                                name: spec.account_key.account_name.clone(),
+                                instrument: instr.clone(),
+                                provider_kind: prov,
+                                provider_order_id: Some(ProviderOrderId(format!(
+                                    "bt-{}",
+                                    engine_order_id
+                                ))),
+                                order_id: engine_order_id,
+                                state: OrderState::Filled,
+                                leaves,
+                                cum_qty,
+                                avg_fill_px: px,
+                                tag: spec.custom_tag.clone(),
+                                time: now,
+                            };
+                            let ob = tt_types::wire::OrdersBatch {
+                                topic: Topic::Orders,
+                                seq: 0,
+                                orders: vec![ou],
+                            };
+                            let side = if spec.side == tt_types::accounts::events::Side::Buy {
+                                PositionSide::Long
+                            } else {
+                                PositionSide::Short
+                            };
+                            let pd = PositionDelta {
+                                instrument: instr.clone(),
+                                account_name: spec.account_key.account_name.clone(),
+                                provider_kind: prov,
+                                net_qty: Decimal::from(cum_qty),
+                                average_price: px,
+                                open_pnl: Decimal::ZERO,
+                                time: now,
+                                side,
+                            };
+                            let pb = tt_types::wire::PositionsBatch {
+                                topic: Topic::Positions,
+                                seq: 0,
+                                positions: vec![pd],
+                            };
+                            let _ = bus_clone.route_response(Response::OrdersBatch(ob)).await;
+                            let _ = bus_clone.route_response(Response::PositionsBatch(pb)).await;
+                        }
                         _ => {}
                     }
                 }
@@ -380,6 +456,22 @@ impl BacktestFeeder {
                             }
                             // Emit all items at this timestamp in recorded order
                             for item in vec.drain(..) {
+                                // Update last marks for synthetic fills
+                                match &item {
+                                    tt_database::queries::TopicDataEnum::Tick(tk) => {
+                                        marks
+                                            .insert((ks.provider, tk.instrument.clone()), tk.price);
+                                    }
+                                    tt_database::queries::TopicDataEnum::Bbo(bbo) => {
+                                        // Use bid as a conservative mark for simplicity
+                                        marks
+                                            .insert((ks.provider, bbo.instrument.clone()), bbo.bid);
+                                    }
+                                    tt_database::queries::TopicDataEnum::Candle(c) => {
+                                        marks.insert((ks.provider, c.instrument.clone()), c.close);
+                                    }
+                                    tt_database::queries::TopicDataEnum::Mbp10(_m) => {}
+                                }
                                 emit_one(&bus_clone, &item, ks.provider).await;
                             }
                             // Move cursor up to at least this t

@@ -46,7 +46,7 @@ impl FillModel for CmeFillModel {
         cal: &dyn SessionCalendar,
     ) -> Vec<Fill> {
         let mut out = Vec::new();
-        if !cal.is_open(&order.key.instrument, Utc::now()) {
+        if !cal.is_open(&order.instrument, Utc::now()) {
             return out;
         }
         if order.qty == 0 {
@@ -88,7 +88,7 @@ impl FillModel for CmeFillModel {
                 }
                 let px_adj = slip.adjust(side, px, spread, take);
                 out.push(Fill {
-                    instrument: order.key.instrument.clone(),
+                    instrument: order.instrument.clone(),
                     qty: take,
                     price: px_adj,
                     maker: false,
@@ -113,7 +113,7 @@ impl FillModel for CmeFillModel {
                                 // No visible book or zero sizes: fall back to last price for a single fill
                                 let px_adj = slip.adjust(Side::Buy, last_price, spread, rem);
                                 out.push(Fill {
-                                    instrument: order.key.instrument.clone(),
+                                    instrument: order.instrument.clone(),
                                     qty: rem,
                                     price: px_adj,
                                     maker: false,
@@ -122,7 +122,7 @@ impl FillModel for CmeFillModel {
                         } else {
                             let px_adj = slip.adjust(Side::Buy, last_price, spread, order.qty);
                             out.push(Fill {
-                                instrument: order.key.instrument.clone(),
+                                instrument: order.instrument.clone(),
                                 qty: order.qty,
                                 price: px_adj,
                                 maker: false,
@@ -136,7 +136,7 @@ impl FillModel for CmeFillModel {
                             if rem > 0 && out.is_empty() {
                                 let px_adj = slip.adjust(Side::Sell, last_price, spread, rem);
                                 out.push(Fill {
-                                    instrument: order.key.instrument.clone(),
+                                    instrument: order.instrument.clone(),
                                     qty: rem,
                                     price: px_adj,
                                     maker: false,
@@ -145,7 +145,7 @@ impl FillModel for CmeFillModel {
                         } else {
                             let px_adj = slip.adjust(Side::Sell, last_price, spread, order.qty);
                             out.push(Fill {
-                                instrument: order.key.instrument.clone(),
+                                instrument: order.instrument.clone(),
                                 qty: order.qty,
                                 price: px_adj,
                                 maker: false,
@@ -164,7 +164,7 @@ impl FillModel for CmeFillModel {
                             } else if lim >= last_price {
                                 let px_adj = slip.adjust(Side::Buy, last_price, spread, order.qty);
                                 out.push(Fill {
-                                    instrument: order.key.instrument.clone(),
+                                    instrument: order.instrument.clone(),
                                     qty: order.qty,
                                     price: px_adj,
                                     maker: false,
@@ -178,7 +178,7 @@ impl FillModel for CmeFillModel {
                             } else if lim <= last_price {
                                 let px_adj = slip.adjust(Side::Sell, last_price, spread, order.qty);
                                 out.push(Fill {
-                                    instrument: order.key.instrument.clone(),
+                                    instrument: order.instrument.clone(),
                                     qty: order.qty,
                                     price: px_adj,
                                     maker: false,
@@ -271,7 +271,7 @@ impl FillModel for CmeFillModel {
                                                 let px_adj =
                                                     slip.adjust(Side::Buy, last_price, spread, rem);
                                                 out.push(Fill {
-                                                    instrument: order.key.instrument.clone(),
+                                                    instrument: order.instrument.clone(),
                                                     qty: rem,
                                                     price: px_adj,
                                                     maker: false,
@@ -285,7 +285,7 @@ impl FillModel for CmeFillModel {
                                                 order.qty,
                                             );
                                             out.push(Fill {
-                                                instrument: order.key.instrument.clone(),
+                                                instrument: order.instrument.clone(),
                                                 qty: order.qty,
                                                 price: px_adj,
                                                 maker: false,
@@ -309,7 +309,7 @@ impl FillModel for CmeFillModel {
                                                     rem,
                                                 );
                                                 out.push(Fill {
-                                                    instrument: order.key.instrument.clone(),
+                                                    instrument: order.instrument.clone(),
                                                     qty: rem,
                                                     price: px_adj,
                                                     maker: false,
@@ -323,7 +323,7 @@ impl FillModel for CmeFillModel {
                                                 order.qty,
                                             );
                                             out.push(Fill {
-                                                instrument: order.key.instrument.clone(),
+                                                instrument: order.instrument.clone(),
                                                 qty: order.qty,
                                                 price: px_adj,
                                                 maker: false,
@@ -355,7 +355,7 @@ impl FillModel for CmeFillModel {
                                                 order.qty,
                                             );
                                             out.push(Fill {
-                                                instrument: order.key.instrument.clone(),
+                                                instrument: order.instrument.clone(),
                                                 qty: order.qty,
                                                 price: px_adj,
                                                 maker: false,
@@ -379,7 +379,7 @@ impl FillModel for CmeFillModel {
                                                 order.qty,
                                             );
                                             out.push(Fill {
-                                                instrument: order.key.instrument.clone(),
+                                                instrument: order.instrument.clone(),
                                                 qty: order.qty,
                                                 price: px_adj,
                                                 maker: false,
@@ -429,7 +429,7 @@ impl FillModel for CmeFillModel {
                                         let px_adj =
                                             slip.adjust(Side::Buy, last_price, spread, rem);
                                         out.push(Fill {
-                                            instrument: order.key.instrument.clone(),
+                                            instrument: order.instrument.clone(),
                                             qty: rem,
                                             price: px_adj,
                                             maker: false,
@@ -439,7 +439,7 @@ impl FillModel for CmeFillModel {
                                     let px_adj =
                                         slip.adjust(Side::Buy, last_price, spread, order.qty);
                                     out.push(Fill {
-                                        instrument: order.key.instrument.clone(),
+                                        instrument: order.instrument.clone(),
                                         qty: order.qty,
                                         price: px_adj,
                                         maker: false,
@@ -469,7 +469,7 @@ impl FillModel for CmeFillModel {
                                             let px_adj =
                                                 slip.adjust(Side::Sell, last_price, spread, rem);
                                             out.push(Fill {
-                                                instrument: order.key.instrument.clone(),
+                                                instrument: order.instrument.clone(),
                                                 qty: rem,
                                                 price: px_adj,
                                                 maker: false,
@@ -479,7 +479,7 @@ impl FillModel for CmeFillModel {
                                         let px_adj =
                                             slip.adjust(Side::Sell, last_price, spread, order.qty);
                                         out.push(Fill {
-                                            instrument: order.key.instrument.clone(),
+                                            instrument: order.instrument.clone(),
                                             qty: order.qty,
                                             price: px_adj,
                                             maker: false,

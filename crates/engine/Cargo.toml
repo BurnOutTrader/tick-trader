@@ -28,9 +28,9 @@ name = "tt-engine-test_strategy"
 path = "bin/data_test_strategy.rs"
 
 [[bin]]
-name = "tt-engine-total_live_test"
-path = "bin/total_live_test.rs"
-
-[[bin]]
 name = "tt-backtest_test"
 path = "bin/backtest_test.rs"
+
+[[bin]]
+name = "tt-backtest_orders"
+path = "bin/backtest_orders.rs"

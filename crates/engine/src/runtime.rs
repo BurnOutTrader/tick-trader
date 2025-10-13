@@ -39,6 +39,12 @@ pub(crate) struct EngineRuntimeShared {
     pub(crate) portfolio_manager: Arc<PortfolioManager>,
     // Map our EngineUuid -> provider's order id string (populated from order updates)
     pub(crate) provider_order_ids: Arc<DashMap<EngineUuid, String>>,
+    // Map our EngineUuid -> account key (account name + provider), recorded at place_order time
+    pub(crate) engine_order_accounts: Arc<DashMap<EngineUuid, AccountKey>>,
+    // Pending cancels: keep the full spec until provider order id is known
+    pub(crate) pending_cancels: Arc<DashMap<EngineUuid, tt_types::wire::CancelOrder>>,
+    // Pending replaces: keep the full spec until provider order id is known
+    pub(crate) pending_replaces: Arc<DashMap<EngineUuid, tt_types::wire::ReplaceOrder>>,
     // Consolidators shared with handle for registration
     pub(crate) consolidators:
         Arc<DashMap<ConsolidatorKey, Box<dyn tt_types::consolidators::Consolidator + Send>>>,
@@ -72,6 +78,12 @@ pub struct EngineRuntime {
     cmd_q: Arc<ArrayQueue<Command>>,
     // Map our EngineUuid -> provider's order id string (populated from order updates)
     provider_order_ids: Arc<DashMap<EngineUuid, String>>,
+    // Map our EngineUuid -> account key (account name + provider), recorded at place_order time
+    engine_order_accounts: Arc<DashMap<EngineUuid, AccountKey>>,
+    // Pending cancels: keep the full spec until provider order id is known
+    pending_cancels: Arc<DashMap<EngineUuid, tt_types::wire::CancelOrder>>,
+    // Pending replaces: keep the full spec until provider order id is known
+    pending_replaces: Arc<DashMap<EngineUuid, tt_types::wire::ReplaceOrder>>,
     slow_spin_ns: Option<u64>,
     consolidators:
         Arc<DashMap<ConsolidatorKey, Box<dyn tt_types::consolidators::Consolidator + Send>>>,
@@ -257,8 +269,8 @@ impl EngineRuntime {
     /// Convenience: construct and send a `PlaceOrder` from individual parameters.
     pub async fn place_order_with(
         &self,
-        account_name: tt_types::accounts::account::AccountName,
-        key: tt_types::keys::SymbolKey,
+        account_key: tt_types::keys::AccountKey,
+        instrument: tt_types::securities::symbols::Instrument,
         side: tt_types::accounts::events::Side,
         qty: i64,
         order_type: tt_types::wire::OrderType,
@@ -270,8 +282,8 @@ impl EngineRuntime {
         take_profit: Option<tt_types::wire::BracketWire>,
     ) -> anyhow::Result<()> {
         let spec = tt_types::wire::PlaceOrder {
-            account_name,
-            key,
+            account_key,
+            instrument,
             side,
             qty,
             order_type,
@@ -535,6 +547,9 @@ impl EngineRuntime {
             portfolio_manager: Arc::new(PortfolioManager::new(instruments)),
             cmd_q: Arc::new(ArrayQueue::new(4096)),
             provider_order_ids: Arc::new(DashMap::new()),
+            engine_order_accounts: Arc::new(DashMap::new()),
+            pending_cancels: Arc::new(DashMap::new()),
+            pending_replaces: Arc::new(DashMap::new()),
             slow_spin_ns: slow_spin,
             consolidators: Arc::new(DashMap::new()),
         }
@@ -575,6 +590,9 @@ impl EngineRuntime {
             state: self.state.clone(),
             portfolio_manager: self.portfolio_manager.clone(),
             provider_order_ids: self.provider_order_ids.clone(),
+            engine_order_accounts: self.engine_order_accounts.clone(),
+            pending_cancels: self.pending_cancels.clone(),
+            pending_replaces: self.pending_replaces.clone(),
             consolidators: self.consolidators.clone(),
             backtest_mode: self.backtest_mode,
             backtest_clock: self.backtest_clock.clone(),
@@ -609,6 +627,7 @@ impl EngineRuntime {
         }
         // Move strategy into the spawned task after on_start and accounts have been called
         let mut strategy_for_task = strategy;
+        let engine_order_accounts = self.engine_order_accounts.clone();
         let slow_spin_ns = self.slow_spin_ns;
         let handle_task = tokio::spawn(async move {
             let mut rx = rx;
@@ -796,6 +815,25 @@ impl EngineRuntime {
                                         handle_inner_for_task
                                             .provider_order_ids
                                             .insert(o.order_id, pid.0.clone());
+                                        // If there is a pending cancel for this engine order, dispatch it now
+                                        if let Some((_, mut spec)) = handle_inner_for_task.pending_cancels.remove(&o.order_id) {
+                                            // fill provider order id and send
+                                            spec.provider_order_id = pid.0.clone();
+                                            let _ = bus_for_task
+                                                .handle_request(&sub_id_for_task, Request::CancelOrder(spec))
+                                                .await;
+                                        }
+                                        // If there is a pending replace, dispatch it now
+                                        if let Some((_, mut spec)) = handle_inner_for_task.pending_replaces.remove(&o.order_id) {
+                                            // fill provider order id and send
+                                            spec.provider_order_id = pid.0.clone();
+                                            let _ = bus_for_task
+                                                .handle_request(&sub_id_for_task, Request::ReplaceOrder(spec))
+                                                .await;
+                                        }
+                                    }
+                                    if o.state.is_eol() {
+                                        engine_order_accounts.remove(&o.order_id);
                                     }
                                 }
                             }

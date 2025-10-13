@@ -648,9 +648,9 @@ impl ExecutionProvider for PXClient {
             type_: map_type(b.order_type),
         });
 
-        if let Some(contract) = self.instruments.get(&spec.key.instrument) {
+        if let Some(contract) = self.instruments.get(&spec.instrument) {
             let contract = contract.value();
-            if let Some(account) = self.internal_accounts.get(&spec.account_name) {
+            if let Some(account) = self.internal_accounts.get(&spec.account_key.account_name) {
                 let req = PlaceOrderReq {
                     account_id: account.id,
                     contract_id: contract.provider_contract_name.clone(),
@@ -688,7 +688,7 @@ impl ExecutionProvider for PXClient {
                 ok: false,
                 message: Some(format!(
                     "cancel_order error: No instrument found on {:?} for : {:?}",
-                    self.provider_kind, spec.key.instrument
+                    self.provider_kind, spec.instrument
                 )),
             };
         }
@@ -697,7 +697,7 @@ impl ExecutionProvider for PXClient {
             ok: false,
             message: Some(format!(
                 "cancel_order error: No account found on {:?} client for : {}",
-                self.provider_kind, spec.account_name
+                self.provider_kind, spec.account_key.account_name
             )),
         }
     }

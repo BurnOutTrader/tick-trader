@@ -340,10 +340,10 @@ pub struct BracketWire {
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, PartialEq, Clone, Debug)]
 #[archive(check_bytes)]
 pub struct PlaceOrder {
-    /// Account name
-    pub account_name: crate::accounts::account::AccountName,
-    /// Symbol key
-    pub key: SymbolKey,
+    /// Account key (provider + account name)
+    pub account_key: crate::keys::AccountKey,
+    /// Target instrument
+    pub instrument: Instrument,
     /// Side (buy/sell)
     pub side: crate::accounts::events::Side,
     /// Quantity

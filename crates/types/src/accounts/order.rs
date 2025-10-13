@@ -23,4 +23,15 @@ impl OrderState {
             OrderState::New => 1,
         }
     }
+
+    pub fn is_eol(&self) -> bool {
+        match self {
+            OrderState::Canceled => true,
+            OrderState::Filled => true,
+            OrderState::PartiallyFilled => false,
+            OrderState::Acknowledged => false,
+            OrderState::New => false,
+            OrderState::Rejected => true,
+        }
+    }
 }

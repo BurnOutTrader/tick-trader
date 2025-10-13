@@ -274,51 +274,72 @@ impl EngineHandle {
     }
 
     // Fire-and-forget: enqueue cancel; engine task performs I/O
-    pub fn cancel_order(
-        &self,
-        _provider_kind: ProviderKind,
-        account_name: AccountName,
-        order_id: EngineUuid,
-    ) -> anyhow::Result<()> {
+    pub fn cancel_order(&self, order_id: EngineUuid) -> anyhow::Result<()> {
         // Look up provider order ID from map populated by order updates
         if let Some(pid) = self.inner.provider_order_ids.get(&order_id) {
-            let spec = tt_types::wire::CancelOrder {
-                account_name,
-                provider_order_id: pid.value().clone(),
-            };
-            let _ = self.cmd_q.push(Command::Cancel(spec));
-            Ok(())
+            // Resolve account from our engine_order_accounts map
+            if let Some(ak) = self.inner.engine_order_accounts.get(&order_id) {
+                let spec = tt_types::wire::CancelOrder {
+                    account_name: ak.account_name.clone(),
+                    provider_order_id: pid.value().clone(),
+                };
+                let _ = self.cmd_q.push(Command::Cancel(spec));
+                Ok(())
+            } else {
+                Err(anyhow!("account not known for engine order {}", order_id))
+            }
         } else {
-            Err(anyhow!(
-                "provider_order_id not known for engine order {}",
-                order_id
-            ))
+            // Provider id not yet known: record a pending cancel with full spec to be sent when first order update arrives
+            if let Some(ak) = self.inner.engine_order_accounts.get(&order_id) {
+                let spec = tt_types::wire::CancelOrder {
+                    account_name: ak.account_name.clone(),
+                    provider_order_id: String::new(),
+                };
+                self.inner.pending_cancels.insert(order_id, spec);
+                Ok(())
+            } else {
+                Err(anyhow!("account not known for engine order {}", order_id))
+            }
         }
     }
     // Fire-and-forget: enqueue replace; engine task performs I/O
     pub fn replace_order(
         &self,
-        _provider_kind: ProviderKind,
-        account_name: AccountName,
         incoming: tt_types::wire::ReplaceOrder,
         order_id: EngineUuid,
     ) -> anyhow::Result<()> {
         if let Some(pid) = self.inner.provider_order_ids.get(&order_id) {
-            let spec = tt_types::wire::ReplaceOrder {
-                account_name,
-                provider_order_id: pid.value().clone(),
-                new_qty: incoming.new_qty,
-                new_limit_price: incoming.new_limit_price,
-                new_stop_price: incoming.new_stop_price,
-                new_trail_price: incoming.new_trail_price,
-            };
-            let _ = self.cmd_q.push(Command::Replace(spec));
-            Ok(())
+            // Resolve account from our engine_order_accounts map
+            if let Some(ak) = self.inner.engine_order_accounts.get(&order_id) {
+                let spec = tt_types::wire::ReplaceOrder {
+                    account_name: ak.account_name.clone(),
+                    provider_order_id: pid.value().clone(),
+                    new_qty: incoming.new_qty,
+                    new_limit_price: incoming.new_limit_price,
+                    new_stop_price: incoming.new_stop_price,
+                    new_trail_price: incoming.new_trail_price,
+                };
+                let _ = self.cmd_q.push(Command::Replace(spec));
+                Ok(())
+            } else {
+                Err(anyhow!("account not known for engine order {}", order_id))
+            }
         } else {
-            Err(anyhow!(
-                "provider_order_id not known for engine order {}",
-                order_id
-            ))
+            // Provider id not yet known: record a pending replace with full spec to be sent when first order update arrives
+            if let Some(ak) = self.inner.engine_order_accounts.get(&order_id) {
+                let spec = tt_types::wire::ReplaceOrder {
+                    account_name: ak.account_name.clone(),
+                    provider_order_id: String::new(),
+                    new_qty: incoming.new_qty,
+                    new_limit_price: incoming.new_limit_price,
+                    new_stop_price: incoming.new_stop_price,
+                    new_trail_price: incoming.new_trail_price,
+                };
+                self.inner.pending_replaces.insert(order_id, spec);
+                Ok(())
+            } else {
+                Err(anyhow!("account not known for engine order {}", order_id))
+            }
         }
     }
 
@@ -328,8 +349,8 @@ impl EngineHandle {
     /// Do not use +oId: as part of your order's custom tag, it is reserved for internal order management
     pub fn place_order(
         &self,
-        account_name: tt_types::accounts::account::AccountName,
-        key: tt_types::keys::SymbolKey,
+        account_key: tt_types::keys::AccountKey,
+        instrument: Instrument,
         side: tt_types::accounts::events::Side,
         qty: i64,
         order_type: tt_types::wire::OrderType,
@@ -342,9 +363,10 @@ impl EngineHandle {
     ) -> anyhow::Result<EngineUuid> {
         let engine_uuid = EngineUuid::new();
         let tag = EngineUuid::append_engine_tag(custom_tag, engine_uuid);
+        let account_key_clone = account_key.clone();
         let spec = tt_types::wire::PlaceOrder {
-            account_name,
-            key,
+            account_key,
+            instrument,
             side,
             qty,
             order_type,
@@ -355,6 +377,10 @@ impl EngineHandle {
             stop_loss,
             take_profit,
         };
+        // Record mapping so we can cancel/replace with minimal info later
+        self.inner
+            .engine_order_accounts
+            .insert(engine_uuid, account_key_clone);
         // Fire-and-forget: enqueue; engine task will send to execution provider
         let _ = self.cmd_q.push(Command::Place(spec));
         Ok(engine_uuid)

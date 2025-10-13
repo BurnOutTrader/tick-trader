@@ -83,7 +83,7 @@ impl UpstreamManager for ProviderManager {
 
     async fn place_order(&self, spec: tt_types::wire::PlaceOrder) -> Result<()> {
         // Ensure execution provider for this key's provider kind
-        let kind = spec.key.provider;
+        let kind = spec.account_key.provider;
         self.ensure_clients(kind).await?;
         let ex = self
             .ex
