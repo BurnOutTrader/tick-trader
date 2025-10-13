@@ -1,6 +1,5 @@
 use chrono::{DateTime, Duration as ChronoDuration, TimeZone, Utc};
 use rust_decimal::Decimal;
-use rust_decimal::prelude::ToPrimitive;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BinaryHeap, HashMap, VecDeque};
 use std::sync::Arc;
@@ -8,7 +7,7 @@ use tokio::sync::{Notify, mpsc};
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 use tt_bus::ClientMessageBus;
-use tt_types::accounts::events::{OrderUpdate, ProviderOrderId, Side};
+use tt_types::accounts::events::{OrderUpdate, ProviderOrderId};
 use tt_types::accounts::order::OrderState;
 use tt_types::engine_id::EngineUuid;
 use tt_types::keys::{SymbolKey, Topic};
@@ -18,11 +17,12 @@ use tt_types::wire::{BarBatch, Response};
 
 use crate::backtest::backtest_clock::BacktestClock;
 use crate::backtest::realism_models::project_x::calander::HoursCalendar;
+use crate::backtest::realism_models::project_x::fee::PxFlatFee;
 use crate::backtest::realism_models::project_x::fill::{CmeFillModel, FillConfig};
 use crate::backtest::realism_models::project_x::latency::PxLatency;
 use crate::backtest::realism_models::project_x::slippage::NoSlippage;
 use crate::backtest::realism_models::traits::{
-    FillModel, LatencyModel, SessionCalendar, SlippageModel,
+    FeeModel, FillModel, LatencyModel, SessionCalendar, SlippageModel,
 };
 
 /// Windowed DB feeder that simulates a provider by emitting Responses over an in-process bus.
@@ -41,19 +41,20 @@ pub struct BacktestFeederConfig {
     pub range_start: Option<DateTime<Utc>>,
     /// Optional absolute end time (UTC) to clamp backtest range.
     pub range_end: Option<DateTime<Utc>>,
-    /// Factory for latency model instances used by the feeder
+    /// Factory for latency model instances used by the feeder (per-order)
     pub make_latency: Arc<dyn Fn() -> Box<dyn LatencyModel> + Send + Sync>,
     /// Factory for per-order fill model instances
     pub make_fill: Arc<dyn Fn() -> Box<dyn FillModel> + Send + Sync>,
     /// Factory for per-order slippage model instances
     pub make_slippage: Arc<dyn Fn() -> Box<dyn SlippageModel> + Send + Sync>,
+    /// Factory for per-order fee model instances
+    pub make_fee: Arc<dyn Fn() -> Box<dyn FeeModel> + Send + Sync>,
     /// Shared session calendar
     pub calendar: Arc<dyn SessionCalendar>,
 }
+
 impl Default for BacktestFeederConfig {
-    fn default() -> Self {
-        // Default to fetching one month at a time to reduce query fan-out and round-trips
-        // for historical backtests. Lookahead provides a small buffer to avoid tight refills.
+    fn default() -> BacktestFeederConfig {
         Self {
             window: ChronoDuration::days(2),
             lookahead: ChronoDuration::days(1),
@@ -67,6 +68,7 @@ impl Default for BacktestFeederConfig {
                 })
             }),
             make_slippage: Arc::new(|| Box::new(NoSlippage::new())),
+            make_fee: Arc::new(|| Box::new(PxFlatFee::new())),
             calendar: Arc::new(HoursCalendar::default()),
         }
     }
@@ -89,6 +91,67 @@ struct KeyState {
     hard_stop: Option<DateTime<Utc>>,
     /// Whether this key has reached hard stop and is completed
     done: bool,
+}
+
+/// Last known quote/last marks per symbol for realistic pricing
+#[derive(Clone, Copy, Default)]
+struct Mark {
+    bid: Option<Decimal>,
+    ask: Option<Decimal>,
+    last: Option<Decimal>,
+}
+impl Mark {
+    #[inline]
+    fn with_last(mut self, px: Decimal) -> Self {
+        self.last = Some(px);
+        self
+    }
+    #[inline]
+    fn with_bid(mut self, px: Decimal) -> Self {
+        self.bid = Some(px);
+        self
+    }
+    #[inline]
+    fn with_ask(mut self, px: Decimal) -> Self {
+        self.ask = Some(px);
+        self
+    }
+    #[inline]
+    fn mid(&self) -> Option<Decimal> {
+        match (self.bid, self.ask) {
+            (Some(b), Some(a)) => Some((b + a) / Decimal::from(2i32)),
+            _ => None,
+        }
+    }
+    #[inline]
+    fn spread(&self) -> Option<Decimal> {
+        match (self.bid, self.ask) {
+            (Some(b), Some(a)) => Some(a - b),
+            _ => None,
+        }
+    }
+    #[inline]
+    fn ref_px(&self) -> Decimal {
+        if let Some(m) = self.mid() {
+            m
+        } else if let Some(l) = self.last {
+            l
+        } else {
+            Decimal::ZERO
+        }
+    }
+
+    // Timestamped helpers for mark update
+    fn update_tick(&mut self, px: Decimal, _t: chrono::DateTime<chrono::Utc>) {
+        self.last = Some(px);
+    }
+    fn update_bbo(&mut self, bid: Decimal, ask: Decimal, _t: chrono::DateTime<chrono::Utc>) {
+        self.bid = Some(bid);
+        self.ask = Some(ask);
+    }
+    fn update_candle_close(&mut self, close: Decimal, _t: chrono::DateTime<chrono::Utc>) {
+        self.last = Some(close);
+    }
 }
 
 /// Min-heap entry used to merge across keys by next event time
@@ -147,7 +210,6 @@ impl BacktestFeeder {
                 }
             }
             // --- Simple fill engine state (model-driven order lifecycle) ---
-            #[derive(Debug, Clone)]
             struct SimOrder {
                 spec: tt_types::wire::PlaceOrder,
                 provider: ProviderKind,
@@ -159,14 +221,18 @@ impl BacktestFeeder {
                 ack_emitted: bool,
                 user_tag: Option<String>,
                 done: bool,
+                // Per-order models
+                fill_model: Box<dyn FillModel>,
+                slip_model: Box<dyn SlippageModel>,
+                fee_model: Box<dyn FeeModel>,
+                fees: Decimal,
             }
             fn to_chrono(d: std::time::Duration) -> ChronoDuration {
                 ChronoDuration::from_std(d)
                     .unwrap_or_else(|_| ChronoDuration::milliseconds(d.as_millis() as i64))
             }
             // Instantiate shared realism models from config
-            let mut fill_model: Box<dyn FillModel> = (cfg.make_fill)();
-            let mut slip_model: Box<dyn SlippageModel> = (cfg.make_slippage)();
+            // Note: Fill and Slippage models are per-order factories; instantiate on order placement
             let cal_model: Arc<dyn SessionCalendar> = cfg.calendar.clone();
             // Simulated orders
             let mut sim_orders: HashMap<EngineUuid, SimOrder> = HashMap::new();
@@ -177,8 +243,8 @@ impl BacktestFeeder {
             let mut heap: BinaryHeap<HeapEntry> = BinaryHeap::new();
             // Pending outgoing events (after normalization) awaiting emission order
             let mut _out_q: VecDeque<Response> = VecDeque::new();
-            // Last known mark price per symbol_ket to price synthetic fills
-            let mut marks: HashMap<SymbolKey, Decimal> = HashMap::new();
+            // Last known quote/last marks per symbol to price synthetic fills realistically
+            let mut marks: HashMap<SymbolKey, Mark> = HashMap::new();
             // Orchestrator-controlled logical time watermark; only emit events <= this time.
             let mut watermark: Option<DateTime<Utc>> = None;
             // Ensure we emit BacktestCompleted exactly once when end is reached
@@ -467,31 +533,28 @@ impl BacktestFeeder {
                                         for item in vec.drain(..) {
                                             match &item {
                                                 tt_database::queries::TopicDataEnum::Tick(tk) => {
-                                                    marks.insert(
-                                                        SymbolKey::new(
-                                                            tk.instrument.clone(),
-                                                            ks.provider,
-                                                        ),
-                                                        tk.price,
+                                                    let key = SymbolKey::new(
+                                                        tk.instrument.clone(),
+                                                        ks.provider,
                                                     );
+                                                    let entry = marks.entry(key).or_default();
+                                                    entry.update_tick(tk.price, t);
                                                 }
                                                 tt_database::queries::TopicDataEnum::Bbo(bbo) => {
-                                                    marks.insert(
-                                                        SymbolKey::new(
-                                                            bbo.instrument.clone(),
-                                                            ks.provider,
-                                                        ),
-                                                        bbo.bid,
+                                                    let key = SymbolKey::new(
+                                                        bbo.instrument.clone(),
+                                                        ks.provider,
                                                     );
+                                                    let entry = marks.entry(key).or_default();
+                                                    entry.update_bbo(bbo.bid, bbo.ask, t);
                                                 }
                                                 tt_database::queries::TopicDataEnum::Candle(c) => {
-                                                    marks.insert(
-                                                        SymbolKey::new(
-                                                            c.instrument.clone(),
-                                                            ks.provider,
-                                                        ),
-                                                        c.close,
+                                                    let key = SymbolKey::new(
+                                                        c.instrument.clone(),
+                                                        ks.provider,
                                                     );
+                                                    let entry = marks.entry(key).or_default();
+                                                    entry.update_candle_close(c.close, t);
                                                 }
                                                 tt_database::queries::TopicDataEnum::Mbp10(_m) => {}
                                             }
@@ -536,22 +599,39 @@ impl BacktestFeeder {
                                 }
                                 if !so.done && now >= so.fill_at {
                                     // Price at last mark; use fill model to allow overrides
-                                    let last_px = marks
-                                        .get(&SymbolKey::new(
-                                            so.spec.instrument.clone(),
-                                            so.provider,
-                                        ))
-                                        .cloned()
-                                        .unwrap_or(Decimal::ZERO);
+                                    let (last_px, spread_opt) = {
+                                        let key =
+                                            SymbolKey::new(so.spec.instrument.clone(), so.provider);
+                                        if let Some(m) = marks.get(&key) {
+                                            (m.ref_px(), m.spread())
+                                        } else {
+                                            (Decimal::ZERO, None)
+                                        }
+                                    };
                                     // Try model matching (no book view for now)
-                                    let fills = fill_model.match_book(
+                                    let fills = so.fill_model.match_book(
                                         now,
                                         None,
                                         last_px,
                                         &mut so.spec,
-                                        &mut *slip_model,
+                                        &mut *so.slip_model,
                                         &*cal_model,
+                                        &*so.fee_model
                                     );
+                                    // Respect session calendar: if closed/halting at this logical time, defer the fill to next open
+                                    if !cal_model.is_open(&so.spec.instrument, now)
+                                        || cal_model.is_halt(&so.spec.instrument, now)
+                                    {
+                                        // Reschedule fill to the next open (or push forward by 1s if unknown)
+                                        if let Some(next_open) =
+                                            cal_model.next_open_after(&so.spec.instrument, now)
+                                        {
+                                            so.fill_at = next_open;
+                                        } else {
+                                            so.fill_at = now + ChronoDuration::seconds(1);
+                                        }
+                                        continue;
+                                    }
                                     let mut total_qty: i64 = 0;
                                     let mut vwap_num = Decimal::ZERO;
                                     for f in fills.iter() {
@@ -643,51 +723,16 @@ impl BacktestFeeder {
                             } else {
                                 spec.qty = normalized_qty;
                             }
-                            // Logic validation for order types (when we have a mark)
-                            let last_mark = marks
-                                .get(&SymbolKey::new(spec.instrument.clone(), prov))
-                                .and_then(|d| d.to_f64());
 
                             match spec.order_type {
                                 tt_types::wire::OrderType::Stop
                                 | tt_types::wire::OrderType::TrailingStop => {
-                                    if let Some(stop_price) = spec.stop_price
-                                        && let Some(last_price) = last_mark
-                                    {
-                                        match spec.side {
-                                            Side::Buy if stop_price > last_price => {
-                                                reject = true;
-                                            }
-                                            Side::Sell if stop_price < last_price => {
-                                                reject = true;
-                                            }
-                                            _ => {}
-                                        }
-                                    } else {
+                                    if spec.stop_price.is_none() {
                                         reject = true;
                                     }
                                 }
                                 tt_types::wire::OrderType::StopLimit => {
-                                    if let Some(stop_price) = spec.stop_price
-                                        && let Some(limit_price) = spec.limit_price
-                                        && let Some(last_price) = last_mark
-                                    {
-                                        match spec.side {
-                                            Side::Buy
-                                                if stop_price > last_price
-                                                    || limit_price > last_price =>
-                                            {
-                                                reject = true;
-                                            }
-                                            Side::Sell
-                                                if stop_price < last_price
-                                                    || limit_price < last_price =>
-                                            {
-                                                reject = true;
-                                            }
-                                            _ => {}
-                                        }
-                                    } else {
+                                    if spec.stop_price.is_none() || spec.limit_price.is_none() {
                                         reject = true;
                                     }
                                 }
@@ -719,10 +764,13 @@ impl BacktestFeeder {
                                 continue;
                             }
 
-                            // Initialize per-order latency model; use shared fill/slip/calendar
+                            // Initialize per-order latency model; use shared calendar
                             let mut lat = (cfg.make_latency)();
-                            // Normalize order on submit using configured fill model
+                            // Instantiate per-order fill/slippage/fee models and normalize on submit
+                            let mut fill_model = (cfg.make_fill)();
                             fill_model.on_submit(base, &mut spec);
+                            let mut slip_model = (cfg.make_slippage)();
+                            let mut fee_model = (cfg.make_fee)();
 
                             // Schedule ack and (first) fill per latency
                             let ack_at = base + to_chrono(lat.submit_to_ack());
@@ -739,6 +787,10 @@ impl BacktestFeeder {
                                 ack_emitted: false,
                                 done: false,
                                 user_tag,
+                                fill_model,
+                                slip_model,
+                                fee_model,
+                                fees: Decimal::ZERO,
                             };
                             sim_orders.entry(engine_order_id).or_insert(sim);
                         }
@@ -781,26 +833,24 @@ impl BacktestFeeder {
                             }
                             // Emit all items at this timestamp in recorded order
                             for item in vec.drain(..) {
-                                // Update last marks for synthetic fills
+                                // Update last marks for synthetic fills with timestamps
                                 match &item {
                                     tt_database::queries::TopicDataEnum::Tick(tk) => {
-                                        marks.insert(
-                                            SymbolKey::new(tk.instrument.clone(), ks.provider),
-                                            tk.price,
-                                        );
+                                        let key =
+                                            SymbolKey::new(tk.instrument.clone(), ks.provider);
+                                        let entry = marks.entry(key).or_default();
+                                        entry.update_tick(tk.price, t);
                                     }
                                     tt_database::queries::TopicDataEnum::Bbo(bbo) => {
-                                        // Use bid as a conservative mark for simplicity
-                                        marks.insert(
-                                            SymbolKey::new(bbo.instrument.clone(), ks.provider),
-                                            bbo.bid,
-                                        );
+                                        let key =
+                                            SymbolKey::new(bbo.instrument.clone(), ks.provider);
+                                        let entry = marks.entry(key).or_default();
+                                        entry.update_bbo(bbo.bid, bbo.ask, t);
                                     }
                                     tt_database::queries::TopicDataEnum::Candle(c) => {
-                                        marks.insert(
-                                            SymbolKey::new(c.instrument.clone(), ks.provider),
-                                            c.close,
-                                        );
+                                        let key = SymbolKey::new(c.instrument.clone(), ks.provider);
+                                        let entry = marks.entry(key).or_default();
+                                        entry.update_candle_close(c.close, t);
                                     }
                                     tt_database::queries::TopicDataEnum::Mbp10(_m) => {}
                                 }

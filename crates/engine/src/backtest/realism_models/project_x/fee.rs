@@ -10,6 +10,12 @@ use tt_types::wire::PlaceOrder;
 pub struct PxFlatFee;
 
 impl PxFlatFee {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl PxFlatFee {
     // Return a per-contract fee for a symbol string (USD). If the symbol is not
     // known we return None so the caller can fall back to the configured default.
     fn lookup_per_contract(sym: &str) -> Option<Decimal> {

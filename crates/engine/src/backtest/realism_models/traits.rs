@@ -23,6 +23,7 @@ pub trait FillModel: Send + Sync {
         order: &mut PlaceOrder,
         slip: &mut dyn SlippageModel,
         cal: &dyn SessionCalendar,
+        fee_model: &dyn FeeModel,
     ) -> Vec<Fill>;
 }
 

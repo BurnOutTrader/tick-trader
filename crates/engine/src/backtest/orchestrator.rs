@@ -39,6 +39,7 @@ impl BacktestConfig {
             end_date: None,
         }
     }
+
     pub fn from_to(step: chrono::Duration, start: NaiveDate, end: NaiveDate) -> BacktestConfig {
         Self {
             step,

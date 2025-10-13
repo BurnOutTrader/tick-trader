@@ -1,5 +1,5 @@
-use crate::backtest::models::{Fill, LimitPolicy, MarketPolicy, StopTrigger};
-use crate::backtest::realism_models::traits::{FillModel, SessionCalendar, SlippageModel};
+use crate::backtest::models::{FeeCtx, Fill, LimitPolicy, MarketPolicy, StopTrigger};
+use crate::backtest::realism_models::traits::{FeeModel, FillModel, SessionCalendar, SlippageModel};
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
@@ -38,12 +38,13 @@ impl FillModel for CmeFillModel {
 
     fn match_book(
         &mut self,
-        _now: DateTime<Utc>,
+        now: DateTime<Utc>,
         book: Option<&BookLevels>,
         last_price: Decimal,
         order: &mut PlaceOrder,
         slip: &mut dyn SlippageModel,
         cal: &dyn SessionCalendar,
+        fee_model: &dyn FeeModel,
     ) -> Vec<Fill> {
         let mut out = Vec::new();
         if !cal.is_open(&order.instrument, Utc::now()) {
@@ -65,7 +66,10 @@ impl FillModel for CmeFillModel {
         } else {
             (None, None, None)
         };
-
+        let fee_ctx = FeeCtx {
+            sim_time: now,
+            instrument: order.instrument.clone(),
+        };
         // Walks the opposite side of the book accumulating fills up to qty_remaining.
         let mut walk_depth = |prices: &[Decimal],
                               sizes: &[Decimal],
