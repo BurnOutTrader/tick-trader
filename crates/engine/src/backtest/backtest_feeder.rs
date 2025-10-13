@@ -14,6 +14,7 @@ use tt_types::keys::{SymbolKey, Topic};
 use tt_types::providers::ProviderKind;
 use tt_types::securities::symbols::Instrument;
 use tt_types::wire::{BarBatch, Response};
+use tt_types::data::mbp10::BookLevels;
 
 use crate::backtest::backtest_clock::BacktestClock;
 use crate::backtest::realism_models::project_x::calander::HoursCalendar;
@@ -221,6 +222,10 @@ impl BacktestFeeder {
                 ack_emitted: bool,
                 user_tag: Option<String>,
                 done: bool,
+                // Order lifecycle tracking
+                orig_qty: i64,
+                cum_qty: i64,
+                cum_vwap_num: Decimal,
                 // Per-order models
                 fill_model: Box<dyn FillModel>,
                 slip_model: Box<dyn SlippageModel>,
@@ -245,6 +250,8 @@ impl BacktestFeeder {
             let mut _out_q: VecDeque<Response> = VecDeque::new();
             // Last known quote/last marks per symbol to price synthetic fills realistically
             let mut marks: HashMap<SymbolKey, Mark> = HashMap::new();
+            // Latest MBP10 books per symbol for realistic matching
+            let mut books: HashMap<SymbolKey, BookLevels> = HashMap::new();
             // Orchestrator-controlled logical time watermark; only emit events <= this time.
             let mut watermark: Option<DateTime<Utc>> = None;
             // Ensure we emit BacktestCompleted exactly once when end is reached
@@ -556,7 +563,15 @@ impl BacktestFeeder {
                                                     let entry = marks.entry(key).or_default();
                                                     entry.update_candle_close(c.close, t);
                                                 }
-                                                tt_database::queries::TopicDataEnum::Mbp10(_m) => {}
+                                                tt_database::queries::TopicDataEnum::Mbp10(m) => {
+                                                    let key = SymbolKey::new(
+                                                        m.instrument.clone(),
+                                                        ks.provider,
+                                                    );
+                                                    if let Some(ref b) = m.book {
+                                                        books.insert(key, b.clone());
+                                                    }
+                                                }
                                             }
                                             emit_one(&bus_clone, &item, ks.provider, &notify).await;
                                         }
@@ -608,10 +623,14 @@ impl BacktestFeeder {
                                             (Decimal::ZERO, None)
                                         }
                                     };
-                                    // Try model matching (no book view for now)
+                                    // Try model matching with latest book snapshot if available
+                                    let book_opt = {
+                                        let key = SymbolKey::new(so.spec.instrument.clone(), so.provider);
+                                        books.get(&key)
+                                    };
                                     let fills = so.fill_model.match_book(
                                         now,
-                                        None,
+                                        book_opt,
                                         last_px,
                                         &mut so.spec,
                                         &mut *so.slip_model,
@@ -638,30 +657,65 @@ impl BacktestFeeder {
                                         total_qty += f.qty;
                                         vwap_num += f.price * Decimal::from(f.qty);
                                     }
+                                    // If no fills occurred, leave order working: reschedule next attempt a bit later
                                     if total_qty == 0 {
-                                        total_qty = so.spec.qty;
-                                        vwap_num = last_px * Decimal::from(total_qty);
+                                        so.fill_at = now + ChronoDuration::milliseconds(5);
+                                        continue;
                                     }
-                                    let avg = if total_qty != 0 {
-                                        vwap_num / Decimal::from(total_qty)
+                                    // Apply fees per fill
+                                    let fee_ctx = crate::backtest::models::FeeCtx {
+                                        sim_time: now,
+                                        instrument: so.spec.instrument.clone(),
+                                    };
+                                    for f in &fills {
+                                        let money = so.fee_model.on_fill(&fee_ctx, f);
+                                        so.fees += money.amount;
+                                    }
+                                    // Update cumulative fill stats
+                                    so.cum_qty += total_qty;
+                                    so.cum_vwap_num += vwap_num;
+                                    let cum_avg = if so.cum_qty != 0 {
+                                        so.cum_vwap_num / Decimal::from(so.cum_qty)
                                     } else {
                                         Decimal::ZERO
                                     };
-                                    due.push(OrderUpdate {
-                                        name: so.spec.account_key.account_name.clone(),
-                                        instrument: so.spec.instrument.clone(),
-                                        provider_kind: so.provider,
-                                        provider_order_id: Some(so.provider_order_id.clone()),
-                                        order_id: *oid,
-                                        state: OrderState::Filled,
-                                        leaves: 0,
-                                        cum_qty: total_qty,
-                                        avg_fill_px: avg,
-                                        tag: so.user_tag.clone(),
-                                        time: so.fill_at,
-                                    });
-                                    so.done = true;
-                                    finished.push(*oid);
+                                    let leaves = so.orig_qty - so.cum_qty;
+                                    if leaves > 0 {
+                                        // Emit partial and keep working the remainder
+                                        due.push(OrderUpdate {
+                                            name: so.spec.account_key.account_name.clone(),
+                                            instrument: so.spec.instrument.clone(),
+                                            provider_kind: so.provider,
+                                            provider_order_id: Some(so.provider_order_id.clone()),
+                                            order_id: *oid,
+                                            state: OrderState::PartiallyFilled,
+                                            leaves,
+                                            cum_qty: so.cum_qty,
+                                            avg_fill_px: cum_avg,
+                                            tag: so.user_tag.clone(),
+                                            time: so.fill_at,
+                                        });
+                                        // Update working quantity to the leaves and reschedule next attempt
+                                        so.spec.qty = leaves;
+                                        so.fill_at = now + ChronoDuration::milliseconds(5);
+                                    } else {
+                                        // Fully filled
+                                        due.push(OrderUpdate {
+                                            name: so.spec.account_key.account_name.clone(),
+                                            instrument: so.spec.instrument.clone(),
+                                            provider_kind: so.provider,
+                                            provider_order_id: Some(so.provider_order_id.clone()),
+                                            order_id: *oid,
+                                            state: OrderState::Filled,
+                                            leaves: 0,
+                                            cum_qty: so.cum_qty,
+                                            avg_fill_px: cum_avg,
+                                            tag: so.user_tag.clone(),
+                                            time: so.fill_at,
+                                        });
+                                        so.done = true;
+                                        finished.push(*oid);
+                                    }
                                 }
                             }
                             if !due.is_empty() {
@@ -777,6 +831,7 @@ impl BacktestFeeder {
                             let fill_at = ack_at + to_chrono(lat.ack_to_first_fill());
 
                             // Stash order
+                            let orig_qty = spec.qty;
                             let sim = SimOrder {
                                 spec,
                                 provider: prov,
@@ -785,8 +840,13 @@ impl BacktestFeeder {
                                 ack_at,
                                 fill_at,
                                 ack_emitted: false,
-                                done: false,
                                 user_tag,
+                                done: false,
+                                // lifecycle
+                                orig_qty: orig_qty,
+                                cum_qty: 0,
+                                cum_vwap_num: Decimal::ZERO,
+                                // models
                                 fill_model,
                                 slip_model,
                                 fee_model,
@@ -852,7 +912,15 @@ impl BacktestFeeder {
                                         let entry = marks.entry(key).or_default();
                                         entry.update_candle_close(c.close, t);
                                     }
-                                    tt_database::queries::TopicDataEnum::Mbp10(_m) => {}
+                                    tt_database::queries::TopicDataEnum::Mbp10(m) => {
+                                        let key = SymbolKey::new(
+                                            m.instrument.clone(),
+                                            ks.provider,
+                                        );
+                                        if let Some(ref b) = m.book {
+                                            books.insert(key, b.clone());
+                                        }
+                                    }
                                 }
                                 emit_one(&bus_clone, &item, ks.provider, &notify).await;
                             }

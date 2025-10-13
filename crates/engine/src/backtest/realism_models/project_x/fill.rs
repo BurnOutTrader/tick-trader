@@ -47,7 +47,7 @@ impl FillModel for CmeFillModel {
         fee_model: &dyn FeeModel,
     ) -> Vec<Fill> {
         let mut out = Vec::new();
-        if !cal.is_open(&order.instrument, Utc::now()) {
+        if !cal.is_open(&order.instrument, now) {
             return out;
         }
         if order.qty == 0 {
@@ -422,32 +422,31 @@ impl FillModel for CmeFillModel {
                                     None => desired,
                                 });
                                 order.stop_price = cur_stop.and_then(|d| d.to_f64());
-                                if let Some(stop_now) = cur_stop
-                                    && tp >= stop_now
-                                    && let Some(b) = book
-                                {
-                                    let mut always_ok = |_p: Decimal| true;
-                                    let rem =
-                                        walk_depth(&b.ask_px, &b.ask_sz, &mut always_ok, Side::Buy);
-                                    if rem > 0 && out.is_empty() {
-                                        let px_adj =
-                                            slip.adjust(Side::Buy, last_price, spread, rem);
-                                        out.push(Fill {
-                                            instrument: order.instrument.clone(),
-                                            qty: rem,
-                                            price: px_adj,
-                                            maker: false,
-                                        });
+                                if let Some(stop_now) = cur_stop {
+                                    if tp >= stop_now {
+                                        if let Some(b) = book {
+                                            let mut always_ok = |_p: Decimal| true;
+                                            let rem =
+                                                walk_depth(&b.ask_px, &b.ask_sz, &mut always_ok, Side::Buy);
+                                            if rem > 0 && out.is_empty() {
+                                                let px_adj = slip.adjust(Side::Buy, last_price, spread, rem);
+                                                out.push(Fill {
+                                                    instrument: order.instrument.clone(),
+                                                    qty: rem,
+                                                    price: px_adj,
+                                                    maker: false,
+                                                });
+                                            }
+                                        } else {
+                                            let px_adj = slip.adjust(Side::Buy, last_price, spread, order.qty);
+                                            out.push(Fill {
+                                                instrument: order.instrument.clone(),
+                                                qty: order.qty,
+                                                price: px_adj,
+                                                maker: false,
+                                            });
+                                        }
                                     }
-                                } else {
-                                    let px_adj =
-                                        slip.adjust(Side::Buy, last_price, spread, order.qty);
-                                    out.push(Fill {
-                                        instrument: order.instrument.clone(),
-                                        qty: order.qty,
-                                        price: px_adj,
-                                        maker: false,
-                                    });
                                 }
                             }
                             // Trailing sell (to protect a long): stop follows price upward; triggers on break below

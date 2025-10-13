@@ -104,8 +104,9 @@ impl FeeModel for PxFlatFee {
             None => return Money::ZERO,
         };
         let contracts = Decimal::from(f.qty.abs());
+        // Return negative amount to represent a fee (debit). Positive would be a rebate.
         Money {
-            amount: contracts * per_contract,
+            amount: -(contracts * per_contract),
         }
     }
     fn on_cancel(&self, _ctx: &FeeCtx, _o: &PlaceOrder, _canceled_qty: i64) -> Money {
