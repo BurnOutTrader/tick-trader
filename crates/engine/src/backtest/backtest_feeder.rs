@@ -240,6 +240,7 @@ impl BacktestFeeder {
                 fill_model: Box<dyn FillModel>,
                 slip_model: Box<dyn SlippageModel>,
                 fee_model: Box<dyn FeeModel>,
+                latency_model: Box<dyn LatencyModel>,
                 fees: Decimal,
             }
             fn to_chrono(d: std::time::Duration) -> ChronoDuration {
@@ -739,7 +740,7 @@ impl BacktestFeeder {
                                         });
                                         // Update working quantity to the leaves and reschedule next attempt
                                         so.spec.qty = leaves;
-                                        so.fill_at = now + ChronoDuration::milliseconds(5);
+                                        so.fill_at = now + so.latency_model.replace_rtt();
                                     } else {
                                         // Fully filled
                                         due.push(OrderUpdate {
@@ -960,6 +961,7 @@ impl BacktestFeeder {
                             fill_model.on_submit(base, &mut spec);
                             let slip_model = (cfg.make_slippage)();
                             let fee_model = (cfg.make_fee)();
+                            let latency_model = (cfg.make_latency)();
 
                             // Schedule ack and (first) fill per latency
                             let ack_at = base + to_chrono(lat.submit_to_ack());
@@ -992,6 +994,7 @@ impl BacktestFeeder {
                                 fill_model,
                                 slip_model,
                                 fee_model,
+                                latency_model,
                                 fees: Decimal::ZERO,
                             };
                             // Ensure ledger entry exists for this account
