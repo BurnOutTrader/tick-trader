@@ -760,6 +760,7 @@ impl EngineRuntime {
                                 }
                             }
                         }
+                        // 3) Flat-by-close enforcement is handled by backtest risk models; do not enforce in runtime
                     },
                     Response::BacktestCompleted { end: _ } => {
                         // Graceful shutdown: stop strategy and terminate engine task
@@ -877,8 +878,8 @@ impl EngineRuntime {
                                                 .handle_request(&sub_id_for_task, Request::CancelOrder(spec))
                                                 .await;
                                         }
-                                        // If there is a pending replace, dispatch it now
-                                        if let Some((_, mut spec)) = handle_inner_for_task.pending_replaces.remove(&o.order_id) {
+                                        // If there is a pending replace order, dispatch it now
+                                        else if let Some((_, mut spec)) = handle_inner_for_task.pending_replaces.remove(&o.order_id) {
                                             // fill provider order id and send
                                             spec.provider_order_id = pid.0.clone();
                                             let _ = bus_for_task

@@ -8,7 +8,7 @@ use tokio::sync::{Notify, mpsc};
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 use tt_bus::ClientMessageBus;
-use tt_types::accounts::events::{OrderUpdate, ProviderOrderId};
+use tt_types::accounts::events::{OrderUpdate, ProviderOrderId, Side};
 use tt_types::accounts::order::OrderState;
 use tt_types::engine_id::EngineUuid;
 use tt_types::keys::{SymbolKey, Topic};
@@ -649,47 +649,45 @@ impl BacktestFeeder {
                                 .and_then(|d| d.to_f64());
 
                             match spec.order_type {
-                                tt_types::wire::OrderType::Stop => {
-                                    // Must have a stop price
-                                    if spec.stop_price.is_none() {
-                                        reject = true;
-                                    } else if let Some(m) = last_mark {
-                                        let sp = spec.stop_price.unwrap();
+                                tt_types::wire::OrderType::Stop
+                                | tt_types::wire::OrderType::TrailingStop => {
+                                    if let Some(stop_price) = spec.stop_price
+                                        && let Some(last_price) = last_mark
+                                    {
                                         match spec.side {
-                                            tt_types::accounts::events::Side::Buy => {
-                                                if sp <= m {
-                                                    reject = true;
-                                                }
+                                            Side::Buy if stop_price > last_price => {
+                                                reject = true;
                                             }
-                                            tt_types::accounts::events::Side::Sell => {
-                                                if sp >= m {
-                                                    reject = true;
-                                                }
+                                            Side::Sell if stop_price < last_price => {
+                                                reject = true;
                                             }
+                                            _ => {}
                                         }
+                                    } else {
+                                        reject = true;
                                     }
                                 }
                                 tt_types::wire::OrderType::StopLimit => {
-                                    if spec.stop_price.is_none() || spec.limit_price.is_none() {
-                                        reject = true;
-                                    } else if let Some(m) = last_mark {
-                                        let sp = spec.stop_price.unwrap();
+                                    if let Some(stop_price) = spec.stop_price
+                                        && let Some(limit_price) = spec.limit_price
+                                        && let Some(last_price) = last_mark
+                                    {
                                         match spec.side {
-                                            tt_types::accounts::events::Side::Buy => {
-                                                if sp <= m {
-                                                    reject = true;
-                                                }
+                                            Side::Buy
+                                                if stop_price > last_price
+                                                    || limit_price > last_price =>
+                                            {
+                                                reject = true;
                                             }
-                                            tt_types::accounts::events::Side::Sell => {
-                                                if sp >= m {
-                                                    reject = true;
-                                                }
+                                            Side::Sell
+                                                if stop_price < last_price
+                                                    || limit_price < last_price =>
+                                            {
+                                                reject = true;
                                             }
+                                            _ => {}
                                         }
-                                    }
-                                }
-                                tt_types::wire::OrderType::TrailingStop => {
-                                    if spec.trail_price.map(|p| p <= 0.0).unwrap_or(true) {
+                                    } else {
                                         reject = true;
                                     }
                                 }
