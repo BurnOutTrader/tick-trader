@@ -683,7 +683,6 @@ impl EngineRuntime {
 
                             // 2) Now do marks + callbacks outside of DashMap locks.
                             for (prov, c) in outs {
-                                pm.update_apply_last_price(prov, &c.instrument, c.close);
                                 strategy_for_task.on_bar(&c, prov);
                             }
                         }
@@ -720,6 +719,21 @@ impl EngineRuntime {
                                 _ => {}
                             }
                 match resp {
+                    Response::BacktestTimeUpdated { now } => {
+                        if handle_inner_for_task.backtest_mode && !handle_inner_for_task.consolidators.is_empty() {
+                            // Drive time-based consolidators using orchestrator-provided logical time
+                            let mut outs: SmallVec<[(ProviderKind, Candle); 16]> = SmallVec::new();
+                            for mut entry in handle_inner_for_task.consolidators.iter_mut() {
+                                let provider = entry.key().provider;
+                                if let Some(tt_types::consolidators::ConsolidatedOut::Candle(c)) = entry.value_mut().on_time(now) {
+                                    outs.push((provider, c));
+                                }
+                            }
+                            for (prov, c) in outs {
+                                strategy_for_task.on_bar(&c, prov);
+                            }
+                        }
+                    },
                     Response::WarmupComplete{ .. } => {
                        strategy_for_task.on_warmup_complete();
                     },
@@ -793,6 +807,8 @@ impl EngineRuntime {
                         }
                     }
                     Response::MBP10Batch(ob) => {
+                        //todo, the way we apply Mpd10 will not actually be this way, it will be broken down by types.
+                         // trades and bbo can build bars from the single feed.
                         let resp2 =
                             pm.process_response(tt_types::wire::Response::MBP10Batch(ob.clone()));
                         if let tt_types::wire::Response::MBP10Batch(ob2) = resp2 {
@@ -898,6 +914,8 @@ impl EngineRuntime {
                         mbp10,
                         provider_kind,
                     } => {
+                        //todo, the way we apply Mpd10 will not actually be this way, it will be broken down by types.
+                        // trades and bbo can build bars from the single feed.
                         pm.update_apply_last_price(provider_kind, &mbp10.instrument, mbp10.price);
                         strategy_for_task.on_mbp10(&mbp10, provider_kind);
                     }

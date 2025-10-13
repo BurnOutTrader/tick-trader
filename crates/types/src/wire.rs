@@ -487,6 +487,12 @@ pub struct DbUpdateKeyLatest {
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, PartialEq, Clone, Debug)]
 #[archive(check_bytes)]
+pub struct BacktestAdvanceTo {
+    pub to: DateTime<Utc>,
+}
+
+#[derive(Archive, RkyvDeserialize, RkyvSerialize, PartialEq, Clone, Debug)]
+#[archive(check_bytes)]
 pub enum Request {
     // Control from clients to server (coarse)
     Subscribe(Subscribe),
@@ -506,6 +512,8 @@ pub enum Request {
     InstrumentsMapRequest(InstrumentsMapRequest),
     // Historical data update trigger
     DbUpdateKeyLatest(DbUpdateKeyLatest),
+    // Backtest control: advance feeder time to watermark
+    BacktestAdvanceTo(BacktestAdvanceTo),
     // Execution
     PlaceOrder(PlaceOrder),
     CancelOrder(CancelOrder),
@@ -547,6 +555,10 @@ pub enum Response {
     WarmupComplete {
         topic: Topic,
         instrument: Instrument,
+    },
+    // Backtest orchestrator -> engine signal that logical time has advanced to `now`
+    BacktestTimeUpdated {
+        now: DateTime<Utc>,
     },
     // Historical DB update completion notification (response to DbUpdateKeyLatest)
     DbUpdateComplete {
