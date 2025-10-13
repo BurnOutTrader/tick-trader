@@ -38,7 +38,7 @@ impl Default for BacktestInit {
 impl BacktestInit {
     /// CME-like defaults: touch-aware fills, flat fees, fixed latencies, no slippage,
     /// hours calendar, 2d window with 1d lookahead.
-    pub fn cme_defaults() -> Self {
+    pub fn px_defaults() -> Self {
         let feeder = BacktestFeederConfig {
             window: ChronoDuration::days(2),
             lookahead: ChronoDuration::days(1),

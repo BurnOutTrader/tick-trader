@@ -2,7 +2,7 @@ use tt_engine::backtest::init::BacktestInit;
 
 #[test]
 fn backtest_init_cme_defaults_builds() {
-    let cfg = BacktestInit::cme_defaults()
+    let cfg = BacktestInit::px_defaults()
         .with_step(chrono::Duration::milliseconds(250))
         .build();
     // Basic assertions on config shape
