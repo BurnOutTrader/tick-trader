@@ -87,7 +87,7 @@ impl Strategy for BacktestOrdersStrategy {
         if !self.is_warmed_up {
             return;
         }
-        println!("{:?}", c);
+        //println!("{:?}", c);
         if let Some(last_candle) = self.last_bars.get(0) {
             let h = self.engine.as_ref().unwrap();
             if c.close > last_candle.close && !h.is_long(&self.account, &self.sk.instrument) {
@@ -182,7 +182,7 @@ async fn main() -> anyhow::Result<()> {
     // Load env for DATABASE_URL etc.
     let _ = dotenvy::dotenv();
     tracing_subscriber::fmt()
-        .with_max_level(LevelFilter::INFO)
+        .with_max_level(LevelFilter::WARN)
         .init();
 
     // Create DB pool from env (Postgres) and ensure schema

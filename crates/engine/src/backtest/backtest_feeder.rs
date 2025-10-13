@@ -8,7 +8,7 @@ use tokio::sync::{Notify, mpsc};
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 use tt_bus::ClientMessageBus;
-use tt_types::accounts::events::{OrderUpdate, ProviderOrderId};
+use tt_types::accounts::events::{OrderUpdate, ProviderOrderId, Side};
 use tt_types::accounts::order::OrderState;
 use tt_types::engine_id::EngineUuid;
 use tt_types::keys::{SymbolKey, Topic};
@@ -610,15 +610,15 @@ impl BacktestFeeder {
 
                             // Basic validation: quantity sign must match side and be non-zero
                             let mut reject = false;
-                            if spec.qty <= 0 {
-                                reject = true;
-                            } else {
-                                // Normalize to positive quantity to keep fills/leaves non-negative across the engine
+                            if spec.side == Side::Sell {
+                                if spec.qty > 0 {
+                                    reject = true;
+                                }
+                            } else if spec.side == Side::Buy {
                                 if spec.qty < 0 {
-                                    spec.qty = -spec.qty;
+                                    reject = true;
                                 }
                             }
-
                             // Logic validation for order types (when we have a mark)
                             let last_mark = marks
                                 .get(&(prov, spec.instrument.clone()))
