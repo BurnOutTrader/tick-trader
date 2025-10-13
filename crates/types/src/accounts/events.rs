@@ -167,7 +167,7 @@ pub struct OrderUpdate {
 impl OrderUpdate {
     pub fn to_clean_string(&self) -> String {
         format!(
-            "Order Update: {}, {}:{}:{} remaining:{} @{} ",
+            "Order Update: {}, {}:{} filled:{} remaining:{} @{} ",
             self.provider_kind, self.instrument, self.state, self.cum_qty, self.leaves, self.time
         )
     }
