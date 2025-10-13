@@ -7,13 +7,13 @@ use tokio::sync::{Notify, mpsc};
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 use tt_bus::ClientMessageBus;
-use tt_types::accounts::events::{OrderUpdate, ProviderOrderId};
+use tt_types::accounts::events::{AccountDelta, OrderUpdate, ProviderOrderId};
 use tt_types::accounts::order::OrderState;
 use tt_types::engine_id::EngineUuid;
 use tt_types::keys::{SymbolKey, Topic};
 use tt_types::providers::ProviderKind;
 use tt_types::securities::symbols::Instrument;
-use tt_types::wire::{BarBatch, Response};
+use tt_types::wire::{AccountDeltaBatch, BarBatch, Response};
 use tt_types::data::mbp10::BookLevels;
 
 use crate::backtest::backtest_clock::BacktestClock;
@@ -251,6 +251,8 @@ impl BacktestFeeder {
             let cal_model: Arc<dyn SessionCalendar> = cfg.calendar.clone();
             // Simulated orders
             let mut sim_orders: HashMap<EngineUuid, SimOrder> = HashMap::new();
+            // Per-account ledger for AccountDelta snapshots
+            let mut accounts_ledger: HashMap<(ProviderKind, tt_types::accounts::account::AccountName), AccountDelta> = HashMap::new();
 
             // Active subscriptions
             let mut keys: HashMap<(Topic, SymbolKey), KeyState> = HashMap::new();
@@ -605,6 +607,7 @@ impl BacktestFeeder {
                             let now = bta.to;
                             let mut due: Vec<OrderUpdate> = Vec::new();
                             let mut finished: Vec<EngineUuid> = Vec::new();
+                            let mut updated_accounts: Vec<(ProviderKind, tt_types::accounts::account::AccountName)> = Vec::new();
                             for (oid, so) in sim_orders.iter_mut() {
                                 if !so.ack_emitted && now >= so.ack_at {
                                     due.push(OrderUpdate {
@@ -732,9 +735,28 @@ impl BacktestFeeder {
                                         sim_time: now,
                                         instrument: so.spec.instrument.clone(),
                                     };
+                                    let mut fee_delta = Decimal::ZERO;
                                     for f in &fills {
                                         let money = so.fee_model.on_fill(&fee_ctx, f);
                                         so.fees += money.amount;
+                                        fee_delta += money.amount;
+                                    }
+                                    if !fee_delta.is_zero() {
+                                        let acct_key = (so.provider, so.spec.account_key.account_name.clone());
+                                        let entry = accounts_ledger.entry(acct_key.clone()).or_insert(AccountDelta {
+                                            provider_kind: so.provider,
+                                            name: so.spec.account_key.account_name.clone(),
+                                            equity: Decimal::ZERO,
+                                            day_realized_pnl: Decimal::ZERO,
+                                            open_pnl: Decimal::ZERO,
+                                            time: now,
+                                            can_trade: true,
+                                        });
+                                        // Update snapshot fields
+                                        entry.day_realized_pnl += fee_delta;
+                                        entry.equity += fee_delta;
+                                        entry.time = now;
+                                        updated_accounts.push(acct_key);
                                     }
                                     // Update cumulative fill stats
                                     so.cum_qty += total_qty;
@@ -792,6 +814,24 @@ impl BacktestFeeder {
                                 let _ = bus_clone.route_response(Response::OrdersBatch(ob)).await;
                                 await_ack(&notify).await;
                             }
+                            // Emit account snapshots for any accounts updated by fees this tick
+                            if !updated_accounts.is_empty() {
+                                // Deduplicate keys without requiring Ord
+                                let mut set: std::collections::HashSet<(ProviderKind, tt_types::accounts::account::AccountName)> = std::collections::HashSet::new();
+                                let mut accounts_vec: Vec<AccountDelta> = Vec::new();
+                                for key in updated_accounts.into_iter() {
+                                    if set.insert(key.clone()) {
+                                        if let Some(snap) = accounts_ledger.get(&key) {
+                                            accounts_vec.push(snap.clone());
+                                        }
+                                    }
+                                }
+                                if !accounts_vec.is_empty() {
+                                    let ab = AccountDeltaBatch { topic: Topic::AccountEvt, seq: 0, accounts: accounts_vec };
+                                    let _ = bus_clone.route_response(Response::AccountDeltaBatch(ab)).await;
+                                    await_ack(&notify).await;
+                                }
+                            }
                             if !finished.is_empty() {
                                 for id in finished {
                                     sim_orders.remove(&id);
@@ -817,6 +857,7 @@ impl BacktestFeeder {
                         Request::PlaceOrder(mut spec) => {
                             // Enqueue into simulation engine; do not emit immediately
                             let prov = spec.account_key.provider;
+                            let acct_name = spec.account_key.account_name.clone();
                             // Logical base time from orchestrator
                             let base = watermark.unwrap_or_else(Utc::now);
                             // Ensure an engine order id exists (prefer embedded tag)
@@ -924,6 +965,17 @@ impl BacktestFeeder {
                                 fee_model,
                                 fees: Decimal::ZERO,
                             };
+                            // Ensure ledger entry exists for this account
+                            let acct_key = (prov, acct_name.clone());
+                            accounts_ledger.entry(acct_key.clone()).or_insert(AccountDelta {
+                                provider_kind: prov,
+                                name: acct_name.clone(),
+                                equity: Decimal::ZERO,
+                                day_realized_pnl: Decimal::ZERO,
+                                open_pnl: Decimal::ZERO,
+                                time: base,
+                                can_trade: true,
+                            });
                             sim_orders.entry(engine_order_id).or_insert(sim);
                         }
                         Request::CancelOrder(cxl) => {
