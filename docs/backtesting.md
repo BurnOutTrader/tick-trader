@@ -6,7 +6,7 @@ This page summarizes the backtesting subsystem: key parameters, realism models, 
 
 
 ## Quick start
-[see examples](/crates/a_strategies/examples)
+### [see strategy examples](/crates/a_strategies/examples)
 - Minimal programmatic start (pseudocode using helpers already in the repo):
   - Create a DB pool (Postgres), ensure schema
   - Build BacktestConfig (step, date range)
