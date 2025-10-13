@@ -24,7 +24,6 @@ The engine can place live orders and is intended strictly for testing and evalua
 - Publish a reference “live test” strategy
 - Surface EngineHandle helpers via top‑level exports
 - Move non-strategy functions and objects into features
-- Implement the backtesting engine
 - Warm up consolidators from live data plus the historical catalog
 - Expand automated tests and CI coverage
 - Adding rithmic + data bento at a later stage.
@@ -40,6 +39,7 @@ The engine can place live orders and is intended strictly for testing and evalua
 - 🚧 Status: work in progress — the architecture is largely stabilized, but features are still evolving.
 - 📡 Support for publishing/sharing strategy signals/insights on the bus will be implemented last
 - 🛅 PostgreSQL + Docker Database for storage and query of historical data by strategies and the server. 
+- ⏪Backtesting: Configurable with dynamic realism models, fills models are configurable, can book walk etc. Implementation v1.0, not tested, will likely have some bugs and inaccuracy.
 
 ### Strategies are straight forward
 [Example Strategy](crates/a_strategies/examples/data_test_strategy/src/main.rs)
