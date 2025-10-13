@@ -355,10 +355,11 @@ impl Strategy for BacktestOrdersStrategy {
                 }
             }
         }
-        // Check completion criteria only after all test orders have been sent (bar_idx >= 12)
-        // Then: all expectations must be acknowledged, and those requiring fill must be filled
-        if self.bar_idx >= 12
-            && !self.expect.is_empty()
+        // Check completion criteria only after all planned test orders have been sent.
+        // We place 12 tagged orders between bars 1..=120. Require bar_idx >= 125 (past last placement)
+        // AND the expectations map to contain all 12 tags, and all required conditions to be met.
+        if self.bar_idx >= 125
+            && self.expect.len() >= 12
             && self
                 .expect
                 .values()

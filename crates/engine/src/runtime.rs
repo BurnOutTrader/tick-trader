@@ -571,7 +571,7 @@ impl EngineRuntime {
     /// Returns: EngineHandle for issuing subscriptions and orders from your strategy.
     pub async fn start<S: Strategy>(&mut self, mut strategy: S) -> anyhow::Result<EngineHandle> {
         let (tx, rx) = mpsc::channel::<Response>(2048);
-        let tx_internal = tx.clone();
+        let tx_for_task = tx.clone();
         let sub_id = self.bus.add_client(tx).await;
         self.sub_id = Some(sub_id.clone());
         self.rx = Some(rx);
@@ -941,7 +941,7 @@ impl EngineRuntime {
                         if shm_blacklist_for_task.get(&(topic, key.clone())).is_some() {
                             info!(?topic, ?key, "SHM disabled for this stream; staying on UDS");
                         } else if shm_tasks.get(&(topic, key.clone())).is_none() {
-                            let tx_shm = tx_internal.clone();
+                            let tx_shm = tx_for_task.clone();
                             let value = key.clone();
                             let bus = bus_for_task.clone();
                             let sub_id = sub_id_for_task.clone();
