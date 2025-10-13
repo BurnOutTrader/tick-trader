@@ -111,9 +111,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     // Create DB pool from env (Postgres)
-    let db = tt_database::init::pool_from_env()?;
-    // Ensure database schema is initialized like the server does
-    tt_database::schema::ensure_schema(&db).await?;
+    let db = tt_database::init::pool_from_env().await?;
 
     let end_date = Utc::now().date_naive();
     let start_date = end_date - chrono::Duration::days(10);

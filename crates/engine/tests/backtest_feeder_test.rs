@@ -83,7 +83,7 @@ async fn backtest_feeder_emits_candles_to_strategy() -> anyhow::Result<()> {
         .try_init();
 
     // Ensure we can talk to Postgres and the schema exists
-    let db = tt_database::init::pool_from_env().context("db pool_from_env")?;
+    let db = tt_database::init::pool_from_env().await.context("db pool_from_env")?;
     tt_database::schema::ensure_schema(&db)
         .await
         .context("ensure_schema")?;
@@ -136,7 +136,7 @@ async fn backtest_feeder_emits_candles_to_strategy() -> anyhow::Result<()> {
     let (_engine_handle, feeder_handle) = start_backtest(db, cfg, strategy).await?;
 
     // Wait until the strategy sees a few bars or timeout
-    let wait_res = timeout(Duration::from_secs(20), rx).await;
+    let wait_res = timeout(Duration::from_secs(10), rx).await;
     // Stop feeder regardless of outcome
     feeder_handle.stop().await;
 
