@@ -11,7 +11,7 @@ use tt_engine::traits::Strategy;
 use tt_types::accounts::account::AccountName;
 use tt_types::accounts::events::AccountDelta;
 use tt_types::data::mbp10::Mbp10;
-use tt_types::keys::{AccountKey, SymbolKey};
+use tt_types::keys::{AccountKey, SymbolKey, Topic};
 use tt_types::providers::{ProjectXTenant, ProviderKind};
 use tt_types::securities::symbols::Instrument;
 use tt_types::wire;
@@ -109,7 +109,14 @@ async fn main() -> anyhow::Result<()> {
 
     let mut engine = EngineRuntime::new(bus.clone(), Some(500_000));
     let strategy = DataTestStrategy::default();
-    let _handle = engine.start(strategy).await?;
+    let handle = engine.start(strategy).await?;
+    handle
+        .update_historical_latest_by_key_async(
+            ProviderKind::ProjectX(ProjectXTenant::Topstep),
+            Topic::Candles1s,
+            Instrument::from_str("MNQ.Z25")?,
+        )
+        .await?;
 
     sleep(Duration::from_secs(60)).await;
 

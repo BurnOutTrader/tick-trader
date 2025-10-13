@@ -23,7 +23,7 @@ fn require_db() -> Option<()> {
 }
 
 async fn setup() -> Result<(sqlx::Pool<sqlx::Postgres>, ProviderKind, Instrument)> {
-    let pool = pool_from_env().await?;
+    let pool = pool_from_env()?;
     // fixed provider maps to "projectx" so tests can clean by provider + symbol
     let provider = ProviderKind::ProjectX(ProjectXTenant::Demo);
     let instrument = Instrument::from_str("TST.Z25").unwrap();

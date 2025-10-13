@@ -6,7 +6,7 @@ use std::time::Duration;
 use tokio::time::sleep;
 use tracing::info;
 use tracing::level_filters::LevelFilter;
-
+use tt_database::schema::ensure_schema;
 use tt_engine::backtest::orchestrator::{BacktestConfig, start_backtest};
 use tt_engine::handle::EngineHandle;
 use tt_engine::models::DataTopic;
@@ -111,7 +111,8 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     // Create DB pool from env (Postgres)
-    let db = tt_database::init::pool_from_env().await?;
+    let db = tt_database::init::pool_from_env()?;
+    ensure_schema(&db).await?;
 
     let end_date = Utc::now().date_naive();
     let start_date = end_date - chrono::Duration::days(10);

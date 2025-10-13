@@ -22,6 +22,7 @@ use tt_types::securities::symbols::Instrument;
 use tt_types::wire::{self, OrderType, Trade};
 
 use std::collections::HashMap;
+use tt_database::schema::ensure_schema;
 
 struct BacktestOrdersStrategy {
     engine: Option<EngineHandle>,
@@ -88,7 +89,7 @@ impl Strategy for BacktestOrdersStrategy {
     fn on_start(&mut self, h: EngineHandle) {
         println!("backtest orders strategy start");
         // Subscribe to a modest data stream so marks update
-        h.subscribe_now(DataTopic::Candles1m, self.sk.clone());
+        h.subscribe_now(DataTopic::Candles1s, self.sk.clone());
         self.engine = Some(h);
     }
 
@@ -411,14 +412,14 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     // Create DB pool from env (Postgres) and ensure schema
-    let db = tt_database::init::pool_from_env().await?;
-
+    let db = tt_database::init::pool_from_env()?;
+    ensure_schema(&db).await?;
     // Backtest for a recent 30-day period
     let end_date = Utc::now().date_naive();
     let start_date = end_date - chrono::Duration::days(30);
 
     // Configure and start backtest
-    let cfg = BacktestConfig::from_to(chrono::Duration::milliseconds(500), start_date, end_date);
+    let cfg = BacktestConfig::from_to(chrono::Duration::milliseconds(100), start_date, end_date);
     let strategy = BacktestOrdersStrategy::default();
     let (_engine_handle, _feeder_handle) = start_backtest(db, cfg, strategy).await?;
 

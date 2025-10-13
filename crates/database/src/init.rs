@@ -57,8 +57,6 @@ pub fn init_db(_data_root: &Path) -> anyhow::Result<Connection> {
 }
 
 /// Convenience for components that don't have a historical path parameter.
-pub async fn pool_from_env() -> anyhow::Result<Connection> {
-    let db = init_db(Path::new("/"))?;
-    crate::schema::ensure_schema(&db).await?;
-    Ok(db)
+pub fn pool_from_env() -> anyhow::Result<Connection> {
+    init_db(Path::new("/"))
 }

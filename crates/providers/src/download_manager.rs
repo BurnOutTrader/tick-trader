@@ -1,6 +1,5 @@
 use chrono::{DateTime, Duration, Utc};
 use chrono_tz::Tz;
-use dotenv::dotenv;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Notify;
@@ -9,7 +8,7 @@ use tokio::task::JoinHandle;
 use tokio::time::{Duration as TokioDuration, timeout};
 use tracing::info;
 use tt_database::ingest::{ingest_bbo, ingest_candles, ingest_ticks};
-use tt_database::init::Connection;
+use tt_database::init::{Connection, pool_from_env};
 use tt_database::queries::latest_data_time;
 use tt_types::data::models::Resolution;
 use tt_types::engine_id::EngineUuid;
@@ -110,18 +109,7 @@ impl Default for DownloadManager {
 
 impl DownloadManager {
     pub fn new() -> Self {
-        // Load .env first
-        dotenv().ok();
-        // Rely on centralized DATABASE_URL handling (supports short-form) in tt_database::init
-        let db = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("failed to build single-thread runtime")
-            .block_on(async {
-                tt_database::init::pool_from_env()
-                    .await
-                    .expect("failed to initialize Postgres pool from env (check DATABASE_URL)")
-            });
+        let db = pool_from_env().unwrap();
         Self {
             inner: std::sync::Arc::new(DownloadManagerInner {
                 inflight: Arc::new(RwLock::new(HashMap::new())),
@@ -312,7 +300,7 @@ async fn run_download(
         .await;
         let events = match fetch_res {
             Ok(Ok(ev)) => {
-                tracing::warn!("received {} events", ev.len());
+                tracing::info!("received {} events", ev.len());
                 ev
             }
             Ok(Err(e)) => {
