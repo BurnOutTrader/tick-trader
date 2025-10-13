@@ -6,7 +6,6 @@ use crate::portfolio::PortfolioManager;
 use crate::traits::Strategy;
 use crossbeam::queue::ArrayQueue;
 use dashmap::DashMap;
-use rust_decimal::prelude::ToPrimitive;
 use smallvec::SmallVec;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
@@ -264,38 +263,6 @@ impl EngineRuntime {
             )
             .await?;
         Ok(())
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    /// Convenience: construct and send a `PlaceOrder` from individual parameters.
-    pub async fn place_order_with(
-        &self,
-        account_key: tt_types::keys::AccountKey,
-        instrument: tt_types::securities::symbols::Instrument,
-        side: tt_types::accounts::events::Side,
-        qty: i64,
-        order_type: tt_types::wire::OrderType,
-        limit_price: Option<rust_decimal::Decimal>,
-        stop_price: Option<rust_decimal::Decimal>,
-        trail_price: Option<rust_decimal::Decimal>,
-        custom_tag: Option<String>,
-        stop_loss: Option<tt_types::wire::BracketWire>,
-        take_profit: Option<tt_types::wire::BracketWire>,
-    ) -> anyhow::Result<()> {
-        let spec = tt_types::wire::PlaceOrder {
-            account_key,
-            instrument,
-            side,
-            qty,
-            order_type,
-            limit_price: limit_price.and_then(|d| d.to_f64()),
-            stop_price: stop_price.and_then(|d| d.to_f64()),
-            trail_price: trail_price.and_then(|d| d.to_f64()),
-            custom_tag,
-            stop_loss,
-            take_profit,
-        };
-        self.send_order_for_execution(spec).await
     }
 
     // Account interest: auto-subscribe all execution streams for an account

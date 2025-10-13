@@ -504,7 +504,7 @@ impl BacktestFeeder {
                                         leaves: so.spec.qty,
                                         cum_qty: 0,
                                         avg_fill_px: Decimal::ZERO,
-                                        tag: so.spec.custom_tag.clone(),
+                                        tag: so.user_tag.clone(),
                                         time: so.ack_at,
                                     });
                                     so.ack_emitted = true;
@@ -631,7 +631,7 @@ impl BacktestFeeder {
                                 fill_at,
                                 ack_emitted: false,
                                 done: false,
-                                user_tag
+                                user_tag,
                             };
                             sim_orders.entry(engine_order_id).or_insert(sim);
                         }
