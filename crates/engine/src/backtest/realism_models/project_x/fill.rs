@@ -72,6 +72,8 @@ impl FillModel for CmeFillModel {
             sim_time: now,
             instrument: order.instrument.clone(),
         };
+        // Limit-lock guard helper: no fills if venue is price-limit locked at candidate px
+        let mut price_limit_ok = |px: Decimal| -> bool { !cal.is_limit_locked(&order.instrument, px, now) };
         // Walks the opposite side of the book accumulating fills up to qty_remaining.
         let mut walk_depth = |prices: &[Decimal],
                               sizes: &[Decimal],
@@ -82,6 +84,9 @@ impl FillModel for CmeFillModel {
             for i in 0..levels {
                 let px = prices[i];
                 if !price_ok(px) {
+                    break;
+                }
+                if !price_limit_ok(px) {
                     break;
                 }
                 let avail_i64 = sizes[i].to_i64().unwrap_or(i64::MAX); // assume decimal size is whole contracts
@@ -118,7 +123,7 @@ impl FillModel for CmeFillModel {
                                     let mut always_ok = |_p: Decimal| true;
                                     let rem =
                                         walk_depth(&b.ask_px, &b.ask_sz, &mut always_ok, Side::Buy);
-                                    if rem > 0 && out.is_empty() {
+                                    if rem > 0 && out.is_empty() && price_limit_ok(last_price) {
                                         // No visible book or zero sizes: fall back to last price for a single fill
                                         let px_adj =
                                             slip.adjust(Side::Buy, last_price, spread, rem);
@@ -135,15 +140,17 @@ impl FillModel for CmeFillModel {
                                     if let (Some(px0), Some(sz0)) =
                                         (b.ask_px.first().cloned(), b.ask_sz.first().cloned())
                                     {
-                                        let take = order.qty.min(sz0.to_i64().unwrap_or(0).max(0));
-                                        if take > 0 {
-                                            let px_adj = slip.adjust(Side::Buy, px0, spread, take);
-                                            out.push(Fill {
-                                                instrument: order.instrument.clone(),
-                                                qty: take,
-                                                price: px_adj,
-                                                maker: false,
-                                            });
+                                        if price_limit_ok(px0) {
+                                            let take = order.qty.min(sz0.to_i64().unwrap_or(0).max(0));
+                                            if take > 0 {
+                                                let px_adj = slip.adjust(Side::Buy, px0, spread, take);
+                                                out.push(Fill {
+                                                    instrument: order.instrument.clone(),
+                                                    qty: take,
+                                                    price: px_adj,
+                                                    maker: false,
+                                                });
+                                            }
                                         }
                                     }
                                 }
@@ -171,13 +178,15 @@ impl FillModel for CmeFillModel {
                                 }
                             }
                         } else {
-                            let px_adj = slip.adjust(Side::Buy, last_price, spread, order.qty);
-                            out.push(Fill {
-                                instrument: order.instrument.clone(),
-                                qty: order.qty,
-                                price: px_adj,
-                                maker: false,
-                            });
+                            if price_limit_ok(last_price) {
+                                let px_adj = slip.adjust(Side::Buy, last_price, spread, order.qty);
+                                out.push(Fill {
+                                    instrument: order.instrument.clone(),
+                                    qty: order.qty,
+                                    price: px_adj,
+                                    maker: false,
+                                });
+                            }
                         }
                     }
                     Side::Sell => {
@@ -206,15 +215,17 @@ impl FillModel for CmeFillModel {
                                     if let (Some(px0), Some(sz0)) =
                                         (b.bid_px.first().cloned(), b.bid_sz.first().cloned())
                                     {
-                                        let take = order.qty.min(sz0.to_i64().unwrap_or(0).max(0));
-                                        if take > 0 {
-                                            let px_adj = slip.adjust(Side::Sell, px0, spread, take);
-                                            out.push(Fill {
-                                                instrument: order.instrument.clone(),
-                                                qty: take,
-                                                price: px_adj,
-                                                maker: false,
-                                            });
+                                        if price_limit_ok(px0) {
+                                            let take = order.qty.min(sz0.to_i64().unwrap_or(0).max(0));
+                                            if take > 0 {
+                                                let px_adj = slip.adjust(Side::Sell, px0, spread, take);
+                                                out.push(Fill {
+                                                    instrument: order.instrument.clone(),
+                                                    qty: take,
+                                                    price: px_adj,
+                                                    maker: false,
+                                                });
+                                            }
                                         }
                                     }
                                 }
@@ -242,13 +253,15 @@ impl FillModel for CmeFillModel {
                                 }
                             }
                         } else {
-                            let px_adj = slip.adjust(Side::Sell, last_price, spread, order.qty);
-                            out.push(Fill {
-                                instrument: order.instrument.clone(),
-                                qty: order.qty,
-                                price: px_adj,
-                                maker: false,
-                            });
+                            if price_limit_ok(last_price) {
+                                let px_adj = slip.adjust(Side::Sell, last_price, spread, order.qty);
+                                out.push(Fill {
+                                    instrument: order.instrument.clone(),
+                                    qty: order.qty,
+                                    price: px_adj,
+                                    maker: false,
+                                });
+                            }
                         }
                     }
                 }
@@ -292,7 +305,7 @@ impl FillModel for CmeFillModel {
                                         }
                                     }
                                 }
-                            } else if lim >= last_price {
+                            } else if lim >= last_price && price_limit_ok(last_price) {
                                 let px_adj = slip.adjust(Side::Buy, last_price, spread, order.qty);
                                 out.push(Fill {
                                     instrument: order.instrument.clone(),
@@ -336,7 +349,7 @@ impl FillModel for CmeFillModel {
                                         }
                                     }
                                 }
-                            } else if lim <= last_price {
+                            } else if lim <= last_price && price_limit_ok(last_price) {
                                 let px_adj = slip.adjust(Side::Sell, last_price, spread, order.qty);
                                 out.push(Fill {
                                     instrument: order.instrument.clone(),

@@ -242,6 +242,8 @@ impl BacktestFeeder {
                 fee_model: Box<dyn FeeModel>,
                 latency_model: Box<dyn LatencyModel>,
                 fees: Decimal,
+                // Resting state for maker attribution
+                resting: bool,
             }
             fn to_chrono(d: std::time::Duration) -> ChronoDuration {
                 ChronoDuration::from_std(d)
@@ -256,6 +258,11 @@ impl BacktestFeeder {
             let mut accounts_ledger: HashMap<
                 (ProviderKind, tt_types::accounts::account::AccountName),
                 AccountDelta,
+            > = HashMap::new();
+            // Per-account/instrument positions ledger for PositionsBatch snapshots
+            let mut positions_ledger: HashMap<
+                (ProviderKind, tt_types::accounts::account::AccountName, Instrument),
+                tt_types::accounts::events::PositionDelta,
             > = HashMap::new();
 
             // Active subscriptions
@@ -615,6 +622,12 @@ impl BacktestFeeder {
                                 ProviderKind,
                                 tt_types::accounts::account::AccountName,
                             )> = Vec::new();
+                            // Track touched positions (provider, account, instrument) for emission later
+                            let mut touched_positions: Vec<(
+                                ProviderKind,
+                                tt_types::accounts::account::AccountName,
+                                Instrument,
+                            )> = Vec::new();
                             for (oid, so) in sim_orders.iter_mut() {
                                 if !so.ack_emitted && now >= so.ack_at {
                                     due.push(OrderUpdate {
@@ -649,7 +662,7 @@ impl BacktestFeeder {
                                             SymbolKey::new(so.spec.instrument.clone(), so.provider);
                                         books.get(&key)
                                     };
-                                    let fills = so.fill_model.match_book(
+                                    let mut fills = so.fill_model.match_book(
                                         now,
                                         book_opt,
                                         last_px,
@@ -680,9 +693,50 @@ impl BacktestFeeder {
                                     }
                                     // If no fills occurred, leave order working: reschedule next attempt a bit later
                                     if total_qty == 0 {
+                                        so.resting = true; // mark as resting for maker attribution
                                         so.fill_at = now + ChronoDuration::milliseconds(5);
                                         continue;
                                     }
+                                    // If we were resting, attribute these fills as maker
+                                    if so.resting {
+                                        for f in &mut fills {
+                                            f.maker = true;
+                                        }
+                                        so.resting = false;
+                                    }
+                                    // Update positions ledger per fill and collect touched positions
+                                    for f in &fills {
+                                        let acct_name = so.spec.account_key.account_name.clone();
+                                        let key = (so.provider, acct_name.clone(), f.instrument.clone());
+                                        let entry = positions_ledger.entry(key.clone()).or_insert(tt_types::accounts::events::PositionDelta {
+                                            instrument: f.instrument.clone(),
+                                            account_name: acct_name.clone(),
+                                            provider_kind: so.provider,
+                                            net_qty: Decimal::ZERO,
+                                            average_price: Decimal::ZERO,
+                                            open_pnl: Decimal::ZERO,
+                                            time: now,
+                                            side: tt_types::accounts::events::PositionSide::Flat,
+                                        });
+                                        let side_sign: i64 = match so.spec.side { tt_types::accounts::events::Side::Buy => 1, tt_types::accounts::events::Side::Sell => -1 };
+                                        let delta_qty = Decimal::from(f.qty * side_sign);
+                                        let old_qty = entry.net_qty;
+                                        let new_qty = old_qty + delta_qty;
+                                        // Update average price
+                                        if old_qty.is_zero() || (old_qty > Decimal::ZERO && new_qty < Decimal::ZERO) || (old_qty < Decimal::ZERO && new_qty > Decimal::ZERO) {
+                                            entry.average_price = f.price;
+                                        } else if new_qty != Decimal::ZERO {
+                                            let pq = entry.average_price * old_qty + f.price * delta_qty;
+                                            entry.average_price = pq / new_qty;
+                                        } else {
+                                            entry.average_price = Decimal::ZERO;
+                                        }
+                                        entry.net_qty = new_qty;
+                                        entry.time = now;
+                                        entry.side = if new_qty > Decimal::ZERO { tt_types::accounts::events::PositionSide::Long } else if new_qty < Decimal::ZERO { tt_types::accounts::events::PositionSide::Short } else { tt_types::accounts::events::PositionSide::Flat };
+                                        touched_positions.push(key);
+                                    }
+
                                     // Apply fees per fill
                                     let fee_ctx = crate::backtest::models::FeeCtx {
                                         sim_time: now,
@@ -860,6 +914,36 @@ impl BacktestFeeder {
                                     await_ack(&notify).await;
                                 }
                             }
+                            // Emit positions snapshots for touched positions this tick
+                            if !touched_positions.is_empty() {
+                                use std::collections::{HashMap as StdHashMap, HashSet};
+                                let mut seen: HashSet<(
+                                    ProviderKind,
+                                    tt_types::accounts::account::AccountName,
+                                    Instrument,
+                                )> = HashSet::new();
+                                let mut positions_vec: Vec<tt_types::accounts::events::PositionDelta> = Vec::new();
+                                for key in touched_positions.drain(..) {
+                                    if seen.insert(key.clone()) {
+                                        if let Some(pd) = positions_ledger.get(&key) {
+                                            let mut snap = pd.clone();
+                                            snap.time = now;
+                                            positions_vec.push(snap);
+                                        }
+                                    }
+                                }
+                                if !positions_vec.is_empty() {
+                                    let pb = tt_types::wire::PositionsBatch {
+                                        topic: Topic::Positions,
+                                        seq: 0,
+                                        positions: positions_vec,
+                                    };
+                                    let _ = bus_clone
+                                        .route_response(Response::PositionsBatch(pb))
+                                        .await;
+                                    await_ack(&notify).await;
+                                }
+                            }
                             if !finished.is_empty() {
                                 for id in finished {
                                     sim_orders.remove(&id);
@@ -996,6 +1080,7 @@ impl BacktestFeeder {
                                 fee_model,
                                 latency_model,
                                 fees: Decimal::ZERO,
+                                resting: false,
                             };
                             // Ensure ledger entry exists for this account
                             let acct_key = (prov, acct_name.clone());
@@ -1049,10 +1134,7 @@ impl BacktestFeeder {
                                     so.replace_at = Some(when);
                                     so.replace_pending = true;
                                     so.replace_req = Some(rpl.clone());
-                                    // Block fills until replace takes effect
-                                    if so.fill_at < when {
-                                        so.fill_at = when;
-                                    }
+                                    // Do NOT block fills; order remains live until replace takes effect
                                     break;
                                 }
                             }
