@@ -627,7 +627,6 @@ impl EngineRuntime {
         }
         // Move strategy into the spawned task after on_start and accounts have been called
         let mut strategy_for_task = strategy;
-        let engine_order_accounts = self.engine_order_accounts.clone();
         let slow_spin_ns = self.slow_spin_ns;
         let handle_task = tokio::spawn(async move {
             let mut rx = rx;
@@ -833,8 +832,10 @@ impl EngineRuntime {
                                         }
                                     }
                                     if o.state.is_eol() {
-                                        engine_order_accounts.remove(&o.order_id);
+                                        handle_inner_for_task.engine_order_accounts.remove(&o.order_id);
+                                        handle_inner_for_task.provider_order_ids.remove(&o.order_id);
                                     }
+
                                 }
                             }
                             strategy_for_task.on_orders_batch(&ob2);
