@@ -180,16 +180,6 @@ impl Ord for HeapEntry {
     }
 }
 
-pub struct BacktestFeederHandle {
-    pub bus: Arc<ClientMessageBus>,
-    join: JoinHandle<()>,
-}
-impl BacktestFeederHandle {
-    pub async fn stop(self) {
-        self.join.abort();
-    }
-}
-
 pub struct BacktestFeeder;
 
 impl BacktestFeeder {
@@ -200,7 +190,7 @@ impl BacktestFeeder {
         cfg: BacktestFeederConfig,
         clock: Option<Arc<BacktestClock>>,
         backtest_notify: Option<Arc<Notify>>,
-    ) -> BacktestFeederHandle {
+    ) -> anyhow::Result<()> {
         // Create a request channel the bus will use for outbound requests
         let (req_tx, mut req_rx) = mpsc::channel::<tt_types::wire::Request>(1024);
         let bus = ClientMessageBus::new_with_transport(req_tx);
@@ -1316,6 +1306,6 @@ impl BacktestFeeder {
             }
         });
 
-        BacktestFeederHandle { bus, join }
+        Ok(())
     }
 }

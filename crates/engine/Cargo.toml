@@ -23,6 +23,7 @@ crossbeam = { workspace = true }
 sqlx = { workspace = true }
 smallvec = "1.15.1"
 colored = {workspace = true}
+
 [[bin]]
 name = "tt-engine-test_strategy"
 path = "bin/data_test_strategy.rs"

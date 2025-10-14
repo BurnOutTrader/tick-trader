@@ -1,8 +1,8 @@
+use std::future::pending;
 use crate::backtest::backtest_clock::BacktestClock;
 use crate::engine::EngineAccountsState;
-use crate::handle::EngineHandle;
 use crate::models::{Command, DataTopic};
-use crate::portfolio::PortfolioManager;
+use crate::statics::portfolio::Portfolio;
 use crate::traits::Strategy;
 use ahash::AHashMap;
 use crossbeam::queue::ArrayQueue;
@@ -11,6 +11,7 @@ use smallvec::SmallVec;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
+use chrono::Utc;
 use tokio::sync::{Notify, mpsc, oneshot};
 use tracing::info;
 use tt_bus::{ClientMessageBus, ClientSubId};
@@ -26,73 +27,18 @@ use tt_types::wire::{
     AccountDeltaBatch, BarBatch, InstrumentsMapRequest, Kick, OrdersBatch, PositionsBatch,
     QuoteBatch, Request, Response, TickBatch,
 };
-
-// Shared view used by EngineHandle
-pub(crate) struct EngineRuntimeShared {
-    pub(crate) bus: Arc<ClientMessageBus>,
-    pub(crate) sub_id: ClientSubId,
-    pub(crate) next_corr_id: Arc<AtomicU64>,
-    pub(crate) pending: Arc<DashMap<u64, oneshot::Sender<Response>>>,
-    pub(crate) securities_by_provider:
-        Arc<DashMap<ProviderKind, AHashMap<Instrument, FuturesContract>>>,
-    pub(crate) watching_providers: Arc<DashMap<ProviderKind, ()>>,
-    pub(crate) state: Arc<EngineAccountsState>,
-    pub(crate) portfolio_manager: Arc<PortfolioManager>,
-    // Map our EngineUuid -> provider's order id string (populated from order updates)
-    pub(crate) provider_order_ids: Arc<DashMap<EngineUuid, String>>,
-    // Map our EngineUuid -> account key (account name + provider), recorded at place_order time
-    pub(crate) engine_order_accounts: Arc<DashMap<EngineUuid, AccountKey>>,
-    // Pending cancels: keep the full spec until provider order id is known
-    pub(crate) pending_cancels: Arc<DashMap<EngineUuid, tt_types::wire::CancelOrder>>,
-    // Pending replaces: keep the full spec until provider order id is known
-    pub(crate) pending_replaces: Arc<DashMap<EngineUuid, tt_types::wire::ReplaceOrder>>,
-    // Consolidators shared with handle for registration
-    pub(crate) consolidators:
-        Arc<DashMap<ConsolidatorKey, Box<dyn tt_types::consolidators::Consolidator + Send>>>,
-    // When true, disable live-only behaviors (SHM, Kick, vendor timers)
-    pub(crate) backtest_mode: bool,
-    // Deterministic simulation clock (present in backtest mode)
-    #[allow(dead_code)]
-    pub(crate) backtest_clock: Option<Arc<BacktestClock>>,
-}
-
-impl EngineRuntimeShared {
-    #[inline]
-    pub fn now_ns(&self) -> u64 {
-        if let Some(ref bt) = self.backtest_clock {
-            bt.now_ns()
-        } else {
-            // system time in ns
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default();
-            now.as_secs()
-                .saturating_mul(1_000_000_000)
-                .saturating_add(now.subsec_nanos() as u64)
-        }
-    }
-    #[inline]
-    pub fn now_dt(&self) -> chrono::DateTime<chrono::Utc> {
-        if let Some(ref bt) = self.backtest_clock {
-            bt.now_dt()
-        } else {
-            chrono::Utc::now()
-        }
-    }
-}
+use crate::statics::bus::{bus, initialize_accounts};
+use crate::statics::clock::CLOCK;
+use crate::statics::consolidators::CONSOLIDATORS;
+use crate::statics::subscriptions::CMD_Q;
 
 pub struct EngineRuntime {
     backtest_mode: bool,
     backtest_notify: Option<Arc<Notify>>,
-    backtest_clock: Option<Arc<BacktestClock>>,
-    bus: Arc<ClientMessageBus>,
     sub_id: Option<ClientSubId>,
     rx: Option<mpsc::Receiver<Response>>,
     task: Option<tokio::task::JoinHandle<()>>,
     state: Arc<EngineAccountsState>,
-    // Correlated request/response callbacks (engine-local)
-    next_corr_id: Arc<AtomicU64>,
-    pending: Arc<DashMap<u64, oneshot::Sender<Response>>>,
     // Vendor securities cache and watchers
     securities_by_provider: Arc<DashMap<ProviderKind, AHashMap<Instrument, FuturesContract>>>,
     watching_providers: Arc<DashMap<ProviderKind, ()>>,
@@ -100,417 +46,24 @@ pub struct EngineRuntime {
     shm_tasks: Arc<DashMap<(Topic, SymbolKey), tokio::task::JoinHandle<()>>>,
     // Keys for which SHM has been disabled due to fatal errors; fall back to UDS frames per-strategy
     shm_blacklist: Arc<DashMap<(Topic, SymbolKey), ()>>,
-    portfolio_manager: Arc<PortfolioManager>,
-    // Bounded command queue drained by engine loop
-    cmd_q: Arc<ArrayQueue<Command>>,
-    // Map our EngineUuid -> provider's order id string (populated from order updates)
-    provider_order_ids: Arc<DashMap<EngineUuid, String>>,
-    // Map our EngineUuid -> account key (account name + provider), recorded at place_order time
-    engine_order_accounts: Arc<DashMap<EngineUuid, AccountKey>>,
-    // Pending cancels: keep the full spec until provider order id is known
-    pending_cancels: Arc<DashMap<EngineUuid, tt_types::wire::CancelOrder>>,
-    // Pending replaces: keep the full spec until provider order id is known
-    pending_replaces: Arc<DashMap<EngineUuid, tt_types::wire::ReplaceOrder>>,
     slow_spin_ns: Option<u64>,
     consolidators:
         Arc<DashMap<ConsolidatorKey, Box<dyn tt_types::consolidators::Consolidator + Send>>>,
 }
 
 impl EngineRuntime {
-    /// Send a correlated request that expects a single Response back from the server.
-    /// The engine maintains a DashMap of pending callbacks keyed by corr_id.
-    pub async fn request_with_corr<F>(&self, make: F) -> oneshot::Receiver<Response>
-    where
-        F: FnOnce(u64) -> Request,
-    {
-        let corr_id = self.next_corr_id.fetch_add(1, Ordering::SeqCst);
-        let (tx, rx) = oneshot::channel();
-        self.pending.insert(corr_id, tx);
-        let req = make(corr_id);
-        self.bus
-            .handle_request(self.sub_id.as_ref().expect("engine started"), req)
-            .await
-            .ok();
-        rx
-    }
-
-    pub async fn list_instruments(
-        &self,
-        provider: ProviderKind,
-        pattern: Option<String>,
-    ) -> anyhow::Result<Vec<Instrument>> {
-        use std::time::Duration;
-        use tokio::time::timeout;
-        use tt_types::wire::{InstrumentsRequest, Response as WireResp};
-        let rx = self
-            .request_with_corr(|corr_id| {
-                Request::InstrumentsRequest(InstrumentsRequest {
-                    provider,
-                    pattern,
-                    corr_id,
-                })
-            })
-            .await;
-        // Wait briefly for the server to respond; if unsupported, return empty
-        match timeout(Duration::from_millis(750), rx).await {
-            Ok(Ok(WireResp::InstrumentsResponse(ir))) => Ok(ir.instruments),
-            Ok(Ok(_other)) => Ok(vec![]),
-            _ => Ok(vec![]),
-        }
-    }
-
-    pub async fn get_instruments_map(
-        &self,
-        provider: ProviderKind,
-    ) -> anyhow::Result<Vec<FuturesContract>> {
-        use std::time::Duration;
-        use tokio::time::timeout;
-        use tt_types::wire::{InstrumentsMapRequest, Response as WireResp};
-        let rx = self
-            .request_with_corr(|corr_id| {
-                Request::InstrumentsMapRequest(InstrumentsMapRequest { provider, corr_id })
-            })
-            .await;
-        match timeout(Duration::from_secs(2), rx).await {
-            Ok(Ok(WireResp::InstrumentsMapResponse(imr))) => Ok(imr.contracts),
-            Ok(Ok(_other)) => Ok(vec![]),
-            _ => Ok(vec![]),
-        }
-    }
-
-    pub async fn get_account_info(
-        &self,
-        provider: ProviderKind,
-    ) -> anyhow::Result<tt_types::wire::AccountInfoResponse> {
-        use std::time::Duration;
-        use tokio::time::timeout;
-        use tt_types::wire::{AccountInfoRequest, Response as WireResp};
-        let rx = self
-            .request_with_corr(|corr_id| {
-                Request::AccountInfoRequest(AccountInfoRequest { provider, corr_id })
-            })
-            .await;
-        match timeout(Duration::from_secs(2), rx).await {
-            Ok(Ok(WireResp::AccountInfoResponse(air))) => Ok(air),
-            Ok(Ok(_other)) => Err(anyhow::anyhow!(
-                "unexpected response for AccountInfoRequest"
-            )),
-            _ => Err(anyhow::anyhow!("timeout waiting for AccountInfoResponse")),
-        }
-    }
-
-    pub async fn subscribe_symbol(&self, topic: Topic, key: SymbolKey) -> anyhow::Result<()> {
-        // On first subscribe for this provider, start vendor securities refresh (hourly)
-        if !self.backtest_mode {
-            self.ensure_vendor_securities_watch(key.provider).await;
-        }
-        // Forward to server
-        self.bus
-            .handle_request(
-                self.sub_id.as_ref().expect("engine started"),
-                Request::SubscribeKey(tt_types::wire::SubscribeKey {
-                    topic,
-                    key,
-                    latest_only: false,
-                    from_seq: 0,
-                }),
-            )
-            .await?;
-        Ok(())
-    }
-    pub async fn unsubscribe_symbol(&self, topic: Topic, key: SymbolKey) -> anyhow::Result<()> {
-        self.bus
-            .handle_request(
-                self.sub_id.as_ref().expect("engine started"),
-                Request::UnsubscribeKey(tt_types::wire::UnsubscribeKey { topic, key }),
-            )
-            .await?;
-        Ok(())
-    }
-
-    // Convenience: subscribe/unsubscribe by key without exposing sender
-    pub async fn subscribe_key(&self, data_topic: DataTopic, key: SymbolKey) -> anyhow::Result<()> {
-        // Ensure vendor securities refresh is active for this provider
-        let topic = data_topic.to_topic_or_err()?;
-        if !self.backtest_mode {
-            self.ensure_vendor_securities_watch(key.provider).await;
-        }
-        self.bus
-            .handle_request(
-                self.sub_id.as_ref().expect("engine started"),
-                Request::SubscribeKey(tt_types::wire::SubscribeKey {
-                    topic,
-                    key,
-                    latest_only: false,
-                    from_seq: 0,
-                }),
-            )
-            .await?;
-        Ok(())
-    }
-
-    pub async fn unsubscribe_key(
-        &self,
-        data_topic: DataTopic,
-        key: SymbolKey,
-    ) -> anyhow::Result<()> {
-        let topic = data_topic.to_topic_or_err()?;
-        self.unsubscribe_symbol(topic, key).await
-    }
-
-    // Orders API helpers
-    pub async fn send_order_for_execution(
-        &self,
-        spec: tt_types::wire::PlaceOrder,
-    ) -> anyhow::Result<()> {
-        self.bus
-            .handle_request(
-                self.sub_id.as_ref().expect("engine started"),
-                tt_types::wire::Request::PlaceOrder(spec),
-            )
-            .await?;
-        Ok(())
-    }
-
-    pub async fn cancel_order(&self, spec: tt_types::wire::CancelOrder) -> anyhow::Result<()> {
-        self.bus
-            .handle_request(
-                self.sub_id.as_ref().expect("engine started"),
-                tt_types::wire::Request::CancelOrder(spec),
-            )
-            .await?;
-        Ok(())
-    }
-
-    pub async fn replace_order(&self, spec: tt_types::wire::ReplaceOrder) -> anyhow::Result<()> {
-        self.bus
-            .handle_request(
-                self.sub_id.as_ref().expect("engine started"),
-                tt_types::wire::Request::ReplaceOrder(spec),
-            )
-            .await?;
-        Ok(())
-    }
-
-    // Account interest: auto-subscribe all execution streams for an account
-    pub async fn activate_account_interest(
-        &self,
-        key: tt_types::keys::AccountKey,
-    ) -> anyhow::Result<()> {
-        self.bus
-            .handle_request(
-                self.sub_id.as_ref().expect("engine started"),
-                tt_types::wire::Request::SubscribeAccount(tt_types::wire::SubscribeAccount { key }),
-            )
-            .await?;
-        Ok(())
-    }
-
-    pub async fn deactivate_account_interest(
-        &self,
-        key: tt_types::keys::AccountKey,
-    ) -> anyhow::Result<()> {
-        self.bus
-            .handle_request(
-                self.sub_id.as_ref().expect("engine started"),
-                tt_types::wire::Request::UnsubscribeAccount(tt_types::wire::UnsubscribeAccount {
-                    key,
-                }),
-            )
-            .await?;
-        Ok(())
-    }
-
-    /// Initialize one or more accounts at engine startup by subscribing to all
-    /// account-related streams (orders, positions, account events). This is a
-    /// convenience wrapper around `activate_account_interest`.
-    pub async fn initialize_accounts<I>(&self, accounts: I) -> anyhow::Result<()>
-    where
-        I: IntoIterator<Item = AccountKey>,
-    {
-        for key in accounts {
-            self.activate_account_interest(key).await?;
-        }
-        Ok(())
-    }
-
-    /// Convenience: initialize by account names for a given provider kind.
-    pub async fn initialize_account_names<I>(
-        &self,
-        provider: ProviderKind,
-        names: I,
-    ) -> anyhow::Result<()>
-    where
-        I: IntoIterator<Item = tt_types::accounts::account::AccountName>,
-    {
-        let keys = names.into_iter().map(|account_name| AccountKey {
-            provider,
-            account_name,
-        });
-        self.initialize_accounts(keys).await
-    }
-
-    // Portfolio helpers
-    pub fn last_orders(&self) -> Option<tt_types::wire::OrdersBatch> {
-        self.state
-            .last_orders
-            .read()
-            .expect("orders lock poisoned")
-            .clone()
-    }
-    pub fn last_positions(&self) -> Option<tt_types::wire::PositionsBatch> {
-        self.state
-            .last_positions
-            .read()
-            .expect("positions lock poisoned")
-            .clone()
-    }
-    pub fn last_accounts(&self) -> Option<tt_types::wire::AccountDeltaBatch> {
-        self.state
-            .last_accounts
-            .read()
-            .expect("accounts lock poisoned")
-            .clone()
-    }
-    pub fn find_position_delta(
-        &self,
-        instrument: &tt_types::securities::symbols::Instrument,
-    ) -> Option<tt_types::accounts::events::PositionDelta> {
-        let guard = self
-            .state
-            .last_positions
-            .read()
-            .expect("positions lock poisoned");
-        guard.as_ref().and_then(|pb| {
-            pb.positions
-                .iter()
-                .find(|p| &p.instrument == instrument)
-                .cloned()
-        })
-    }
-    pub fn orders_for_instrument(
-        &self,
-        instrument: &tt_types::securities::symbols::Instrument,
-    ) -> Vec<tt_types::accounts::events::OrderUpdate> {
-        let guard = self.state.last_orders.read().expect("orders lock poisoned");
-        guard
-            .as_ref()
-            .map(|ob| {
-                ob.orders
-                    .iter()
-                    .filter(|o| &o.instrument == instrument)
-                    .cloned()
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
-    /// Ensure that we fetch instruments from the vendor now and refresh every hour.
-    async fn ensure_vendor_securities_watch(&self, provider: ProviderKind) {
-        if self.backtest_mode {
-            return;
-        }
-        if self.watching_providers.contains_key(&provider) {
-            return;
-        }
-        self.watching_providers.insert(provider, ());
-        // Immediate fetch using the client bus correlation helper
-        let bus = self.bus.clone();
-        let sec_map = self.securities_by_provider.clone();
-        // Helper closure to perform one fetch
-        async fn fetch_into(
-            bus: Arc<ClientMessageBus>,
-            provider: ProviderKind,
-            sec_map: Arc<DashMap<ProviderKind, AHashMap<Instrument, FuturesContract>>>,
-        ) {
-            use std::time::Duration;
-            use tokio::time::timeout;
-            use tt_types::wire::{Request as WireReq, Response as WireResp};
-            // Use bus-level correlation to avoid depending on EngineRuntime internals
-            let rx = bus
-                .request_with_corr(|corr_id| {
-                    WireReq::InstrumentsMapRequest(InstrumentsMapRequest { provider, corr_id })
-                })
-                .await;
-            if let Ok(Ok(WireResp::InstrumentsMapResponse(ir))) =
-                timeout(Duration::from_secs(3), rx).await
-            {
-                let mut map = AHashMap::default();
-                for c in ir.contracts {
-                    map.insert(c.instrument.clone(), c);
-                }
-                sec_map.insert(provider, map);
-            }
-        }
-        // Perform a single immediate fetch; daily refresh is handled by process restarts or external scheduler
-        fetch_into(bus.clone(), provider, sec_map.clone()).await;
-    }
-
-    // Position helpers (account currently ignored; model aggregates by instrument)
-    pub fn is_long(
-        &self,
-        _account: Option<tt_types::accounts::account::AccountName>,
-        instrument: &Instrument,
-    ) -> bool {
-        let guard = self
-            .state
-            .last_positions
-            .read()
-            .expect("positions lock poisoned");
-        if let Some(pb) = &*guard
-            && let Some(p) = pb.positions.iter().find(|p| &p.instrument == instrument)
-        {
-            return p.side == PositionSide::Long;
-        }
-        false
-    }
-    pub fn is_short(
-        &self,
-        _account: Option<tt_types::accounts::account::AccountName>,
-        instrument: &Instrument,
-    ) -> bool {
-        let guard = self
-            .state
-            .last_positions
-            .read()
-            .expect("positions lock poisoned");
-        if let Some(pb) = &*guard
-            && let Some(p) = pb.positions.iter().find(|p| &p.instrument == instrument)
-        {
-            return p.side == PositionSide::Short;
-        }
-        false
-    }
-    pub fn is_flat(
-        &self,
-        _account: Option<tt_types::accounts::account::AccountName>,
-        instrument: &Instrument,
-    ) -> bool {
-        let guard = self
-            .state
-            .last_positions
-            .read()
-            .expect("positions lock poisoned");
-        if let Some(pb) = &*guard
-            && pb.positions.iter().any(|p| &p.instrument == instrument)
-        {
-            return false;
-        }
-        true
-    }
+    
 
     /// Create a new EngineRuntime bound to a ClientMessageBus.
     ///
     /// Parameters:
     /// - bus: Connected ClientMessageBus used for all requests and streaming responses.
     /// - slow_spin: Optional nanos to sleep when polling SHM without new data (to avoid tight loops).
-    pub fn new(bus: Arc<ClientMessageBus>, slow_spin: Option<u64>) -> Self {
+    pub fn new(slow_spin: Option<u64>) -> Self {
         let instruments = Arc::new(DashMap::new());
         Self {
             backtest_mode: false,
             backtest_notify: None,
-            backtest_clock: None,
-            bus,
             sub_id: None,
             rx: None,
             task: None,
@@ -519,18 +72,10 @@ impl EngineRuntime {
                 last_positions: Arc::new(RwLock::new(None)),
                 last_accounts: Arc::new(RwLock::new(None)),
             }),
-            next_corr_id: Arc::new(AtomicU64::new(1)),
-            pending: Arc::new(DashMap::new()),
             securities_by_provider: instruments.clone(),
             watching_providers: Arc::new(DashMap::new()),
             shm_tasks: Arc::new(DashMap::new()),
             shm_blacklist: Arc::new(DashMap::new()),
-            portfolio_manager: Arc::new(PortfolioManager::new(instruments)),
-            cmd_q: Arc::new(ArrayQueue::new(4096)),
-            provider_order_ids: Arc::new(DashMap::new()),
-            engine_order_accounts: Arc::new(DashMap::new()),
-            pending_cancels: Arc::new(DashMap::new()),
-            pending_replaces: Arc::new(DashMap::new()),
             slow_spin_ns: slow_spin,
             consolidators: Arc::new(DashMap::new()),
         }
@@ -539,13 +84,11 @@ impl EngineRuntime {
     /// Construct an EngineRuntime in Backtest mode.
     /// Live-only features (SHM, Kick, vendor watch timers) are disabled.
     pub fn new_backtest(
-        bus: Arc<ClientMessageBus>,
         slow_spin: Option<u64>,
         backtest_notify: Option<Arc<Notify>>,
     ) -> Self {
-        let mut rt = Self::new(bus, slow_spin);
+        let mut rt = Self::new(slow_spin);
         rt.backtest_mode = true;
-        rt.backtest_clock = Some(Arc::new(BacktestClock::new(0)));
         rt.backtest_notify = backtest_notify;
         rt
     }
@@ -556,49 +99,20 @@ impl EngineRuntime {
     /// - strategy: Your Strategy implementation; on_start will be invoked with an EngineHandle.
     ///
     /// Returns: EngineHandle for issuing subscriptions and orders from your strategy.
-    pub async fn start<S: Strategy>(&mut self, mut strategy: S) -> anyhow::Result<EngineHandle> {
+    pub async fn start<S: Strategy>(&mut self, mut strategy: S) -> anyhow::Result<()> {
         let (tx, rx) = mpsc::channel::<Response>(2048);
         let tx_for_task = tx.clone();
-        let sub_id = self.bus.add_client(tx).await;
+        let sub_id = bus().add_client(tx).await;
         self.sub_id = Some(sub_id.clone());
         self.rx = Some(rx);
         let rx = self.rx.take().expect("rx present after start");
-        let state = self.state.clone();
-        let pending = self.pending.clone();
-        // Build handle and pass to strategy
-        let shared = EngineRuntimeShared {
-            bus: self.bus.clone(),
-            sub_id: sub_id.clone(),
-            next_corr_id: self.next_corr_id.clone(),
-            pending: self.pending.clone(),
-            securities_by_provider: self.securities_by_provider.clone(),
-            watching_providers: self.watching_providers.clone(),
-            state: self.state.clone(),
-            portfolio_manager: self.portfolio_manager.clone(),
-            provider_order_ids: self.provider_order_ids.clone(),
-            engine_order_accounts: self.engine_order_accounts.clone(),
-            pending_cancels: self.pending_cancels.clone(),
-            pending_replaces: self.pending_replaces.clone(),
-            consolidators: self.consolidators.clone(),
-            backtest_mode: self.backtest_mode,
-            backtest_clock: self.backtest_clock.clone(),
-        };
-        let handle = EngineHandle {
-            inner: Arc::new(shared),
-            cmd_q: self.cmd_q.clone(),
-        };
-        // Start processing task loop
-        let pm = self.portfolio_manager.clone();
         let shm_tasks = self.shm_tasks.clone();
         let shm_blacklist_for_task = self.shm_blacklist.clone();
-        let bus_for_task = self.bus.clone();
         let sub_id_for_task = sub_id.clone();
-        let handle_inner_for_task = handle.inner.clone();
-        let cmd_q_for_task = self.cmd_q.clone();
         let backtest_notify_for_task = self.backtest_notify.clone();
         // Call on_start before moving strategy
         info!("engine: invoking strategy.on_start");
-        strategy.on_start(handle.clone());
+        strategy.on_start();
         info!("engine: strategy.on_start returned");
         // Auto-subscribe to account streams declared by the strategy, if any.
         // We lock briefly to fetch the list, then drop before awaiting network calls.
@@ -608,25 +122,15 @@ impl EngineRuntime {
                 "engine: initializing {} account(s) for strategy",
                 accounts_to_init.len()
             );
-            self.initialize_accounts(accounts_to_init).await?;
+            initialize_accounts(accounts_to_init, &sub_id).await?;
         }
         // Move strategy into the spawned task after on_start and accounts have been called
         let mut strategy_for_task = strategy;
         let slow_spin_ns = self.slow_spin_ns;
         let handle_task = tokio::spawn(async move {
             let mut rx = rx;
-            // Track last time we emitted snapshots in backtest mode
-            // Track last logical backtest time announced by orchestrator
-            let mut last_bt_now: Option<chrono::DateTime<chrono::Utc>> = None;
-            // Throttled snapshot emission state (for backtests)
-            let mut last_snapshot_emit: Option<chrono::DateTime<chrono::Utc>> = None;
-            // Content signatures (ignore time fields) to avoid re-sending unchanged snapshots
-            let mut last_pos_sig: Option<Vec<String>> = None;
-            let mut last_acct_sig: Option<Vec<String>> = None;
             // Initial drain to process any commands enqueued during on_start (e.g., subscribe_now)
             Self::drain_commands_for_task(
-                cmd_q_for_task.clone(),
-                bus_for_task.clone(),
                 sub_id_for_task.clone(),
             )
             .await;
@@ -655,15 +159,14 @@ impl EngineRuntime {
                     biased;
                     // Drive time-based consolidation first if due
                     _ = ticker.tick() => {
-                        if !handle_inner_for_task.backtest_mode {
-                            let now = handle_inner_for_task.now_dt();
+                        if !self.backtest_mode {
                             // 1) Walk consolidators mutably and collect outputs.
-                            if !handle_inner_for_task.consolidators.is_empty() {
+                            if !CONSOLIDATORS.is_empty() {
                                 let mut outs: SmallVec<[(ProviderKind, Candle); 16]> = SmallVec::new();
-                                for mut entry in handle_inner_for_task.consolidators.iter_mut() {
+                                for mut entry in CONSOLIDATORS.iter_mut() {
                                     let provider = entry.key().provider;        // read key (cheap)
                                     if let Some(tt_types::consolidators::ConsolidatedOut::Candle(c)) =
-                                        entry.value_mut().on_time(now)
+                                        entry.value_mut().on_time(Utc::now())
                                     {
                                         outs.push((provider, c));
                                     }
@@ -707,7 +210,7 @@ impl EngineRuntime {
                             }
                 match resp {
                     Response::BacktestTimeUpdated { now } => {
-                        if handle_inner_for_task.backtest_mode && let Some(prev_now) = last_bt_now && prev_now == now { continue; }
+                        if self.backtest_mode && let Some(prev_now) = last_bt_now && prev_now == now { continue; }
                         // Record logical time for other emissions
                         last_bt_now = Some(now);
                         // 1) Drive time-based consolidators using orchestrator-provided logical time
@@ -1131,46 +634,44 @@ impl EngineRuntime {
     }
 
     async fn drain_commands_for_task(
-        cmd_q: Arc<ArrayQueue<Command>>,
-        bus: Arc<ClientMessageBus>,
         sub_id: ClientSubId,
     ) {
         use tt_types::wire::{SubscribeKey, UnsubscribeKey};
 
-        while let Some(cmd) = cmd_q.pop() {
+        while let Some(cmd) = CMD_Q.pop() {
             match cmd {
                 Command::Subscribe { topic, key } => {
-                    let _ = bus
+                    let _ = bus()
                         .handle_request(
-                            &sub_id,
                             Request::SubscribeKey(SubscribeKey {
                                 topic,
                                 key,
                                 latest_only: false,
                                 from_seq: 0,
                             }),
+                            &sub_id,
                         )
                         .await;
                 }
                 Command::Unsubscribe { topic, key } => {
-                    let _ = bus
+                    let _ = bus()
                         .handle_request(
-                            &sub_id,
                             Request::UnsubscribeKey(UnsubscribeKey { topic, key }),
+                            &sub_id,
                         )
                         .await;
                 }
                 Command::Place(spec) => {
-                    let _ = bus.handle_request(&sub_id, Request::PlaceOrder(spec)).await;
+                    let _ = bus().handle_request(Request::PlaceOrder(spec), &sub_id).await;
                 }
                 Command::Cancel(spec) => {
-                    let _ = bus
-                        .handle_request(&sub_id, Request::CancelOrder(spec))
+                    let _ = bus()
+                        .handle_request(Request::CancelOrder(spec), &sub_id)
                         .await;
                 }
                 Command::Replace(spec) => {
-                    let _ = bus
-                        .handle_request(&sub_id, Request::ReplaceOrder(spec))
+                    let _ = bus()
+                        .handle_request(Request::ReplaceOrder(spec), &sub_id)
                         .await;
                 }
             }
@@ -1182,7 +683,6 @@ impl EngineRuntime {
     /// This sends a DbUpdateKeyLatest request and blocks until the DbUpdateComplete response arrives.
     /// Returns Ok(()) when the update completed successfully; otherwise returns Err with the server error message.
     fn update_historical_latest_by_key(
-        &self,
         provider: ProviderKind,
         topic: Topic,
         instrument: Instrument,
@@ -1191,7 +691,7 @@ impl EngineRuntime {
         use tt_types::wire::{DbUpdateKeyLatest, Response as WireResp};
         let fut = async {
             let instr_clone = instrument.clone();
-            let rx = self
+            let rx = bus()
                 .request_with_corr(|corr_id| {
                     Request::DbUpdateKeyLatest(DbUpdateKeyLatest {
                         provider,
@@ -1231,12 +731,12 @@ impl EngineRuntime {
         info!("engine: stopping");
         // Send Kick to bus in live modes; skip in backtest
         if !self.backtest_mode {
-            self.bus
+            bus()
                 .handle_request(
-                    self.sub_id.as_ref().expect("engine started"),
                     tt_types::wire::Request::Kick(Kick {
                         reason: Some("Shutting Down".to_string()),
                     }),
+                    self.sub_id.as_ref().expect("engine started"),
                 )
                 .await
                 .ok();
@@ -1250,29 +750,6 @@ impl EngineRuntime {
         self.rx.take();
         info!("engine: shutdown complete");
         Ok(())
-    }
-
-    // Account state getters
-    pub fn last_orders_batch(&self) -> Option<OrdersBatch> {
-        self.state
-            .last_orders
-            .read()
-            .expect("orders lock poisoned")
-            .clone()
-    }
-    pub fn last_positions_batch(&self) -> Option<PositionsBatch> {
-        self.state
-            .last_positions
-            .read()
-            .expect("positions lock poisoned")
-            .clone()
-    }
-    pub fn last_account_delta_batch(&self) -> Option<AccountDeltaBatch> {
-        self.state
-            .last_accounts
-            .read()
-            .expect("accounts lock poisoned")
-            .clone()
     }
 }
 
@@ -1297,7 +774,7 @@ mod engine_shm_tests {
         let (req_tx, mut _req_rx) = tokio::sync::mpsc::channel::<tt_types::wire::Request>(8);
         let bus = ClientMessageBus::new_with_transport(req_tx);
 
-        let mut rt = EngineRuntime::new(bus.clone(), Some(1));
+        let mut rt = EngineRuntime::new(Some(1));
         let _handle = rt.start(NopStrategy).await.expect("engine start");
 
         let key = SymbolKey::new(

@@ -7,7 +7,7 @@ use tracing::info;
 use tracing::level_filters::LevelFilter;
 
 use tt_engine::backtest::orchestrator::{BacktestConfig, start_backtest};
-use tt_engine::handle::EngineHandle;
+use tt_engine::golabal_static::EngineHandle;
 use tt_engine::models::DataTopic;
 use tt_engine::traits::Strategy;
 

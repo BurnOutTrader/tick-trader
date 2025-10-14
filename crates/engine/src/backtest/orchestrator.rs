@@ -1,8 +1,7 @@
 use crate::backtest::backtest_clock::BacktestClock;
 use crate::backtest::backtest_feeder::{
-    BacktestFeeder, BacktestFeederConfig, BacktestFeederHandle,
+    BacktestFeeder, BacktestFeederConfig,
 };
-use crate::handle::EngineHandle;
 use crate::runtime::EngineRuntime;
 use crate::traits::Strategy;
 use anyhow::Result;
@@ -76,7 +75,7 @@ pub async fn start_backtest<S: Strategy>(
     conn: tt_database::init::Connection,
     mut cfg: BacktestConfig,
     strategy: S,
-) -> Result<(EngineHandle, BacktestFeederHandle)> {
+) -> Result<(())> {
     // If the caller specified start/end dates, map them into the feeder's date-time range.
     if cfg.start_date.is_some() || cfg.end_date.is_some() {
         if let Some(sd) = cfg.start_date {
@@ -153,7 +152,7 @@ pub async fn start_backtest_with_dates<S: Strategy>(
     strategy: S,
     start_date: NaiveDate,
     end_date: NaiveDate,
-) -> Result<(EngineHandle, BacktestFeederHandle)> {
+) -> Result<(())> {
     cfg.start_date = Some(start_date);
     cfg.end_date = Some(end_date);
     start_backtest(conn, cfg, strategy).await

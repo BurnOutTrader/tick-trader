@@ -8,6 +8,7 @@ use chrono::{DateTime, Utc};
 use rkyv::{AlignedVec, Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use rust_decimal::Decimal;
 use strum_macros::Display;
+use crate::keys::AccountKey;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
 #[archive(check_bytes)]
@@ -222,6 +223,8 @@ pub struct AccountDelta {
     pub provider_kind: ProviderKind,
 
     pub name: AccountName,
+    
+    pub key: AccountKey,
 
     pub equity: Decimal,
 

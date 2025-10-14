@@ -2,10 +2,7 @@ use anyhow::Result;
 use dashmap::DashMap;
 use futures_util::{SinkExt, StreamExt};
 use std::collections::HashSet;
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, Ordering},
-};
+use std::sync::{Arc, atomic::{AtomicU64, Ordering}, LazyLock};
 use tokio::net::UnixStream;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::codec::length_delimited::LengthDelimitedCodec;
@@ -27,32 +24,32 @@ pub struct ClientSubscriber {
 /// Client-side message bus used by the engine. It maintains local subscriptions
 /// (topics/credits) and forwards requests to the server. Incoming responses from
 /// the server are routed to local subscribers according to their interest and credits.
+#[derive(Debug, Clone)]
 pub struct ClientMessageBus {
     subscribers: Arc<DashMap<ClientSubId, mpsc::Sender<Response>>>,
     meta: Arc<DashMap<ClientSubId, ClientSubscriber>>,
     next_id: Arc<AtomicU64>,
     req_tx: mpsc::Sender<Request>,
-    // Correlated request/response support
     next_corr_id: Arc<AtomicU64>,
-    pending: Arc<DashMap<u64, oneshot::Sender<Response>>>,
+    pending: Arc<DashMap<u64, oneshot::Sender<Response>>>
 }
 
 impl ClientMessageBus {
-    pub fn new_with_transport(req_tx: mpsc::Sender<Request>) -> Arc<Self> {
-        Arc::new(Self {
+    pub fn new_with_transport(req_tx: mpsc::Sender<Request>) -> ClientMessageBus {
+        Self {
             subscribers: Arc::new(DashMap::new()),
             meta: Arc::new(DashMap::new()),
             next_id: Arc::new(AtomicU64::new(1)),
             req_tx,
             next_corr_id: Arc::new(AtomicU64::new(1)),
             pending: Arc::new(DashMap::new()),
-        })
+        }
     }
 
     /// Connect to the tick-trader server via Unix Domain Socket and spawn IO tasks.
     /// If path starts with '@' or a leading NUL ("\0"), on Linux it will use abstract namespace.
     /// On macOS and others, provide a filesystem path like "/tmp/tick-trader.sock".
-    pub async fn connect(path: &str) -> Result<Arc<Self>> {
+    pub async fn connect(path: &str) -> Result<ClientMessageBus> {
         let sock = UnixStream::connect(path).await?;
         let (r, w) = sock.into_split();
         // Match server/router framing: allow up to 8 MiB frames
@@ -129,7 +126,7 @@ impl ClientMessageBus {
         id
     }
 
-    pub async fn handle_request(&self, id: &ClientSubId, req: Request) -> Result<()> {
+    pub async fn handle_request(&self, req: Request, id: &ClientSubId) -> Result<()> {
         // Maintain local interest/credits mirroring server controls so route_response can gate by topic.
         match &req {
             Request::Subscribe(s) => {
@@ -380,14 +377,11 @@ mod tests {
 
         // Record topic interest locally for client1
         let _ = bus
-            .handle_request(
-                &id1,
-                Request::Subscribe(tt_types::wire::Subscribe {
+            .handle_request(Request::Subscribe(tt_types::wire::Subscribe {
                     topic: Topic::MBP10,
                     latest_only: false,
                     from_seq: 0,
-                }),
-            )
+                }), &id1)
             .await;
 
         let resp = make_mbp10_batch(Instrument::from_str("MNQ.Z25").unwrap());
