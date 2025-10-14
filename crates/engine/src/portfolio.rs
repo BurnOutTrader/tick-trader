@@ -1,14 +1,16 @@
 use ahash::AHashMap;
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
-use rust_decimal::Decimal;
+use rust_decimal::{Decimal, dec};
 use std::sync::{Arc, RwLock};
 use tt_types::accounts::account::AccountName;
 use tt_types::accounts::events::{
     AccountDelta, OrderUpdate, PositionDelta, PositionSide, ProviderOrderId,
 };
 use tt_types::engine_id::EngineUuid;
+use tt_types::keys::SymbolKey;
 use tt_types::providers::ProviderKind;
+use tt_types::securities::security::FuturesContract;
 use tt_types::securities::symbols::Instrument;
 use tt_types::wire::{AccountDeltaBatch, OrdersBatch, PositionsBatch, Response, Trade};
 
@@ -56,16 +58,17 @@ pub struct PortfolioManager {
     last_positions: RwLock<Option<PositionsBatch>>,
     last_accounts: RwLock<Option<AccountDeltaBatch>>,
     // Vendor securities cache
-    #[allow(dead_code)]
-    securities_by_provider: Arc<DashMap<ProviderKind, Vec<Instrument>>>,
+    securities_by_provider: Arc<DashMap<ProviderKind, AHashMap<Instrument, FuturesContract>>>,
 
     // Last mark/price per (provider, instrument)
-    last_price: DashMap<(ProviderKind, Instrument), Decimal>,
+    last_price: DashMap<SymbolKey, Decimal>,
 }
 
 #[allow(dead_code)]
 impl PortfolioManager {
-    pub fn new(securities_by_provider: Arc<DashMap<ProviderKind, Vec<Instrument>>>) -> Self {
+    pub fn new(
+        securities_by_provider: Arc<DashMap<ProviderKind, AHashMap<Instrument, FuturesContract>>>,
+    ) -> Self {
         Self {
             securities_by_provider,
             ..Default::default()
@@ -145,10 +148,31 @@ impl PortfolioManager {
         instr: &Instrument,
         avg_px: Decimal,
         qty: Decimal,
+        side: PositionSide,
     ) -> Option<Decimal> {
-        self.last_price
-            .get(&(*provider, instr.clone()))
-            .map(|p| (*p - avg_px) * qty)
+        if let Some(contract_map) = self.securities_by_provider.get(provider) {
+            let symbol_key = SymbolKey::new(instr.clone(), *provider);
+            if let Some(contract) = contract_map.get(instr)
+                && let Some(last_price) = self.last_price.get(&symbol_key)
+            {
+                let tick_size = contract.tick_size;
+                let value_per_tick = contract.value_per_tick;
+                return match side {
+                    PositionSide::Long => Some(
+                        ((last_price.value() - avg_px) / tick_size)
+                            * value_per_tick
+                            * qty,
+                    ),
+                    PositionSide::Short => Some(
+                        ((avg_px - last_price.value()) / tick_size)
+                            * value_per_tick
+                            * qty,
+                    ),
+                    PositionSide::Flat => Some(dec!(0)),
+                };
+            }
+        }
+        None
     }
 
     #[allow(dead_code)]
@@ -248,6 +272,7 @@ impl PortfolioManager {
                     &pd.instrument,
                     pd.average_price,
                     pd.net_qty,
+                    pd.side,
                 ) {
                     pd.open_pnl = new_open;
                 }
@@ -302,7 +327,7 @@ impl PortfolioManager {
         price: Decimal,
         now: DateTime<Utc>,
     ) {
-        let key = (provider_kind, instrument.clone());
+        let key = SymbolKey::new(instrument.clone(), provider_kind);
         self.last_price.insert(key, price);
 
         // Update all real account positions for this provider+instrument
@@ -461,7 +486,7 @@ impl PortfolioManager {
                 // Recompute open_pnl from last mark if available
                 if let Some(mark) = self
                     .last_price
-                    .get(&(pd.provider_kind, pd.instrument.clone()))
+                    .get(&SymbolKey::new(pd.instrument.clone(), pd.provider_kind))
                 {
                     pd.open_pnl = (*mark - pd.average_price) * pd.net_qty;
                 }
@@ -550,7 +575,7 @@ impl PortfolioManager {
         for p in batch.positions.iter_mut() {
             if let Some(mark) = self
                 .last_price
-                .get(&(p.provider_kind, p.instrument.clone()))
+                .get(&SymbolKey::new(p.instrument.clone(), p.provider_kind))
             {
                 // open_pnl = (mark - avg_entry) * signed_qty
                 p.open_pnl = (*mark - p.average_price) * p.net_qty;

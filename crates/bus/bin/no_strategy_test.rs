@@ -48,7 +48,7 @@ async fn main() -> anyhow::Result<()> {
         .await;
     let resp = corr_rx.await?;
     if let Response::InstrumentsMapResponse(ir) = resp {
-        tracing::info!(n = ir.instruments.len(), provider = ?ir.provider, "received InstrumentsResponse");
+        tracing::info!(n = ir.contracts.len(), provider = ?ir.provider, "received InstrumentsResponse");
     } else {
         tracing::warn!("unexpected correlated response: {:?}", resp);
     }

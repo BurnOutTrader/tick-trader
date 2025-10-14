@@ -1,5 +1,6 @@
 #[cfg(feature = "server")]
 use crate::metrics::METRICS;
+use ahash::AHashMap;
 use anyhow::Result;
 use dashmap::DashMap;
 use futures_util::{SinkExt, StreamExt};
@@ -14,6 +15,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::codec::length_delimited::LengthDelimitedCodec;
 use tokio_util::codec::{FramedRead, FramedWrite};
 use tracing::{error, info, trace, warn};
+use tt_database::init::{Connection, pool_from_env};
 use tt_types::history::{HistoricalRangeRequest, HistoryEvent};
 use tt_types::keys::{AccountKey, SymbolKey, Topic};
 use tt_types::providers::ProviderKind;
@@ -110,6 +112,7 @@ pub struct Router {
     // Account-interest tracking for execution streams
     account_subs: Arc<DashMap<AccountKey, HashSet<SubId>>>,
     accounts_by_client: Arc<DashMap<SubId, HashSet<AccountKey>>>,
+    connection: Connection,
 }
 
 #[async_trait::async_trait]
@@ -154,14 +157,15 @@ pub trait UpstreamManager: Send + Sync {
 
 impl Router {
     pub fn new(shards: usize) -> Self {
+        let connection = pool_from_env().unwrap();
         let mut cfg = RouterConfig::default();
         if shards > 0 {
             cfg.shards = shards;
         }
-        Self::new_with_config(cfg)
+        Self::new_with_config(cfg, connection)
     }
 
-    pub fn new_with_config(cfg: RouterConfig) -> Self {
+    pub fn new_with_config(cfg: RouterConfig, connection: Connection) -> Self {
         let shards = cfg.shards.max(1);
         let mut sub_index = Vec::with_capacity(shards);
         for _ in 0..shards {
@@ -182,6 +186,7 @@ impl Router {
             recent_key_subs: Arc::new(DashMap::new()),
             account_subs: Arc::new(DashMap::new()),
             accounts_by_client: Arc::new(DashMap::new()),
+            connection,
         }
     }
 
@@ -616,23 +621,38 @@ impl Router {
                     let corr = req_map.corr_id;
                     let router = self.clone();
                     let id2 = id.clone();
+                    let connection = self.connection.clone();
                     tokio::spawn(async move {
                         match mgr.get_securities(prov).await {
                             Ok(pairs) => {
                                 let resp = tt_types::wire::ContractsResponse {
                                     provider: format!("{:?}", prov),
-                                    instruments: pairs,
+                                    contracts: pairs.clone(),
                                     corr_id: corr,
                                 };
                                 let _ = router
                                     .send_to(&id2, Response::InstrumentsMapResponse(resp))
                                     .await;
+
+                                let mut map = AHashMap::new();
+                                for c in pairs {
+                                    map.insert(c.instrument.clone(), c);
+                                }
+                                if let Err(e) = tt_database::ingest::ingest_contracts_map(
+                                    &connection,
+                                    prov,
+                                    map,
+                                )
+                                .await
+                                {
+                                    error!("Error injecting contract map: {}", e);
+                                }
                             }
                             Err(e) => {
                                 warn!(sub_id = %id2.0, error = %e, "router.instruments_map_request: backend error");
                                 let resp = tt_types::wire::ContractsResponse {
                                     provider: format!("{:?}", prov),
-                                    instruments: Vec::new(),
+                                    contracts: Vec::new(),
                                     corr_id: corr,
                                 };
                                 let _ = router
@@ -645,7 +665,7 @@ impl Router {
                     warn!(sub_id = %id.0, "router.instruments_map_request: no backend manager");
                     let resp = tt_types::wire::ContractsResponse {
                         provider: format!("{:?}", req_map.provider),
-                        instruments: Vec::new(),
+                        contracts: Vec::new(),
                         corr_id: req_map.corr_id,
                     };
                     let _ = self
@@ -1129,14 +1149,7 @@ mod tests {
     use tt_types::securities::symbols::Instrument;
 
     fn make_router_for_tests() -> Router {
-        let cfg = RouterConfig {
-            shards: 4,
-            client_chan_capacity: 1,
-            warmup_ms: 1000,
-            warmup_send_ms: 200,
-            ..Default::default()
-        };
-        Router::new_with_config(cfg)
+        Router::new(4)
     }
 
     #[tokio::test]

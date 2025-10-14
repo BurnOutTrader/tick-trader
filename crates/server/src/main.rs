@@ -128,7 +128,6 @@ async fn main() -> anyhow::Result<()> {
     let path = std::env::var("TT_BUS_ADDR").unwrap_or_else(|_| default_addr.to_string());
     let listener = bind_uds(&path)?;
     eprintln!("tick-trader server listening on UDS: {}", path);
-
     // New standalone Router (initial, single-process, unsharded stub)
     let router = Arc::new(Router::new(8));
     // Wire upstream manager (providers) into the router for first/last sub notifications

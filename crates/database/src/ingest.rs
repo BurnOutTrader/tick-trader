@@ -1,6 +1,7 @@
+use ahash::AHashMap;
 use anyhow::Result;
 use rust_decimal::prelude::ToPrimitive;
-use sqlx::QueryBuilder;
+use sqlx::{QueryBuilder, Row};
 use tt_types::data::models::TradeSide;
 use tt_types::providers::ProviderKind;
 use tt_types::securities::symbols::Instrument;
@@ -10,6 +11,7 @@ use crate::schema::{get_or_create_instrument_id, upsert_latest_bar_1m, upsert_se
 use tt_types::data::core::{Bbo, Candle, Tick};
 use tt_types::data::mbp10::Mbp10;
 use tt_types::keys::Topic;
+use tt_types::securities::security::FuturesContract;
 
 /// Insert a batch of ticks with de-duplication by (provider, symbol_id, ts_ns, key_tie).
 pub async fn ingest_ticks(
@@ -311,4 +313,59 @@ pub async fn ingest_mbp10(
     }
 
     Ok(res.rows_affected())
+}
+
+/// Append-only insert for a provider's contracts map: only insert instruments that
+/// do not already exist for the provider. Existing rows are left untouched.
+pub async fn ingest_contracts_map(
+    conn: &crate::init::Connection,
+    provider: tt_types::providers::ProviderKind,
+    contracts: AHashMap<tt_types::securities::symbols::Instrument, FuturesContract>,
+) -> anyhow::Result<()> {
+    use std::collections::HashSet;
+
+    let prov = crate::paths::provider_kind_to_db_string(provider);
+
+    // Fetch existing instrument symbols for this provider to avoid re-inserting.
+    let existing_rows = sqlx::query(
+        "SELECT i.sym AS sym
+         FROM futures_contracts f
+         JOIN instrument i ON i.id = f.symbol_id
+         WHERE f.provider = $1",
+    )
+    .bind(&prov)
+    .fetch_all(conn)
+    .await?;
+
+    let mut existing: HashSet<String> = HashSet::with_capacity(existing_rows.len());
+    for r in existing_rows.iter() {
+        let s: String = r.get("sym");
+        existing.insert(s);
+    }
+
+    let mut tx = conn.begin().await?;
+
+    for (instrument, contract) in contracts.iter() {
+        let sym = instrument.to_string();
+        if existing.contains(&sym) {
+            // Skip existing instrument for this provider (append-only behavior)
+            continue;
+        }
+        let symbol_id = crate::schema::get_or_create_instrument_id(conn, &sym).await?;
+        // Serialize contract using rkyv
+        let bytes = rkyv::to_bytes::<_, 256>(contract)?;
+        // Insert only; if a concurrent insert happens, ignore via DO NOTHING.
+        sqlx::query(
+            "INSERT INTO futures_contracts (provider, symbol_id, contract) VALUES ($1, $2, $3)
+             ON CONFLICT (provider, symbol_id) DO NOTHING",
+        )
+        .bind(&prov)
+        .bind(symbol_id)
+        .bind(bytes.as_slice())
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+    Ok(())
 }

@@ -4,6 +4,7 @@ use crate::handle::EngineHandle;
 use crate::models::{Command, DataTopic};
 use crate::portfolio::PortfolioManager;
 use crate::traits::Strategy;
+use ahash::AHashMap;
 use crossbeam::queue::ArrayQueue;
 use dashmap::DashMap;
 use smallvec::SmallVec;
@@ -22,8 +23,8 @@ use tt_types::providers::ProviderKind;
 use tt_types::securities::security::FuturesContract;
 use tt_types::securities::symbols::Instrument;
 use tt_types::wire::{
-    AccountDeltaBatch, BarBatch, Kick, OrdersBatch, PositionsBatch, QuoteBatch, Request, Response,
-    TickBatch,
+    AccountDeltaBatch, BarBatch, InstrumentsMapRequest, Kick, OrdersBatch, PositionsBatch,
+    QuoteBatch, Request, Response, TickBatch,
 };
 
 // Shared view used by EngineHandle
@@ -32,7 +33,8 @@ pub(crate) struct EngineRuntimeShared {
     pub(crate) sub_id: ClientSubId,
     pub(crate) next_corr_id: Arc<AtomicU64>,
     pub(crate) pending: Arc<DashMap<u64, oneshot::Sender<Response>>>,
-    pub(crate) securities_by_provider: Arc<DashMap<ProviderKind, Vec<Instrument>>>,
+    pub(crate) securities_by_provider:
+        Arc<DashMap<ProviderKind, AHashMap<Instrument, FuturesContract>>>,
     pub(crate) watching_providers: Arc<DashMap<ProviderKind, ()>>,
     pub(crate) state: Arc<EngineAccountsState>,
     pub(crate) portfolio_manager: Arc<PortfolioManager>,
@@ -92,7 +94,7 @@ pub struct EngineRuntime {
     next_corr_id: Arc<AtomicU64>,
     pending: Arc<DashMap<u64, oneshot::Sender<Response>>>,
     // Vendor securities cache and watchers
-    securities_by_provider: Arc<DashMap<ProviderKind, Vec<Instrument>>>,
+    securities_by_provider: Arc<DashMap<ProviderKind, AHashMap<Instrument, FuturesContract>>>,
     watching_providers: Arc<DashMap<ProviderKind, ()>>,
     // Active SHM polling tasks keyed by (topic,key)
     shm_tasks: Arc<DashMap<(Topic, SymbolKey), tokio::task::JoinHandle<()>>>,
@@ -170,7 +172,7 @@ impl EngineRuntime {
             })
             .await;
         match timeout(Duration::from_secs(2), rx).await {
-            Ok(Ok(WireResp::InstrumentsMapResponse(imr))) => Ok(imr.instruments),
+            Ok(Ok(WireResp::InstrumentsMapResponse(imr))) => Ok(imr.contracts),
             Ok(Ok(_other)) => Ok(vec![]),
             _ => Ok(vec![]),
         }
@@ -403,14 +405,6 @@ impl EngineRuntime {
             .unwrap_or_default()
     }
 
-    /// Return cached securities list for a provider (may be empty if not fetched yet)
-    pub fn securities_for(&self, provider: ProviderKind) -> Vec<Instrument> {
-        self.securities_by_provider
-            .get(&provider)
-            .map(|v| v.value().clone())
-            .unwrap_or_default()
-    }
-
     /// Ensure that we fetch instruments from the vendor now and refresh every hour.
     async fn ensure_vendor_securities_watch(&self, provider: ProviderKind) {
         if self.backtest_mode {
@@ -427,28 +421,27 @@ impl EngineRuntime {
         async fn fetch_into(
             bus: Arc<ClientMessageBus>,
             provider: ProviderKind,
-            sec_map: Arc<DashMap<ProviderKind, Vec<Instrument>>>,
+            sec_map: Arc<DashMap<ProviderKind, AHashMap<Instrument, FuturesContract>>>,
         ) {
             use std::time::Duration;
             use tokio::time::timeout;
-            use tt_types::wire::{InstrumentsRequest, Request as WireReq, Response as WireResp};
+            use tt_types::wire::{Request as WireReq, Response as WireResp};
             // Use bus-level correlation to avoid depending on EngineRuntime internals
             let rx = bus
                 .request_with_corr(|corr_id| {
-                    WireReq::InstrumentsRequest(InstrumentsRequest {
-                        provider,
-                        pattern: None,
-                        corr_id,
-                    })
+                    WireReq::InstrumentsMapRequest(InstrumentsMapRequest { provider, corr_id })
                 })
                 .await;
-            if let Ok(Ok(WireResp::InstrumentsResponse(ir))) =
+            if let Ok(Ok(WireResp::InstrumentsMapResponse(ir))) =
                 timeout(Duration::from_secs(3), rx).await
             {
-                sec_map.insert(provider, ir.instruments);
+                let mut map = AHashMap::default();
+                for c in ir.contracts {
+                    map.insert(c.instrument.clone(), c);
+                }
+                sec_map.insert(provider, map);
             }
         }
-        fetch_into(bus.clone(), provider, sec_map.clone()).await;
         // Spawn hourly refresh
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(Duration::from_secs(3600));
@@ -1156,7 +1149,7 @@ impl EngineRuntime {
         bus: Arc<ClientMessageBus>,
         sub_id: ClientSubId,
         securities_watch: Arc<DashMap<ProviderKind, ()>>,
-        securities_by_provider: Arc<DashMap<ProviderKind, Vec<Instrument>>>,
+        securities_by_provider: Arc<DashMap<ProviderKind, AHashMap<Instrument, FuturesContract>>>,
         backtest_mode: bool,
     ) {
         use tt_types::wire::{SubscribeKey, UnsubscribeKey};
@@ -1166,7 +1159,7 @@ impl EngineRuntime {
             bus: Arc<ClientMessageBus>,
             provider: ProviderKind,
             watch: Arc<DashMap<ProviderKind, ()>>,
-            sec_map: Arc<DashMap<ProviderKind, Vec<Instrument>>>,
+            sec_map: Arc<DashMap<ProviderKind, AHashMap<Instrument, FuturesContract>>>,
         ) {
             if watch.get(&provider).is_some() {
                 return;
@@ -1178,25 +1171,26 @@ impl EngineRuntime {
             async fn fetch_into(
                 bus: Arc<ClientMessageBus>,
                 provider: ProviderKind,
-                sec_map: Arc<DashMap<ProviderKind, Vec<Instrument>>>,
+                sec_map: Arc<DashMap<ProviderKind, AHashMap<Instrument, FuturesContract>>>,
             ) {
                 use tokio::time::timeout;
-                use tt_types::wire::{
-                    InstrumentsRequest, Request as WireReq, Response as WireResp,
-                };
+                use tt_types::wire::{Request as WireReq, Response as WireResp};
                 let rx = bus
                     .request_with_corr(|corr_id| {
-                        WireReq::InstrumentsRequest(InstrumentsRequest {
+                        WireReq::InstrumentsMapRequest(tt_types::wire::InstrumentsMapRequest {
                             provider,
-                            pattern: None,
                             corr_id,
                         })
                     })
                     .await;
-                if let Ok(Ok(WireResp::InstrumentsResponse(ir))) =
+                if let Ok(Ok(WireResp::InstrumentsMapResponse(ir))) =
                     timeout(Duration::from_secs(3), rx).await
                 {
-                    sec_map.insert(provider, ir.instruments);
+                    let mut map = AHashMap::default();
+                    for c in ir.contracts {
+                        map.insert(c.instrument.clone(), c);
+                    }
+                    sec_map.insert(provider, map);
                 }
             }
             fetch_into(bus2.clone(), provider, sec_map2.clone()).await;

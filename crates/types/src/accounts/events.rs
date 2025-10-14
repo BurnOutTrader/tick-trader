@@ -172,7 +172,7 @@ impl OrderUpdate {
         )
     }
 }
-#[derive(Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize, Display)]
+#[derive(Debug, Clone, Copy, PartialEq, Archive, RkyvDeserialize, RkyvSerialize, Display)]
 #[archive(check_bytes)]
 pub enum PositionSide {
     Long,

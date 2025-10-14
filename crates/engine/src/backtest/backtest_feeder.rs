@@ -417,6 +417,62 @@ impl BacktestFeeder {
                 while let Ok(req) = req_rx.try_recv() {
                     use tt_types::wire::Request;
                     match req {
+                        Request::InstrumentsMapRequest(req) => {
+                            // Fetch contracts map from DB and filter to avoid lookahead bias
+                            let provider = req.provider;
+                            let corr_id = req.corr_id;
+
+                            // Determine cutoff time for lookahead-bias: use configured range_start if set,
+                            // otherwise use the backtest clock if available; fall back to epoch.
+                            let cutoff_dt = if let Some(dt) = cfg.range_start {
+                                dt
+                            } else if let Some(ref clk) = clock {
+                                clk.now_dt()
+                            } else {
+                                // default to epoch (include nothing that activates after this)
+                                Utc.timestamp_opt(0, 0).unwrap()
+                            };
+                            let cutoff_naive = cutoff_dt.date_naive();
+
+                            match tt_database::queries::get_contracts_map(&conn, provider).await {
+                                Ok(map) => {
+                                    // Filter out contracts that would not yet be known at cutoff time
+                                    let mut contracts: Vec<
+                                        tt_types::securities::security::FuturesContract,
+                                    > = map
+                                        .into_values()
+                                        .filter(|fc| fc.activation_date <= cutoff_naive)
+                                        .collect();
+                                    // Sort for deterministic order (by root then instrument string)
+                                    contracts.sort_by(|a, b| {
+                                        (a.root.clone(), a.instrument.to_string())
+                                            .cmp(&(b.root.clone(), b.instrument.to_string()))
+                                    });
+
+                                    let resp = tt_types::wire::ContractsResponse {
+                                        provider: format!("{:?}", provider),
+                                        contracts,
+                                        corr_id,
+                                    };
+                                    let _ = bus_clone
+                                        .route_response(Response::InstrumentsMapResponse(resp))
+                                        .await;
+                                    await_ack(&notify).await;
+                                }
+                                Err(e) => {
+                                    warn!("feeder: get_contracts_map error: {:?}", e);
+                                    let resp = tt_types::wire::ContractsResponse {
+                                        provider: format!("{:?}", provider),
+                                        contracts: Vec::new(),
+                                        corr_id,
+                                    };
+                                    let _ = bus_clone
+                                        .route_response(Response::InstrumentsMapResponse(resp))
+                                        .await;
+                                    await_ack(&notify).await;
+                                }
+                            }
+                        }
                         Request::SubscribeKey(skreq) => {
                             // Acknowledge subscribe immediately
                             let instr = skreq.key.instrument.clone();

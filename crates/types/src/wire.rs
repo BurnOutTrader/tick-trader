@@ -231,7 +231,7 @@ pub struct ContractsResponse {
     /// Provider name
     pub provider: String,
     /// Pairs of (Instrument, FuturesContractWire)
-    pub instruments: Vec<FuturesContract>,
+    pub contracts: Vec<FuturesContract>,
     /// Correlation ID
     pub corr_id: u64,
 }

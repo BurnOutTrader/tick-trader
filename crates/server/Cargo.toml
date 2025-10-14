@@ -8,6 +8,7 @@ license.workspace = true
 tt-types = { path = "../types" }
 tt-bus = {path = "../bus", features = ["server"]}
 tt-providers = { path = "../providers" }
+tt-database = {path = "../database"}
 anyhow = { workspace = true }
 libc = "0.2"
 dotenvy = "0.15.7"

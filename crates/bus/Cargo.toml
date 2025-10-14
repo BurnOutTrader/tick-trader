@@ -9,7 +9,9 @@ bench = ["dep:hdrhistogram"]
 server = []
 
 [dependencies]
+ahash = {workspace = true}
 tt-types = { path = "../types" }
+tt-database = {path = "../database"}
 anyhow = { workspace = true }
 tokio = { workspace = true }
 # bench-only (optional normal dependency so feature-gated code compiles)

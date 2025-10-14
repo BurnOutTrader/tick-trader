@@ -1,5 +1,6 @@
 use crate::models::{Command, DataTopic};
 use crate::runtime::EngineRuntimeShared;
+use ahash::AHashMap;
 use anyhow::anyhow;
 use crossbeam::queue::ArrayQueue;
 use dashmap::DashMap;
@@ -17,7 +18,7 @@ use tt_types::keys::{SymbolKey, Topic};
 use tt_types::providers::ProviderKind;
 use tt_types::securities::security::FuturesContract;
 use tt_types::securities::symbols::Instrument;
-use tt_types::wire::{Request, Response};
+use tt_types::wire::{InstrumentsMapRequest, Request, Response};
 
 #[derive(Clone)]
 pub struct EngineHandle {
@@ -244,7 +245,7 @@ impl EngineHandle {
             })
             .await;
         match timeout(Duration::from_secs(2), rx).await {
-            Ok(Ok(WireResp::InstrumentsMapResponse(imr))) => Ok(imr.instruments),
+            Ok(Ok(WireResp::InstrumentsMapResponse(imr))) => Ok(imr.contracts),
             Ok(Ok(_)) | Ok(Err(_)) | Err(_) => Ok(vec![]),
         }
     }
@@ -464,15 +465,6 @@ impl EngineHandle {
             .unwrap_or(true)
     }
 
-    // Reference data cache access
-    pub fn securities_for(&self, provider: ProviderKind) -> Vec<Instrument> {
-        self.inner
-            .securities_by_provider
-            .get(&provider)
-            .map(|v| v.value().clone())
-            .unwrap_or_default()
-    }
-
     async fn ensure_vendor_securities_watch(&self, provider: ProviderKind) {
         if self.inner.backtest_mode {
             return;
@@ -488,24 +480,24 @@ impl EngineHandle {
         async fn fetch_into(
             bus: Arc<ClientMessageBus>,
             provider: ProviderKind,
-            sec_map: Arc<DashMap<ProviderKind, Vec<Instrument>>>,
+            sec_map: Arc<DashMap<ProviderKind, AHashMap<Instrument, FuturesContract>>>,
         ) {
             use std::time::Duration;
             use tokio::time::timeout;
-            use tt_types::wire::{InstrumentsRequest, Request as WireReq, Response as WireResp};
+            use tt_types::wire::{Request as WireReq, Response as WireResp};
             let rx = bus
                 .request_with_corr(|corr_id| {
-                    WireReq::InstrumentsRequest(InstrumentsRequest {
-                        provider,
-                        pattern: None,
-                        corr_id,
-                    })
+                    WireReq::InstrumentsMapRequest(InstrumentsMapRequest { provider, corr_id })
                 })
                 .await;
-            if let Ok(Ok(WireResp::InstrumentsResponse(ir))) =
+            if let Ok(Ok(WireResp::InstrumentsMapResponse(ir))) =
                 timeout(Duration::from_secs(3), rx).await
             {
-                sec_map.insert(provider, ir.instruments);
+                let mut map = AHashMap::default();
+                for c in ir.contracts {
+                    map.insert(c.instrument.clone(), c);
+                }
+                sec_map.insert(provider, map);
             }
         }
         fetch_into(bus.clone(), provider, sec_map.clone()).await;
