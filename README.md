@@ -41,7 +41,7 @@ The engine can place live orders and is intended strictly for testing and evalua
 - 🚧 Status: work in progress — the architecture is largely stabilized, but features are still evolving.
 - 📡 Support for publishing/sharing strategy signals/insights on the bus will be implemented last
 - 🛅 PostgreSQL + Docker Database for storage and query of historical data by strategies and the server. 
-- ⏪Backtesting: Configurable with dynamic realism models, fills models are configurable, can book walk etc. Implementation v1.0, not tested, will likely have some bugs and inaccuracy.
+- ⏪Backtesting: Configurable with dynamic realism models, fill models are configurable. the default fill model can book walk etc. Implementation v1.0, not tested, will likely have some bugs and inaccuracy.
 - 🔽Automatic data downloading and databasing + functions to retrieve historical data from the database for run time analysis.
 
 ### Strategies are straight forward
