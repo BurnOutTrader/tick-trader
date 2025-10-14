@@ -148,7 +148,7 @@ impl Strategy for BacktestOrdersStrategy {
                     None,
                 );
             }
-            20 => {
+            50 => {
                 let tag = "MKT_SELL";
                 self.record_expect(tag, true);
                 let _ = h.place_order(
@@ -165,7 +165,7 @@ impl Strategy for BacktestOrdersStrategy {
                     None,
                 );
             }
-            30 => {
+            100 => {
                 let tag = "LIM_BUY";
                 self.record_expect(tag, true);
                 let _ = h.place_order(
@@ -182,7 +182,7 @@ impl Strategy for BacktestOrdersStrategy {
                     None,
                 );
             }
-            40 => {
+            200 => {
                 let tag = "LIM_SELL";
                 self.record_expect(tag, true);
                 let _ = h.place_order(
@@ -199,7 +199,7 @@ impl Strategy for BacktestOrdersStrategy {
                     None,
                 );
             }
-            50 => {
+            300 => {
                 let tag = "STP_BUY";
                 self.record_expect(tag, true);
                 let _ = h.place_order(
@@ -216,7 +216,7 @@ impl Strategy for BacktestOrdersStrategy {
                     None,
                 );
             }
-            60 => {
+            350 => {
                 let tag = "STP_SELL";
                 self.record_expect(tag, true);
                 let _ = h.place_order(
@@ -233,7 +233,7 @@ impl Strategy for BacktestOrdersStrategy {
                     None,
                 );
             }
-            70 => {
+            400 => {
                 let tag = "STPLMT_BUY";
                 self.record_expect(tag, true);
                 let _ = h.place_order(
@@ -250,7 +250,7 @@ impl Strategy for BacktestOrdersStrategy {
                     None,
                 );
             }
-            80 => {
+            450 => {
                 let tag = "STPLMT_SELL";
                 self.record_expect(tag, true);
                 let _ = h.place_order(
@@ -267,7 +267,7 @@ impl Strategy for BacktestOrdersStrategy {
                     None,
                 );
             }
-            90 => {
+            500 => {
                 let tag = "JOIN_BID_BUY";
                 self.record_expect(tag, false);
                 let _ = h.place_order(
@@ -284,7 +284,7 @@ impl Strategy for BacktestOrdersStrategy {
                     None,
                 );
             }
-            100 => {
+            550 => {
                 let tag = "JOIN_ASK_SELL";
                 self.record_expect(tag, false);
                 let _ = h.place_order(
@@ -301,7 +301,7 @@ impl Strategy for BacktestOrdersStrategy {
                     None,
                 );
             }
-            110 => {
+            600 => {
                 let tag = "TRAIL_BUY";
                 self.record_expect(tag, false);
                 let _ = h.place_order(
@@ -318,7 +318,7 @@ impl Strategy for BacktestOrdersStrategy {
                     None,
                 );
             }
-            120 => {
+            650 => {
                 let tag = "TRAIL_SELL";
                 self.record_expect(tag, false);
                 let _ = h.place_order(
@@ -429,7 +429,7 @@ async fn main() -> anyhow::Result<()> {
     ensure_schema(&db).await?;
     // Backtest for a recent 30-day period
     let end_date = Utc::now().date_naive();
-    let start_date = end_date - chrono::Duration::minutes(60);
+    let start_date = end_date - chrono::Duration::days(5);
 
     // Configure and start backtest
     let cfg = BacktestConfig::from_to(chrono::Duration::milliseconds(250), start_date, end_date);
