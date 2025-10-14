@@ -94,6 +94,23 @@ impl PortfolioManager {
                 self.update_apply_last_price(ob.provider_kind, &ev.instrument, mark, now);
                 Response::MBP10Batch(ob)
             }
+            Response::QuoteBatch(qb) => {
+                // Use BBO mid as mark if both sides present; otherwise fall back to the available side.
+                for q in &qb.quotes {
+                    let mark = if !q.bid.is_zero() && !q.ask.is_zero() {
+                        (q.bid + q.ask) / Decimal::from(2)
+                    } else if !q.bid.is_zero() {
+                        q.bid
+                    } else if !q.ask.is_zero() {
+                        q.ask
+                    } else {
+                        // No usable price; skip
+                        continue;
+                    };
+                    self.update_apply_last_price(qb.provider_kind, &q.instrument, mark, now);
+                }
+                Response::QuoteBatch(qb)
+            }
             Response::OrdersBatch(ob) => {
                 self.apply_orders_batch(ob.clone());
                 Response::OrdersBatch(ob)
