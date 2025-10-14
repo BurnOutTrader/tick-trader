@@ -129,15 +129,6 @@ async fn main() -> anyhow::Result<()> {
     let strategy = DataTestStrategy::default();
     let _handle = engine.start(strategy).await?;
 
-    //optionally download some historical data and change subscription to candles(above)
-    /*   _handle
-   .update_historical_latest_by_key_async(
-       ProviderKind::ProjectX(ProjectXTenant::Topstep),
-       Topic::Candles1m,
-       Instrument::from_str("MNQ.Z25")?,
-   )
-   .await?;*/
-
     sleep(Duration::from_secs(60)).await;
 
     engine.stop().await?;
