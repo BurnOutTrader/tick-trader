@@ -141,7 +141,6 @@ impl PortfolioManager {
     }
 
     // Helper: compute open PnL from last_price for a given position
-    #[allow(dead_code)]
     fn compute_open_pnl(
         &self,
         provider: &ProviderKind,
@@ -158,16 +157,12 @@ impl PortfolioManager {
                 let tick_size = contract.tick_size;
                 let value_per_tick = contract.value_per_tick;
                 return match side {
-                    PositionSide::Long => Some(
-                        ((last_price.value() - avg_px) / tick_size)
-                            * value_per_tick
-                            * qty,
-                    ),
-                    PositionSide::Short => Some(
-                        ((avg_px - last_price.value()) / tick_size)
-                            * value_per_tick
-                            * qty,
-                    ),
+                    PositionSide::Long => {
+                        Some(((last_price.value() - avg_px) / tick_size) * value_per_tick * qty)
+                    }
+                    PositionSide::Short => {
+                        Some(((avg_px - last_price.value()) / tick_size) * value_per_tick * qty)
+                    }
                     PositionSide::Flat => Some(dec!(0)),
                 };
             }
@@ -339,7 +334,15 @@ impl PortfolioManager {
             let map = acct_entry.value();
             if let Some(mut pd_ref) = map.get_mut(instrument) {
                 let pd = pd_ref.value_mut();
-                pd.open_pnl = (price - pd.average_price) * pd.net_qty;
+                if let Some(new_open) = self.compute_open_pnl(
+                    &provider_kind,
+                    instrument,
+                    pd.average_price,
+                    pd.net_qty,
+                    pd.side,
+                ) {
+                    pd.open_pnl = new_open;
+                }
                 // side stays consistent with net_qty sign
                 pd.side = if pd.net_qty >= Decimal::ZERO {
                     PositionSide::Long
@@ -484,11 +487,14 @@ impl PortfolioManager {
             for p in acct_entry.value().iter() {
                 let mut pd = p.value().clone();
                 // Recompute open_pnl from last mark if available
-                if let Some(mark) = self
-                    .last_price
-                    .get(&SymbolKey::new(pd.instrument.clone(), pd.provider_kind))
-                {
-                    pd.open_pnl = (*mark - pd.average_price) * pd.net_qty;
+                if let Some(new_open) = self.compute_open_pnl(
+                    &pd.provider_kind,
+                    &pd.instrument,
+                    pd.average_price,
+                    pd.net_qty,
+                    pd.side,
+                ) {
+                    pd.open_pnl = new_open;
                 }
                 // Update side based on qty and set time to snapshot time
                 pd.side = if pd.net_qty.is_zero() {
@@ -573,12 +579,14 @@ impl PortfolioManager {
     /// Does not mutate internal state; purely transforms the batch for downstream consumers.
     pub fn adjust_positions_batch_open_pnl(&self, mut batch: PositionsBatch) -> PositionsBatch {
         for p in batch.positions.iter_mut() {
-            if let Some(mark) = self
-                .last_price
-                .get(&SymbolKey::new(p.instrument.clone(), p.provider_kind))
-            {
-                // open_pnl = (mark - avg_entry) * signed_qty
-                p.open_pnl = (*mark - p.average_price) * p.net_qty;
+            if let Some(new_open) = self.compute_open_pnl(
+                &p.provider_kind,
+                &p.instrument,
+                p.average_price,
+                p.net_qty,
+                p.side,
+            ) {
+                p.open_pnl = new_open;
             }
         }
         batch

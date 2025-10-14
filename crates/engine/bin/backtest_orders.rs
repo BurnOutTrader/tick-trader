@@ -425,7 +425,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     // Create DB pool from env (Postgres) and ensure schema
-    let db = tt_database::init::pool_from_env()?;
+    let db = tt_database::init::init_db()?;
     ensure_schema(&db).await?;
     // Backtest for a recent 30-day period
     let end_date = Utc::now().date_naive();

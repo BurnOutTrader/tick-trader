@@ -3,7 +3,7 @@ use chrono::{Duration, TimeZone, Utc};
 use rust_decimal::Decimal;
 use std::str::FromStr;
 use tt_database::ingest::{ingest_bbo, ingest_candles, ingest_mbp10, ingest_ticks};
-use tt_database::init::pool_from_env;
+use tt_database::init::init_db;
 use tt_database::paths::provider_kind_to_db_string;
 use tt_database::queries;
 use tt_database::schema::{
@@ -23,7 +23,7 @@ fn require_db() -> Option<()> {
 }
 
 async fn setup() -> Result<(sqlx::Pool<sqlx::Postgres>, ProviderKind, Instrument)> {
-    let pool = pool_from_env()?;
+    let pool = init_db()?;
     // fixed provider maps to "projectx" so tests can clean by provider + symbol
     let provider = ProviderKind::ProjectX(ProjectXTenant::Demo);
     let instrument = Instrument::from_str("TST.Z25").unwrap();

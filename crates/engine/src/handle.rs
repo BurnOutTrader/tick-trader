@@ -7,7 +7,7 @@ use dashmap::DashMap;
 use rust_decimal::prelude::ToPrimitive;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::time::Duration;
+
 use tokio::sync::oneshot;
 use tt_bus::ClientMessageBus;
 use tt_types::accounts::account::AccountName;
@@ -500,13 +500,7 @@ impl EngineHandle {
                 sec_map.insert(provider, map);
             }
         }
+        // Perform a single immediate fetch; no periodic loop to avoid duplicate auto-updates
         fetch_into(bus.clone(), provider, sec_map.clone()).await;
-        tokio::spawn(async move {
-            let mut tick = tokio::time::interval(Duration::from_secs(3600));
-            loop {
-                tick.tick().await;
-                fetch_into(bus.clone(), provider, sec_map.clone()).await;
-            }
-        });
     }
 }

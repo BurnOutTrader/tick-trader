@@ -13,7 +13,9 @@ use strum_macros::Display;
 #[archive(check_bytes)]
 pub struct ProviderOrderId(pub String);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Archive, RkyvDeserialize, RkyvSerialize)]
+#[derive(
+    Debug, Clone, Copy, Display, PartialEq, Eq, Hash, Archive, RkyvDeserialize, RkyvSerialize,
+)]
 #[archive(check_bytes)]
 pub enum Side {
     Buy,
@@ -158,6 +160,7 @@ pub struct OrderUpdate {
     pub state: OrderState,
     pub leaves: i64,
     pub cum_qty: i64,
+    pub side: Side,
 
     pub avg_fill_px: Decimal,
     pub tag: Option<String>,
@@ -167,8 +170,14 @@ pub struct OrderUpdate {
 impl OrderUpdate {
     pub fn to_clean_string(&self) -> String {
         format!(
-            "Order Update: {}, {}:{} filled:{} remaining:{} @{} ",
-            self.provider_kind, self.instrument, self.state, self.cum_qty, self.leaves, self.time
+            "Order Update: {}, {} {}:{} filled:{} remaining:{} @{} ",
+            self.provider_kind,
+            self.instrument,
+            self.side,
+            self.state,
+            self.cum_qty,
+            self.leaves,
+            self.time
         )
     }
 }

@@ -15,7 +15,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::codec::length_delimited::LengthDelimitedCodec;
 use tokio_util::codec::{FramedRead, FramedWrite};
 use tracing::{error, info, trace, warn};
-use tt_database::init::{Connection, pool_from_env};
+use tt_database::init::{Connection, init_db};
 use tt_types::history::{HistoricalRangeRequest, HistoryEvent};
 use tt_types::keys::{AccountKey, SymbolKey, Topic};
 use tt_types::providers::ProviderKind;
@@ -157,7 +157,7 @@ pub trait UpstreamManager: Send + Sync {
 
 impl Router {
     pub fn new(shards: usize) -> Self {
-        let connection = pool_from_env().unwrap();
+        let connection = init_db().unwrap();
         let mut cfg = RouterConfig::default();
         if shards > 0 {
             cfg.shards = shards;

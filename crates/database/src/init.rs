@@ -1,6 +1,5 @@
 use anyhow::{Context, anyhow};
 use sqlx::{Pool, Postgres};
-use std::path::Path;
 
 /// Shared database connection type for the project.
 pub type Connection = Pool<Postgres>;
@@ -21,21 +20,29 @@ fn synthesize_pg_url_from_hostlike(host_like: &str) -> String {
     format!("postgres://{}:{}@{}:{}/{}", user, pass, host, port, db)
 }
 
+/// Best-effort: load environment variables from .env with fallbacks to examples.
+fn load_env_best_effort() {
+    // Try project root .env, then pg/.env, then root .env.example, then pg/.env.example
+    let _ = dotenvy::from_filename(".env")
+        .or_else(|_| dotenvy::from_filename("pg/.env"))
+        .or_else(|_| dotenvy::from_filename(".env.example"))
+        .or_else(|_| dotenvy::from_filename("pg/.env.example"));
+}
+
 /// Initialize a Postgres connection pool.
 /// Note: The `data_root` path is currently ignored for Postgres, but kept for API compatibility
 /// with older call sites that passed a filesystem path for DuckDB.
-pub fn init_db(_data_root: &Path) -> anyhow::Result<Connection> {
+pub fn init_db() -> anyhow::Result<Connection> {
+    // Ensure env vars are loaded from .env; if not present, fall back to .env.example
+    load_env_best_effort();
+
     // Primary env var is DATABASE_URL. It can be either a full postgres URL or a short host-like
     // form such as "127.0.0.1:5432:5432". In the latter case we synthesize the full URL using
     // POSTGRES_USER, POSTGRES_PASSWORD and TT_DB (see pg/.env.example).
-    let raw = std::env::var("DATABASE_URL").or_else(|_| {
-        // Backward-compat: if DB_PATH is set, treat it the same as the short form and emit a note.
-        if let Ok(v) = std::env::var("DB_PATH") {
-            eprintln!("[tt-database] WARNING: DB_PATH is deprecated; use DATABASE_URL instead. Using DB_PATH value for now.");
-            Ok(v)
-        } else {
-            Err(anyhow!("DATABASE_URL must be set for Postgres (short form like 127.0.0.1:5432:5432 is accepted)"))
-        }
+    let raw = std::env::var("DATABASE_URL").map_err(|_| {
+        anyhow!(
+            "DATABASE_URL not set. Ensure .env exists or copy from .env.example (or pg/.env.example)."
+        )
     })?;
 
     let url = if raw.contains("://") {
@@ -54,9 +61,4 @@ pub fn init_db(_data_root: &Path) -> anyhow::Result<Connection> {
         .connect_lazy(&url)
         .with_context(|| format!("failed to create Postgres pool (lazy) for URL '{}')", url))?;
     Ok(pool)
-}
-
-/// Convenience for components that don't have a historical path parameter.
-pub fn pool_from_env() -> anyhow::Result<Connection> {
-    init_db(Path::new("/"))
 }

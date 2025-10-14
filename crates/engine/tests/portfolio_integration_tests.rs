@@ -1,11 +1,12 @@
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
+use rust_decimal::{dec};
 use tokio::time::{Duration, sleep, timeout};
 use tt_bus::ClientMessageBus;
 use tt_engine::runtime::EngineRuntime;
 use tt_engine::traits::Strategy;
 use tt_types::accounts::account::AccountName;
-use tt_types::accounts::events::{AccountDelta, OrderUpdate, PositionDelta, PositionSide};
+use tt_types::accounts::events::{AccountDelta, OrderUpdate, PositionDelta, PositionSide, Side};
 use tt_types::accounts::order::OrderState;
 use tt_types::data::core::{Bbo, Candle};
 use tt_types::engine_id::EngineUuid;
@@ -86,6 +87,7 @@ fn ou(
         avg_fill_px: rust_decimal::Decimal::from(100),
         tag: None,
         time: chrono::Utc::now(),
+        side: Side::Buy,
     }
 }
 
@@ -225,15 +227,15 @@ async fn account_delta_autofill_open_and_day_pnl() {
 
     let provider = ProviderKind::ProjectX(ProjectXTenant::Demo);
     let account = AccountName::new("TEST-ACCT".to_string());
-    let es = Instrument::from_str("ES.Z25").unwrap();
+    let mnq = Instrument::from_str("MNQ.Z25").unwrap();
 
     // Seed mark 105, avg 100, qty 2 => open_pnl = (105-100)*2 = 10
     let bbo = Bbo {
-        symbol: es.to_string(),
-        instrument: es.clone(),
-        bid: 105.into(),
+        symbol: mnq.to_string(),
+        instrument: mnq.clone(),
+        bid: dec!(21000),
         bid_size: 1.into(),
-        ask: 105.into(),
+        ask: dec!(21000.25),
         ask_size: 1.into(),
         time: chrono::Utc::now(),
         bid_orders: None,
@@ -265,7 +267,7 @@ async fn account_delta_autofill_open_and_day_pnl() {
         id: EngineUuid::new(),
         provider,
         account_name: account.clone(),
-        instrument: es.clone(),
+        instrument: mnq.clone(),
         creation_time: chrono::Utc::now(),
         price: 0.into(),
         profit_and_loss: 7.into(),

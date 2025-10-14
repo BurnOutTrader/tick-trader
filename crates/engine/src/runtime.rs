@@ -442,14 +442,8 @@ impl EngineRuntime {
                 sec_map.insert(provider, map);
             }
         }
-        // Spawn hourly refresh
-        tokio::spawn(async move {
-            let mut tick = tokio::time::interval(Duration::from_secs(3600));
-            loop {
-                tick.tick().await;
-                fetch_into(bus.clone(), provider, sec_map.clone()).await;
-            }
-        });
+        // Perform a single immediate fetch; daily refresh is handled by process restarts or external scheduler
+        fetch_into(bus.clone(), provider, sec_map.clone()).await;
     }
 
     // Position helpers (account currently ignored; model aggregates by instrument)
@@ -599,9 +593,7 @@ impl EngineRuntime {
         let shm_blacklist_for_task = self.shm_blacklist.clone();
         let bus_for_task = self.bus.clone();
         let sub_id_for_task = sub_id.clone();
-        let securities_watch_for_task = self.watching_providers.clone();
         let handle_inner_for_task = handle.inner.clone();
-        let securities_by_provider_for_task = handle_inner_for_task.securities_by_provider.clone();
         let cmd_q_for_task = self.cmd_q.clone();
         let backtest_notify_for_task = self.backtest_notify.clone();
         // Call on_start before moving strategy
@@ -636,9 +628,6 @@ impl EngineRuntime {
                 cmd_q_for_task.clone(),
                 bus_for_task.clone(),
                 sub_id_for_task.clone(),
-                securities_watch_for_task.clone(),
-                securities_by_provider_for_task.clone(),
-                handle_inner_for_task.backtest_mode,
             )
             .await;
 
@@ -1128,9 +1117,6 @@ impl EngineRuntime {
                     cmd_q_for_task.clone(),
                     bus_for_task.clone(),
                     sub_id_for_task.clone(),
-                    securities_watch_for_task.clone(),
-                    securities_by_provider_for_task.clone(),
-                    handle_inner_for_task.backtest_mode,
                 )
                 .await;
                         } else { break; }
@@ -1148,73 +1134,12 @@ impl EngineRuntime {
         cmd_q: Arc<ArrayQueue<Command>>,
         bus: Arc<ClientMessageBus>,
         sub_id: ClientSubId,
-        securities_watch: Arc<DashMap<ProviderKind, ()>>,
-        securities_by_provider: Arc<DashMap<ProviderKind, AHashMap<Instrument, FuturesContract>>>,
-        backtest_mode: bool,
     ) {
         use tt_types::wire::{SubscribeKey, UnsubscribeKey};
-
-        // Local helper to ensure vendor securities watch is running
-        async fn ensure_vendor(
-            bus: Arc<ClientMessageBus>,
-            provider: ProviderKind,
-            watch: Arc<DashMap<ProviderKind, ()>>,
-            sec_map: Arc<DashMap<ProviderKind, AHashMap<Instrument, FuturesContract>>>,
-        ) {
-            if watch.get(&provider).is_some() {
-                return;
-            }
-            watch.insert(provider, ());
-            // immediate fetch
-            let bus2 = bus.clone();
-            let sec_map2 = sec_map.clone();
-            async fn fetch_into(
-                bus: Arc<ClientMessageBus>,
-                provider: ProviderKind,
-                sec_map: Arc<DashMap<ProviderKind, AHashMap<Instrument, FuturesContract>>>,
-            ) {
-                use tokio::time::timeout;
-                use tt_types::wire::{Request as WireReq, Response as WireResp};
-                let rx = bus
-                    .request_with_corr(|corr_id| {
-                        WireReq::InstrumentsMapRequest(tt_types::wire::InstrumentsMapRequest {
-                            provider,
-                            corr_id,
-                        })
-                    })
-                    .await;
-                if let Ok(Ok(WireResp::InstrumentsMapResponse(ir))) =
-                    timeout(Duration::from_secs(3), rx).await
-                {
-                    let mut map = AHashMap::default();
-                    for c in ir.contracts {
-                        map.insert(c.instrument.clone(), c);
-                    }
-                    sec_map.insert(provider, map);
-                }
-            }
-            fetch_into(bus2.clone(), provider, sec_map2.clone()).await;
-            tokio::spawn(async move {
-                let mut tick = tokio::time::interval(Duration::from_secs(3600));
-                loop {
-                    tick.tick().await;
-                    fetch_into(bus2.clone(), provider, sec_map2.clone()).await;
-                }
-            });
-        }
 
         while let Some(cmd) = cmd_q.pop() {
             match cmd {
                 Command::Subscribe { topic, key } => {
-                    if !backtest_mode {
-                        ensure_vendor(
-                            bus.clone(),
-                            key.provider,
-                            securities_watch.clone(),
-                            securities_by_provider.clone(),
-                        )
-                        .await;
-                    }
                     let _ = bus
                         .handle_request(
                             &sub_id,

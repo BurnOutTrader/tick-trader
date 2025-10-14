@@ -702,6 +702,7 @@ impl BacktestFeeder {
                                         avg_fill_px: Decimal::ZERO,
                                         tag: so.user_tag.clone(),
                                         time: so.ack_at,
+                                        side: so.spec.side,
                                     });
                                     so.ack_emitted = true;
                                 }
@@ -868,6 +869,7 @@ impl BacktestFeeder {
                                             avg_fill_px: cum_avg,
                                             tag: so.user_tag.clone(),
                                             time: so.fill_at,
+                                            side: so.spec.side,
                                         });
                                         // Update working quantity to the leaves and reschedule next attempt
                                         so.spec.qty = leaves;
@@ -886,6 +888,7 @@ impl BacktestFeeder {
                                             avg_fill_px: cum_avg,
                                             tag: so.user_tag.clone(),
                                             time: so.fill_at,
+                                            side: so.spec.side,
                                         });
                                         so.done = true;
                                         finished.push(*oid);
@@ -913,6 +916,7 @@ impl BacktestFeeder {
                                         },
                                         tag: so.user_tag.clone(),
                                         time: at,
+                                        side: so.spec.side,
                                     });
                                     so.done = true;
                                     finished.push(*oid);
@@ -1109,6 +1113,7 @@ impl BacktestFeeder {
                                     avg_fill_px: Decimal::ZERO,
                                     tag: user_tag.clone(),
                                     time: base,
+                                    side: spec.side,
                                 };
                                 let ob = tt_types::wire::OrdersBatch {
                                     topic: Topic::Orders,

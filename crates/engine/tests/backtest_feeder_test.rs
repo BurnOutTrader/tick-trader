@@ -83,7 +83,7 @@ async fn backtest_feeder_emits_candles_to_strategy() -> anyhow::Result<()> {
         .try_init();
 
     // Ensure we can talk to Postgres and the schema exists
-    let db = tt_database::init::pool_from_env()?;
+    let db = tt_database::init::init_db()?;
     tt_database::schema::ensure_schema(&db)
         .await
         .context("ensure_schema")?;

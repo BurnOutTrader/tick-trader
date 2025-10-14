@@ -122,7 +122,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     // Create DB pool from env (Postgres)
-    let db = tt_database::init::pool_from_env()?;
+    let db = tt_database::init::init_db()?;
     ensure_schema(&db).await?;
 
     let end_date = Utc::now().date_naive();

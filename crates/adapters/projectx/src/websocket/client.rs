@@ -1253,6 +1253,14 @@ impl PxWebSocketClient {
                                             EngineUuid::derive_engine_tag(
                                                 order.custom_tag.as_deref(),
                                             );
+                                        let side = match order.side {
+                                            0 => Side::Buy,
+                                            1 => Side::Sell,
+                                            _ => {
+                                                error!("invalid side type for {}", order.side);
+                                                Side::Buy
+                                            }
+                                        };
                                         if let Some(account_name) =
                                             self.accounts_by_id.get(&order.account_id)
                                         {
@@ -1270,6 +1278,7 @@ impl PxWebSocketClient {
                                                 avg_fill_px: avg_px,
                                                 tag: sanitized_user_tag,
                                                 time: ts_dt,
+                                                side,
                                             };
                                             batch.orders.push(ou);
                                         }

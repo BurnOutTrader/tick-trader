@@ -8,7 +8,7 @@ use tokio::task::JoinHandle;
 use tokio::time::{Duration as TokioDuration, timeout};
 use tracing::info;
 use tt_database::ingest::{ingest_bbo, ingest_candles, ingest_ticks};
-use tt_database::init::{Connection, pool_from_env};
+use tt_database::init::{Connection, init_db};
 use tt_database::queries::latest_data_time;
 use tt_types::data::models::Resolution;
 use tt_types::engine_id::EngineUuid;
@@ -109,7 +109,7 @@ impl Default for DownloadManager {
 
 impl DownloadManager {
     pub fn new() -> Self {
-        let db = pool_from_env().unwrap();
+        let db = init_db().unwrap();
         Self {
             inner: std::sync::Arc::new(DownloadManagerInner {
                 inflight: Arc::new(RwLock::new(HashMap::new())),
