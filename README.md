@@ -21,6 +21,7 @@
 
 The engine can place live orders and is intended strictly for testing and evaluation. Do not use in production.
 
+- Portfolio manager is non permanent and will be replaced next.
 - Publish a reference “live test” strategy
 - Surface EngineHandle helpers via top‑level exports
 - Move non-strategy functions and objects into features
