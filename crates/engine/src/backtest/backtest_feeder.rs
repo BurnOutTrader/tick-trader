@@ -38,6 +38,16 @@ pub enum MatchingPolicy {
     LIFO,
 }
 
+#[derive(Clone, Copy)]
+pub enum OrderAckDuringClosedPolicy {
+    /// Reject orders submitted while the session is closed or halted
+    Reject,
+    /// Defer the acknowledgement until the next session open; order is not working until acked
+    DeferAckUntilOpen,
+    /// Acknowledge immediately but defer any fills until the session is open (current behavior)
+    AckButDeferFills,
+}
+
 #[derive(Clone)]
 pub struct BacktestFeederConfig {
     /// Size of prefetch window for each key (e.g., 30 minutes)
@@ -61,6 +71,8 @@ pub struct BacktestFeederConfig {
     pub make_fee: Arc<dyn Fn() -> Box<dyn FeeModel> + Send + Sync>,
     /// Shared session calendar
     pub calendar: Arc<dyn SessionCalendar>,
+    /// Policy for acknowledging orders submitted during session close/halts
+    pub order_ack_closed_policy: OrderAckDuringClosedPolicy,
     /// Trade matching policy for realizing PnL on position reductions
     pub matching_policy: MatchingPolicy,
 }
@@ -82,6 +94,7 @@ impl Default for BacktestFeederConfig {
             make_slippage: Arc::new(|| Box::new(NoSlippage::new())),
             make_fee: Arc::new(|| Box::new(PxFlatFee::new())),
             calendar: Arc::new(HoursCalendar::default()),
+            order_ack_closed_policy: OrderAckDuringClosedPolicy::Reject,
             matching_policy: MatchingPolicy::FIFO,
         }
     }
@@ -1355,8 +1368,57 @@ impl BacktestFeeder {
                             let fee_model = (cfg.make_fee)();
                             let latency_model = (cfg.make_latency)();
 
+                            // Determine effective ack base time according to session state and policy
+                            let is_closed_or_halt = !cal_model.is_open(&spec.instrument, base)
+                                || cal_model.is_halt(&spec.instrument, base);
+                            // Early rejection if policy is Reject during closed/halts
+                            if is_closed_or_halt
+                                && matches!(
+                                    cfg.order_ack_closed_policy,
+                                    OrderAckDuringClosedPolicy::Reject
+                                )
+                            {
+                                let upd = OrderUpdate {
+                                    account_name: spec.account_key.account_name.clone(),
+                                    instrument: spec.instrument.clone(),
+                                    provider_kind: prov,
+                                    provider_order_id: Some(provider_order_id.clone()),
+                                    order_id: engine_order_id,
+                                    state: OrderState::Rejected,
+                                    leaves: 0,
+                                    cum_qty: 0,
+                                    avg_fill_px: Decimal::ZERO,
+                                    tag: user_tag.clone(),
+                                    time: base,
+                                    side: spec.side,
+                                };
+                                let ob = tt_types::wire::OrdersBatch {
+                                    topic: Topic::Orders,
+                                    seq: 0,
+                                    orders: vec![upd],
+                                };
+                                let _ = bus.broadcast(Response::OrdersBatch(ob));
+                                await_ack(&notify).await;
+                                continue;
+                            }
+                            let ack_base = if is_closed_or_halt
+                                && matches!(
+                                    cfg.order_ack_closed_policy,
+                                    OrderAckDuringClosedPolicy::DeferAckUntilOpen
+                                ) {
+                                if let Some(next_open) =
+                                    cal_model.next_open_after(&spec.instrument, base)
+                                {
+                                    next_open
+                                } else {
+                                    base + ChronoDuration::seconds(1)
+                                }
+                            } else {
+                                base
+                            };
+
                             // Schedule ack and (first) fill per latency
-                            let ack_at = base + to_chrono(lat.submit_to_ack());
+                            let ack_at = ack_base + to_chrono(lat.submit_to_ack());
                             let fill_at = ack_at + to_chrono(lat.ack_to_first_fill());
 
                             // Stash order
