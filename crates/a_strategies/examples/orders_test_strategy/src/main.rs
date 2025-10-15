@@ -1,5 +1,5 @@
 use chrono::Utc;
-use rust_decimal::Decimal;
+use rust_decimal::{dec, Decimal};
 use std::str::FromStr;
 use std::time::Duration;
 use tokio::time::sleep;
@@ -20,8 +20,11 @@ use tt_types::wire::{self, OrderType};
 
 use colored::Colorize;
 use std::collections::HashMap;
+use tracing::warn;
 use tt_database::schema::ensure_schema;
+use tt_engine::statics::clock::time_now;
 use tt_engine::statics::order_placement::place_order;
+use tt_engine::statics::portfolio::PORTFOLIOS;
 use tt_engine::statics::subscriptions::subscribe;
 
 struct BacktestOrdersStrategy {
@@ -357,6 +360,17 @@ impl Strategy for BacktestOrdersStrategy {
                     _ => {}
                 }
             }
+            if let Some(portfolio) = PORTFOLIOS.get(&self.account) {
+                let ss = portfolio.positions_snapshot(time_now());
+                println!("{:?}", portfolio.account_delta());
+                for p in ss.positions {
+                    let s = p.to_clean_string();
+                    println!("{}", s.cyan());
+                }
+
+            } else {
+                warn!("No portfolio found: {:?}", &self.account);
+            }
         }
         // Check completion criteria only after all planned test orders have been sent.
         // We place 12 tagged orders between bars 1..=120. Require bar_idx >= 125 (past last placement)
@@ -407,7 +421,7 @@ async fn main() -> anyhow::Result<()> {
     // Configure and start backtest
     let cfg = BacktestConfig::from_to(chrono::Duration::milliseconds(250), start_date, end_date);
     let strategy = BacktestOrdersStrategy::default();
-    start_backtest(db, cfg, strategy).await?;
+    start_backtest(db, cfg, strategy,dec!(150_000)).await?;
 
     // Allow time for data and order lifecycle to flow
     sleep(Duration::from_secs(500)).await;

@@ -37,7 +37,7 @@ impl OrderKey {
     }
 }
 
-pub(crate) static PORTFOLIOS: LazyLock<DashMap<AccountKey, Portfolio>> =
+pub static PORTFOLIOS: LazyLock<DashMap<AccountKey, Portfolio>> =
     LazyLock::new(DashMap::new);
 
 // Global contracts registry: provider -> instrument -> contract
@@ -75,7 +75,7 @@ fn default_account_delta_for(key: &AccountKey, now: DateTime<Utc>) -> AccountDel
         provider_kind: key.provider,
         name: key.account_name.clone(),
         key: key.clone(),
-        equity: Decimal::ZERO,
+        equity: Decimal::from(150_000),
         day_realized_pnl: Decimal::ZERO,
         open_pnl: Decimal::ZERO,
         time: now,

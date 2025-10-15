@@ -1267,7 +1267,7 @@ impl PxWebSocketClient {
                                             self.accounts_by_id.get(&order.account_id)
                                         {
                                             let ou = OrderUpdate {
-                                                name: account_name.clone(),
+                                                account_name: account_name.clone(),
                                                 provider_kind: self.provider_kind,
                                                 instrument,
                                                 provider_order_id: Some(ProviderOrderId(

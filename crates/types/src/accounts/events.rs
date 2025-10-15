@@ -153,7 +153,7 @@ impl Bytes<Self> for AccountEvent {
 #[derive(Debug, Clone, PartialEq, Archive, RkyvDeserialize, RkyvSerialize)]
 #[archive(check_bytes)]
 pub struct OrderUpdate {
-    pub name: AccountName,
+    pub account_name: AccountName,
     pub instrument: Instrument,
     pub provider_kind: ProviderKind,
     pub provider_order_id: Option<ProviderOrderId>,

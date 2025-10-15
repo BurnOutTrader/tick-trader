@@ -175,6 +175,7 @@ impl EngineRuntime {
                                     for t in ticks {
                                         let symbol_key = SymbolKey::new(t.instrument.clone(), provider_kind);
                                         LAST_PRICE.insert(symbol_key, t.price);
+                                        crate::statics::portfolio::apply_mark(provider_kind, &t.instrument, t.price, Utc::now());
                                         strategy.on_tick(&t, provider_kind);
                                         // Drive any consolidators registered for ticks on this key
                                         let key = ConsolidatorKey::new(t.instrument.clone(), provider_kind, Topic::Ticks);
@@ -215,6 +216,7 @@ impl EngineRuntime {
                                         // Use close as mark
                                         let symbol_key = SymbolKey::new(b.instrument.clone(), provider_kind);
                                         LAST_PRICE.insert(symbol_key, b.close);
+                                        crate::statics::portfolio::apply_mark(provider_kind, &b.instrument, b.close, Utc::now());
                                         strategy.on_bar(&b, provider_kind);
                                         // Drive consolidators for incoming candles (candle-to-candle)
                                         let tpc = match b.resolution {
@@ -239,14 +241,41 @@ impl EngineRuntime {
                                     strategy.on_mbp10(&ob.event, ob.provider_kind);
                                 }
                                 Response::OrdersBatch(ob) => {
-                                    // Forward order updates to the strategy. Internal state updates are handled elsewhere.
+                                    // Update portfolios in backtest using order updates; live updates flow via provider events
+                                    if backtest_mode {
+                                        use std::collections::HashMap;
+                                        let mut groups: HashMap<AccountKey, Vec<tt_types::accounts::events::OrderUpdate>> = HashMap::new();
+                                        for o in &ob.orders {
+                                            let key = AccountKey::new(o.provider_kind, o.account_name.clone());
+                                            groups.entry(key).or_default().push(o.clone());
+                                        }
+                                        for (key, orders) in groups {
+                                            let batch = tt_types::wire::OrdersBatch { topic: ob.topic, seq: ob.seq, orders };
+                                            crate::statics::portfolio::apply_orders_batch(key, batch);
+                                        }
+                                    }
+                                    // Forward order updates to the strategy
                                     strategy.on_orders_batch(&ob);
                                 }
-                                Response::PositionsBatch(_pb) => {
-                                    // Positions are recorded internally but not forwarded to strategies.
+                                Response::PositionsBatch(pb) => {
+                                    // Update per-account portfolios from positions snapshot; not forwarded to strategies
+                                    use std::collections::HashMap;
+                                    let topic = pb.topic;
+                                    let seq = pb.seq;
+                                    let mut groups: HashMap<AccountKey, Vec<tt_types::accounts::events::PositionDelta>> = HashMap::new();
+                                    for p in pb.positions.into_iter() {
+                                        let key = AccountKey::new(p.provider_kind, p.account_name.clone());
+                                        groups.entry(key).or_default().push(p);
+                                    }
+                                    let now = Utc::now();
+                                    for (key, positions) in groups {
+                                        let batch = tt_types::wire::PositionsBatch { topic, seq, positions };
+                                        crate::statics::portfolio::apply_positions_batch(key, batch, now);
+                                    }
                                 }
-                                Response::AccountDeltaBatch(_ab) => {
-                                    // Account deltas are recorded internally but not forwarded to strategies.
+                                Response::AccountDeltaBatch(ab) => {
+                                    // Record account deltas into portfolios
+                                    crate::statics::portfolio::apply_account_delta_batch(ab.clone());
                                 }
                                 Response::ClosedTrades(_t) => {
 
@@ -257,6 +286,7 @@ impl EngineRuntime {
                                 } => {
                                     let symbol_key = SymbolKey::new(tick.instrument.clone(), provider_kind);
                                     LAST_PRICE.insert(symbol_key, tick.price);
+                                    crate::statics::portfolio::apply_mark(provider_kind, &tick.instrument, tick.price, Utc::now());
                                     strategy.on_tick(&tick, provider_kind);
                                 }
                                 Response::Quote { bbo, provider_kind } => {

@@ -6,6 +6,7 @@ use std::sync::{
 
 use anyhow::Context;
 use chrono::{Duration as ChronoDuration, NaiveDate};
+use rust_decimal::dec;
 use tokio::sync::oneshot;
 use tokio::time::{Duration, timeout};
 use tracing::info;
@@ -126,7 +127,7 @@ async fn backtest_feeder_emits_candles_to_strategy() -> anyhow::Result<()> {
 
     // Start backtest with the chosen date range
     let cfg = BacktestConfig::from_to(chrono::Duration::minutes(1), start_date, end_date);
-    start_backtest(db, cfg, strategy).await?;
+    start_backtest(db, cfg, strategy, dec!(150_000)).await?;
 
     // Wait until the strategy sees a few bars or timeout
     let wait_res = timeout(Duration::from_secs(10), rx).await;

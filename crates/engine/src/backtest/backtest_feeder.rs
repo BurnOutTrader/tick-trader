@@ -25,6 +25,8 @@ use crate::backtest::realism_models::traits::{
 };
 use crate::client::ClientMessageBus;
 use crate::statics::bus::BUS_CLIENT;
+use crate::statics::clock::CLOCK;
+use crate::statics::portfolio::{Portfolio, PORTFOLIOS};
 
 /// Windowed DB feeder that simulates a provider by emitting Responses over an in-process bus.
 /// It listens for SubscribeKey/UnsubscribeKey requests on a request channel you provide when
@@ -190,6 +192,7 @@ impl BacktestFeeder {
         cfg: BacktestFeederConfig,
         clock: Option<Arc<BacktestClock>>,
         backtest_notify: Option<Arc<Notify>>,
+        account_balance: Decimal
     ) -> anyhow::Result<()> {
         // Create internal request channel for the write loop
         let (req_tx, mut req_rx) = mpsc::channel::<Request>(1024);
@@ -403,6 +406,22 @@ impl BacktestFeeder {
                 while let Ok(req) = req_rx.try_recv() {
                     use tt_types::wire::Request;
                     match req {
+                        Request::SubscribeAccount(req ) => {
+                            if !PORTFOLIOS.contains_key(&req.key) {
+                                let delta = AccountDelta {
+                                    provider_kind: req.key.provider,
+                                    name: req.key.account_name.clone(),
+                                    key: req.key.clone(),
+                                    equity: account_balance,
+                                    day_realized_pnl: Decimal::ZERO,
+                                    open_pnl: Decimal::ZERO,
+                                    time: CLOCK.now_dt(),
+                                    can_trade: true,
+                                };
+                                let account = Portfolio::new(req.key.clone(), delta);
+                                PORTFOLIOS.insert(req.key, account);
+                            }
+                        }
                         Request::InstrumentsMapRequest(req) => {
                             // Fetch contracts map from DB and filter to avoid lookahead bias
                             let provider = req.provider;
@@ -556,10 +575,6 @@ impl BacktestFeeder {
                             });
                             await_ack(&notify).await;
                         }
-                        Request::SubscribeAccount(_sa) => {
-                            // Backtest: no backend; portfolio updates will be driven by our synthetic orders
-                            // We could emit an initial empty snapshot in the future.
-                        }
                         Request::BacktestAdvanceTo(bta) => {
                             // Update watermark and drain events up to this time
                             watermark = Some(bta.to);
@@ -672,7 +687,7 @@ impl BacktestFeeder {
                             for (oid, so) in sim_orders.iter_mut() {
                                 if !so.ack_emitted && now >= so.ack_at {
                                     due.push(OrderUpdate {
-                                        name: so.spec.account_key.account_name.clone(),
+                                        account_name: so.spec.account_key.account_name.clone(),
                                         instrument: so.spec.instrument.clone(),
                                         provider_kind: so.provider,
                                         provider_order_id: Some(so.provider_order_id.clone()),
@@ -840,7 +855,7 @@ impl BacktestFeeder {
                                     if leaves > 0 {
                                         // Emit partial and keep working the remainder
                                         due.push(OrderUpdate {
-                                            name: so.spec.account_key.account_name.clone(),
+                                            account_name: so.spec.account_key.account_name.clone(),
                                             instrument: so.spec.instrument.clone(),
                                             provider_kind: so.provider,
                                             provider_order_id: Some(so.provider_order_id.clone()),
@@ -859,7 +874,7 @@ impl BacktestFeeder {
                                     } else {
                                         // Fully filled
                                         due.push(OrderUpdate {
-                                            name: so.spec.account_key.account_name.clone(),
+                                            account_name: so.spec.account_key.account_name.clone(),
                                             instrument: so.spec.instrument.clone(),
                                             provider_kind: so.provider,
                                             provider_order_id: Some(so.provider_order_id.clone()),
@@ -883,7 +898,7 @@ impl BacktestFeeder {
                                     && now >= at
                                 {
                                     due.push(OrderUpdate {
-                                        name: so.spec.account_key.account_name.clone(),
+                                        account_name: so.spec.account_key.account_name.clone(),
                                         instrument: so.spec.instrument.clone(),
                                         provider_kind: so.provider,
                                         provider_order_id: Some(so.provider_order_id.clone()),
@@ -1076,7 +1091,7 @@ impl BacktestFeeder {
                             if reject {
                                 // Immediately emit a rejected order update with user's original tag
                                 let upd = OrderUpdate {
-                                    name: spec.account_key.account_name.clone(),
+                                    account_name: spec.account_key.account_name.clone(),
                                     instrument: spec.instrument.clone(),
                                     provider_kind: prov,
                                     provider_order_id: Some(provider_order_id.clone()),

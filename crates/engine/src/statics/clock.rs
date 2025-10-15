@@ -13,7 +13,7 @@ pub(crate) static CLOCK: LazyLock<BacktestClock> = LazyLock::new(|| BacktestCloc
 /// # Returns
 /// A `chrono::DateTime<chrono::Utc>` object representing the current
 #[inline]
-pub fn time() -> chrono::DateTime<chrono::Utc> {
+pub fn time_now() -> chrono::DateTime<chrono::Utc> {
     CLOCK.now_dt()
 }
 /// Current engine time in nanoseconds since UNIX_EPOCH.

@@ -6,6 +6,7 @@ use crate::traits::Strategy;
 use anyhow::Result;
 use chrono::{NaiveDate, TimeZone, Utc};
 use std::sync::Arc;
+use rust_decimal::{dec, Decimal};
 use tokio::sync::Notify;
 
 /// Configuration for launching a backtest session.
@@ -74,6 +75,7 @@ pub async fn start_backtest<S: Strategy>(
     conn: tt_database::init::Connection,
     mut cfg: BacktestConfig,
     strategy: S,
+    account_balance: Decimal
 ) -> Result<()> {
     // If the caller specified start/end dates, map them into the feeder's date-time range.
     if cfg.start_date.is_some() || cfg.end_date.is_some() {
@@ -97,6 +99,7 @@ pub async fn start_backtest<S: Strategy>(
         cfg.feeder.clone(),
         cfg.clock.clone(),
         Some(notify.clone()),
+        account_balance
     );
 
     // Create an engine runtime bound to the same bus in backtest mode.
@@ -149,5 +152,5 @@ pub async fn start_backtest_with_dates<S: Strategy>(
 ) -> Result<()> {
     cfg.start_date = Some(start_date);
     cfg.end_date = Some(end_date);
-    start_backtest(conn, cfg, strategy).await
+    start_backtest(conn, cfg, strategy, dec!(150_000)).await
 }
