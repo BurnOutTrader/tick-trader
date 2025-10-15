@@ -443,12 +443,18 @@ impl EngineRuntime {
                                 Response::DbUpdateComplete { .. } => {}
                             }
                             // Flush any pending commands emitted by strategy callbacks.
-                            Self::drain_commands_for_task().await;
-                            // After processing a message in backtest mode, notify feeder so it can proceed to the next one.
+                            let drained = Self::drain_commands_for_task().await;
+                            // After processing a message in backtest mode, notify feeder so it can proceed.
                             if backtest_mode
                                 && let Some(notify) = &backtest_notify_for_task
                             {
+                                // Always notify once to acknowledge the processed message.
                                 notify.notify_one();
+                                // If a single callback enqueued multiple commands, a second notify helps
+                                // avoid potential deadlocks in more complex synchronous flows.
+                                if drained > 1 {
+                                    notify.notify_one();
+                                }
                             }
                         }
                     }
@@ -460,9 +466,10 @@ impl EngineRuntime {
         Ok(())
     }
 
-    async fn drain_commands_for_task() {
+    async fn drain_commands_for_task() -> usize {
         use tt_types::wire::{SubscribeKey, UnsubscribeKey};
         let bus = bus();
+        let mut count = 0usize;
         while let Some(cmd) = CMD_Q.pop() {
             match cmd {
                 Command::Subscribe { topic, key } => {
@@ -474,23 +481,29 @@ impl EngineRuntime {
                             from_seq: 0,
                         }))
                         .await;
+                    count += 1;
                 }
                 Command::Unsubscribe { topic, key } => {
                     let _ = bus
                         .handle_request(Request::UnsubscribeKey(UnsubscribeKey { topic, key }))
                         .await;
+                    count += 1;
                 }
                 Command::Place(spec) => {
                     let _ = bus.handle_request(Request::PlaceOrder(spec)).await;
+                    count += 1;
                 }
                 Command::Cancel(spec) => {
                     let _ = bus.handle_request(Request::CancelOrder(spec)).await;
+                    count += 1;
                 }
                 Command::Replace(spec) => {
                     let _ = bus.handle_request(Request::ReplaceOrder(spec)).await;
+                    count += 1;
                 }
             }
         }
+        count
     }
 
     #[allow(dead_code)]
