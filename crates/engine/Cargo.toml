@@ -23,6 +23,8 @@ crossbeam = { workspace = true }
 sqlx = { workspace = true }
 smallvec = "1.15.1"
 colored = {workspace = true}
+futures-util = {workspace = true}
+tokio-util = {workspace = true}
 
 [[bin]]
 name = "tt-engine-test_strategy"

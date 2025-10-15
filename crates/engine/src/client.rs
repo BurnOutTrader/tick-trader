@@ -1,8 +1,9 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use dashmap::DashMap;
 use std::sync::{atomic::{AtomicU64, Ordering}};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::sync::broadcast::{Receiver, Sender};
+use tracing::error;
 use tt_types::wire::{Request, Response};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -15,7 +16,7 @@ pub struct ClientSubId(pub(crate) u64);
 pub struct ClientMessageBus {
     broadcaster: broadcast::Sender<Response>,
     next_id: AtomicU64,
-    req_tx: mpsc::Sender<Request>,
+    pub(crate) req_tx: mpsc::Sender<Request>,
     next_corr_id: AtomicU64,
     pending: DashMap<u64, oneshot::Sender<Response>>
 }
@@ -31,7 +32,7 @@ impl ClientMessageBus {
         }
     }
 
-    pub async fn add_client(&self) -> Receiver<Response> {
+    pub fn add_client(&self) -> Receiver<Response> {
         self.broadcaster.subscribe()
     }
 
@@ -42,11 +43,20 @@ impl ClientMessageBus {
     }
 
     #[inline]
-    pub(crate) fn send_to(&self, resp: Response) -> Result<()> {
+    pub(crate) fn broadcast(&self, resp: Response) -> Result<()> {
         self.broadcaster.send(resp)?;
         Ok(())
     }
 
+    pub fn route_response(&self, response: Response, cuid: u64) {
+        if let Some(sender) = self.pending.get(&cuid) {
+            if let Err(e) =  sender.value().send(response) {
+                error!("route_response: failed to route response: {}", e);
+            }
+        }
+    }
+
+    #[inline]
     /// Send a correlated request and receive a oneshot Response matching the generated corr_id.
     /// The provided closure constructs the Request given the corr_id.
     pub async fn request_with_corr<F>(&self, make: F) -> oneshot::Receiver<Response>

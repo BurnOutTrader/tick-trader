@@ -26,7 +26,7 @@ use tt_types::accounts::events::{AccountDelta, OrderUpdate, PositionDelta, Provi
 use tt_types::accounts::order::OrderState;
 use tt_types::data::core::Tick;
 use tt_types::data::models::{Price, TradeSide, Volume};
-use tt_types::keys::Topic;
+use tt_types::keys::{AccountKey, Topic};
 use tt_types::providers::{ProjectXTenant, ProviderKind};
 use tt_types::securities::futures_helpers::{extract_month_year, extract_root, sanitize_code};
 use tt_types::securities::symbols::Instrument;
@@ -1159,9 +1159,11 @@ impl PxWebSocketClient {
                                                 continue;
                                             }
                                         };
+                                        let name = AccountName::new(account.name.clone());
                                         let delta = AccountDelta {
                                             provider_kind: self.provider_kind,
-                                            name: AccountName::new(account.name),
+                                            key: AccountKey::new(self.provider_kind, name.clone()),
+                                            name,
                                             equity: balance,
                                             day_realized_pnl: dec!(0),
                                             open_pnl: dec!(0),

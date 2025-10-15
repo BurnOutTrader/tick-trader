@@ -102,7 +102,7 @@ pub async fn start_backtest<S: Strategy>(
 
     // Create an engine runtime bound to the same bus in backtest mode.
     let mut rt =
-        EngineRuntime::new_backtest(feeder.bus.clone(), cfg.slow_spin, Some(notify.clone()));
+        EngineRuntime::new_backtest(cfg.slow_spin, Some(notify.clone()));
 
     // Start the strategy.
     let handle = rt.start(strategy).await?;

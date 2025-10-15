@@ -4,17 +4,15 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BinaryHeap, HashMap, VecDeque};
 use std::sync::Arc;
 use tokio::sync::{Notify, mpsc};
-use tokio::task::JoinHandle;
 use tracing::{info, warn};
-use tt_bus::ClientMessageBus;
 use tt_types::accounts::events::{AccountDelta, OrderUpdate, ProviderOrderId};
 use tt_types::accounts::order::OrderState;
 use tt_types::data::mbp10::BookLevels;
 use tt_types::engine_id::EngineUuid;
-use tt_types::keys::{SymbolKey, Topic};
+use tt_types::keys::{AccountKey, SymbolKey, Topic};
 use tt_types::providers::ProviderKind;
 use tt_types::securities::symbols::Instrument;
-use tt_types::wire::{AccountDeltaBatch, BarBatch, Response};
+use tt_types::wire::{AccountDeltaBatch, BarBatch, Request, Response};
 
 use crate::backtest::backtest_clock::BacktestClock;
 use crate::backtest::realism_models::project_x::calander::HoursCalendar;
@@ -25,6 +23,8 @@ use crate::backtest::realism_models::project_x::slippage::NoSlippage;
 use crate::backtest::realism_models::traits::{
     FeeModel, FillModel, LatencyModel, SessionCalendar, SlippageModel,
 };
+use crate::client::ClientMessageBus;
+use crate::statics::bus::{bus, BUS_CLIENT};
 
 /// Windowed DB feeder that simulates a provider by emitting Responses over an in-process bus.
 /// It listens for SubscribeKey/UnsubscribeKey requests on a request channel you provide when
@@ -191,11 +191,11 @@ impl BacktestFeeder {
         clock: Option<Arc<BacktestClock>>,
         backtest_notify: Option<Arc<Notify>>,
     ) -> anyhow::Result<()> {
-        // Create a request channel the bus will use for outbound requests
-        let (req_tx, mut req_rx) = mpsc::channel::<tt_types::wire::Request>(1024);
-        let bus = ClientMessageBus::new_with_transport(req_tx);
-        let bus_clone = bus.clone();
-
+        // Create internal request channel for the write loop
+        let (req_tx, mut req_rx) = mpsc::channel::<Request>(1024);
+        let bus = ClientMessageBus::new_with_transport(req_tx.clone());
+        BUS_CLIENT.set(bus).expect("DANGER: bus client already initialized in backtest");
+        
         let join = tokio::spawn(async move {
             let notify = backtest_notify;
             async fn await_ack(notify: &Option<Arc<Notify>>) {
@@ -352,9 +352,8 @@ impl BacktestFeeder {
                     _ => panic!("unexpected resolution"),
                 }
             }
-
             async fn emit_one(
-                bus: &Arc<ClientMessageBus>,
+                bus: &ClientMessageBus,
                 tde: &tt_database::queries::TopicDataEnum,
                 provider: ProviderKind,
                 notify: &Option<Arc<Notify>>,
@@ -362,29 +361,26 @@ impl BacktestFeeder {
                 match tde {
                     tt_database::queries::TopicDataEnum::Tick(t) => {
                         let _ = bus
-                            .route_response(Response::Tick {
+                            .broadcast(Response::Tick {
                                 tick: t.clone(),
                                 provider_kind: provider,
-                            })
-                            .await;
+                            });
                         await_ack(notify).await;
                     }
                     tt_database::queries::TopicDataEnum::Bbo(b) => {
                         let _ = bus
-                            .route_response(Response::Quote {
+                            .broadcast(Response::Quote {
                                 bbo: b.clone(),
                                 provider_kind: provider,
-                            })
-                            .await;
+                            });
                         await_ack(notify).await;
                     }
                     tt_database::queries::TopicDataEnum::Mbp10(m) => {
                         let _ = bus
-                            .route_response(Response::Mbp10 {
+                            .broadcast(Response::Mbp10 {
                                 mbp10: m.clone(),
                                 provider_kind: provider,
-                            })
-                            .await;
+                            });
                         await_ack(notify).await;
                     }
                     tt_database::queries::TopicDataEnum::Candle(c) => {
@@ -395,7 +391,7 @@ impl BacktestFeeder {
                             bars: vec![c.clone()],
                             provider_kind: provider,
                         };
-                        let _ = bus.route_response(Response::BarBatch(batch)).await;
+                        let _ = bus.broadcast(Response::BarBatch(batch));
                         await_ack(notify).await;
                     }
                 }
@@ -403,6 +399,7 @@ impl BacktestFeeder {
 
             // Main loop: interleave handling of requests with emitting events in time order
             loop {
+                let bus = BUS_CLIENT.get().unwrap();
                 // 1) Drain any pending requests without blocking
                 while let Ok(req) = req_rx.try_recv() {
                     use tt_types::wire::Request;
@@ -444,9 +441,8 @@ impl BacktestFeeder {
                                         contracts,
                                         corr_id,
                                     };
-                                    let _ = bus_clone
-                                        .route_response(Response::InstrumentsMapResponse(resp))
-                                        .await;
+                                    let _ = bus
+                                        .route_response(Response::InstrumentsMapResponse(resp), corr_id);
                                     await_ack(&notify).await;
                                 }
                                 Err(e) => {
@@ -456,9 +452,8 @@ impl BacktestFeeder {
                                         contracts: Vec::new(),
                                         corr_id,
                                     };
-                                    let _ = bus_clone
-                                        .route_response(Response::InstrumentsMapResponse(resp))
-                                        .await;
+                                    let _ = bus
+                                        .route_response(Response::InstrumentsMapResponse(resp), corr_id);
                                     await_ack(&notify).await;
                                 }
                             }
@@ -468,13 +463,12 @@ impl BacktestFeeder {
                             let instr = skreq.key.instrument.clone();
                             let topic = skreq.topic;
                             let provider = skreq.key.provider;
-                            let _ = bus_clone
-                                .route_response(Response::SubscribeResponse {
+                            let _ = bus
+                                .broadcast(Response::SubscribeResponse {
                                     topic,
                                     instrument: instr.clone(),
                                     success: true,
-                                })
-                                .await;
+                                });
                             await_ack(&notify).await;
 
                             // Determine start time from DB extent (earliest available); fallback to epoch if none
@@ -531,7 +525,7 @@ impl BacktestFeeder {
                                         Ok(map) => {
                                             for (_t, vec) in map.iter() {
                                                 for item in vec {
-                                                    emit_one(&bus_clone, item, provider, &notify)
+                                                    emit_one(bus, item, provider, &notify)
                                                         .await;
                                                 }
                                             }
@@ -541,12 +535,11 @@ impl BacktestFeeder {
                                 }
                             }
                             // Signal warmup complete to the engine/strategy (even if warmup==0)
-                            let _ = bus_clone
-                                .route_response(Response::WarmupComplete {
+                            let _ = bus
+                                .broadcast(Response::WarmupComplete {
                                     topic,
                                     instrument: instr.clone(),
-                                })
-                                .await;
+                                });
                             await_ack(&notify).await;
                             // Prime first window after start
                             ks.cursor = start;
@@ -557,12 +550,11 @@ impl BacktestFeeder {
                         Request::UnsubscribeKey(ureq) => {
                             keys.remove(&(ureq.topic, ureq.key.clone()));
                             // No specific unsubscribe response in wire; engine will see UnsubscribeResponse only from server in live.
-                            let _ = bus_clone
-                                .route_response(Response::UnsubscribeResponse {
+                            let _ = bus
+                                .broadcast(Response::UnsubscribeResponse {
                                     topic: ureq.topic,
                                     instrument: ureq.key.instrument.clone(),
-                                })
-                                .await;
+                                });
                             await_ack(&notify).await;
                         }
                         Request::SubscribeAccount(_sa) => {
@@ -646,7 +638,7 @@ impl BacktestFeeder {
                                                     }
                                                 }
                                             }
-                                            emit_one(&bus_clone, &item, ks.provider, &notify).await;
+                                            emit_one(&bus, &item, ks.provider, &notify).await;
                                         }
                                         if t > ks.cursor {
                                             ks.cursor = t;
@@ -953,7 +945,7 @@ impl BacktestFeeder {
                                     seq: 0,
                                     orders: due,
                                 };
-                                let _ = bus_clone.route_response(Response::OrdersBatch(ob)).await;
+                                let _ = bus.route_response(Response::OrdersBatch(ob)).await;
                                 await_ack(&notify).await;
                             }
                             // Emit account snapshots for any accounts updated by fees this tick
@@ -977,7 +969,7 @@ impl BacktestFeeder {
                                         seq: 0,
                                         accounts: accounts_vec,
                                     };
-                                    let _ = bus_clone
+                                    let _ = bus
                                         .route_response(Response::AccountDeltaBatch(ab))
                                         .await;
                                     await_ack(&notify).await;
@@ -1009,7 +1001,7 @@ impl BacktestFeeder {
                                         seq: 0,
                                         positions: positions_vec,
                                     };
-                                    let _ = bus_clone
+                                    let _ = bus
                                         .route_response(Response::PositionsBatch(pb))
                                         .await;
                                     await_ack(&notify).await;
@@ -1021,7 +1013,7 @@ impl BacktestFeeder {
                                 }
                             }
                             // After draining up to watermark (and emitting due orders), notify runtime of logical time
-                            let _ = bus_clone
+                            let _ = bus
                                 .route_response(Response::BacktestTimeUpdated { now })
                                 .await;
                             await_ack(&notify).await;
@@ -1030,7 +1022,7 @@ impl BacktestFeeder {
                                 && let Some(end) = cfg.range_end
                                 && now >= end
                             {
-                                let _ = bus_clone
+                                let _ = bus
                                     .route_response(Response::BacktestCompleted { end })
                                     .await;
                                 await_ack(&notify).await;
@@ -1110,7 +1102,7 @@ impl BacktestFeeder {
                                     seq: 0,
                                     orders: vec![upd],
                                 };
-                                let _ = bus_clone.route_response(Response::OrdersBatch(ob)).await;
+                                let _ = bus.route_response(Response::OrdersBatch(ob)).await;
                                 await_ack(&notify).await;
                                 continue;
                             }
@@ -1166,6 +1158,7 @@ impl BacktestFeeder {
                                 .or_insert(AccountDelta {
                                     provider_kind: prov,
                                     name: acct_name.clone(),
+                                    key: AccountKey::new(prov, acct_name.clone()),
                                     equity: Decimal::ZERO,
                                     day_realized_pnl: Decimal::ZERO,
                                     open_pnl: Decimal::ZERO,
@@ -1281,7 +1274,7 @@ impl BacktestFeeder {
                                         }
                                     }
                                 }
-                                emit_one(&bus_clone, &item, ks.provider, &notify).await;
+                                emit_one(bus, &item, ks.provider, &notify).await;
                             }
                             // Move cursor up to at least this t
                             if t > ks.cursor {

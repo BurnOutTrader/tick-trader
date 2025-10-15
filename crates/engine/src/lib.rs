@@ -6,4 +6,5 @@ pub mod runtime;
 pub mod stats;
 pub mod traits;
 pub mod functions;
-mod statics;
+pub(crate)mod statics;
+pub(crate) mod client;

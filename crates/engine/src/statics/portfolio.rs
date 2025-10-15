@@ -284,35 +284,7 @@ impl Portfolio {
     /// Applies updates and returns possibly adjusted responses.
     pub fn process_response(&self, resp: Response, now: DateTime<Utc>) -> Response {
         match resp {
-            Response::MBP10Batch(ob) => {
-                let ev = &ob.event;
-                let mark = if let Some(book) = &ev.book {
-                    if let (Some(b0), Some(a0)) = (book.bid_px.first(), book.ask_px.first()) {
-                        (*b0 + *a0) / Decimal::from(2)
-                    } else {
-                        ev.price
-                    }
-                } else {
-                    ev.price
-                };
-                self.update_apply_last_price(&ev.instrument, mark, now);
-                Response::MBP10Batch(ob)
-            }
-            Response::QuoteBatch(qb) => {
-                for q in &qb.quotes {
-                    let mark = if !q.bid.is_zero() && !q.ask.is_zero() {
-                        (q.bid + q.ask) / Decimal::from(2)
-                    } else if !q.bid.is_zero() {
-                        q.bid
-                    } else if !q.ask.is_zero() {
-                        q.ask
-                    } else {
-                        continue;
-                    };
-                    self.update_apply_last_price(&q.instrument, mark, now);
-                }
-                Response::QuoteBatch(qb)
-            }
+            //todo, we no longer process raw data here, instead we just update open pnl if someone asks for an item in the portfolio and on creation and destruction to log stats
             Response::OrdersBatch(ob) => {
                 self.apply_orders_batch(ob.clone());
                 Response::OrdersBatch(ob)
