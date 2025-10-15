@@ -4,7 +4,6 @@ use crate::statics::consolidators::CONSOLIDATORS;
 use crate::statics::core::{LAST_ASK, LAST_BID, LAST_PRICE};
 use crate::statics::subscriptions::CMD_Q;
 use crate::traits::Strategy;
-use chrono::Utc;
 use dashmap::DashMap;
 use smallvec::SmallVec;
 use std::sync::Arc;
@@ -176,7 +175,7 @@ impl EngineRuntime {
                                     for t in ticks {
                                         let symbol_key = SymbolKey::new(t.instrument.clone(), provider_kind);
                                         LAST_PRICE.insert(symbol_key, t.price);
-                                        crate::statics::portfolio::apply_mark(provider_kind, &t.instrument, t.price, crate::statics::clock::time_now());
+                                        crate::statics::portfolio::apply_mark(provider_kind, &t.instrument, t.price, t.time);
                                         strategy.on_tick(&t, provider_kind);
                                         // Drive any consolidators registered for ticks on this key
                                         let key = ConsolidatorKey::new(t.instrument.clone(), provider_kind, Topic::Ticks);
@@ -217,7 +216,7 @@ impl EngineRuntime {
                                         // Use close as mark
                                         let symbol_key = SymbolKey::new(b.instrument.clone(), provider_kind);
                                         LAST_PRICE.insert(symbol_key, b.close);
-                                        crate::statics::portfolio::apply_mark(provider_kind, &b.instrument, b.close, crate::statics::clock::time_now());
+                                        crate::statics::portfolio::apply_mark(provider_kind, &b.instrument, b.close, b.time_end);
                                         strategy.on_bar(&b, provider_kind);
                                         // Drive consolidators for incoming candles (candle-to-candle)
                                         let tpc = match b.resolution {
@@ -287,7 +286,7 @@ impl EngineRuntime {
                                 } => {
                                     let symbol_key = SymbolKey::new(tick.instrument.clone(), provider_kind);
                                     LAST_PRICE.insert(symbol_key, tick.price);
-                                    crate::statics::portfolio::apply_mark(provider_kind, &tick.instrument, tick.price, crate::statics::clock::time_now());
+                                    crate::statics::portfolio::apply_mark(provider_kind, &tick.instrument, tick.price, tick.time);
                                     strategy.on_tick(&tick, provider_kind);
                                 }
                                 Response::Quote { bbo, provider_kind } => {
@@ -302,6 +301,7 @@ impl EngineRuntime {
                                 } => {
                                     let symbol_key = SymbolKey::new(candle.instrument.clone(), provider_kind);
                                     LAST_PRICE.insert(symbol_key, candle.close);
+                                    crate::statics::portfolio::apply_mark(provider_kind, &candle.instrument, candle.close, candle.time_end);
                                     strategy.on_bar(&candle, provider_kind);
                                 }
                                 Response::Mbp10 {
