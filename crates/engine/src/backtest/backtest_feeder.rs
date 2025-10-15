@@ -482,11 +482,24 @@ impl BacktestFeeder {
                                 if let Ok(map) =
                                     tt_database::queries::get_contracts_map(&conn, provider).await
                                 {
-                                    if let std::collections::hash_map::Entry::Vacant(e) =
-                                        contracts_cache.entry(provider)
-                                    {
-                                        e.insert(map);
+                                    // Filter out contracts that would not yet be known at cutoff time
+                                    let cutoff_naive = cutoff_dt.date_naive();
+                                    let mut filtered: Vec<FuturesContract> = map
+                                        .into_values()
+                                        .filter(|fc| fc.activation_date <= cutoff_naive)
+                                        .collect();
+                                    // Initialize global CONTRACTS map used by Portfolio/open PnL
+                                    crate::statics::portfolio::initialize_contracts(
+                                        provider,
+                                        filtered.clone(),
+                                    );
+                                    // Also prime the local contracts cache for tick conversion
+                                    let mut amap: ahash::AHashMap<Instrument, FuturesContract> =
+                                        ahash::AHashMap::new();
+                                    for c in filtered.drain(..) {
+                                        amap.insert(c.instrument.clone(), c);
                                     }
+                                    contracts_cache.insert(provider, amap);
                                 }
                             }
                         }

@@ -240,9 +240,24 @@ pub async fn replace_order(spec: tt_types::wire::ReplaceOrder) -> anyhow::Result
 pub async fn activate_account_interest(key: tt_types::keys::AccountKey) -> anyhow::Result<()> {
     crate::statics::bus::bus()
         .handle_request(tt_types::wire::Request::SubscribeAccount(
-            tt_types::wire::SubscribeAccount { key },
+            tt_types::wire::SubscribeAccount { key: key.clone() },
         ))
         .await?;
+
+    // Initialize contracts for this provider at account activation to enable open PnL calculations
+    match get_instruments_map(key.provider).await {
+        Ok(contracts) => {
+            if !contracts.is_empty() {
+                crate::statics::portfolio::initialize_contracts(key.provider, contracts);
+            } else {
+                // No contracts returned; leave as-is
+            }
+        }
+        Err(e) => {
+            warn!(provider = ?key.provider, error = ?e, "failed to initialize contracts on account activation");
+        }
+    }
+
     Ok(())
 }
 
