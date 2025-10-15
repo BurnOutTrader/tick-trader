@@ -1,7 +1,7 @@
 use ahash::AHashMap;
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
-use rust_decimal::{Decimal, dec};
+use rust_decimal::Decimal;
 use std::sync::{LazyLock, RwLock};
 use tt_types::accounts::account::AccountName;
 use tt_types::accounts::events::{
@@ -387,9 +387,18 @@ impl Portfolio {
             let mut pd = p.clone();
             pd.provider_kind = self.provider();
 
-            // Update open pnl if we have a last price
+            // Ensure side is coherent with net_qty to avoid stale values from providers
+            pd.side = if pd.net_qty.is_zero() {
+                PositionSide::Flat
+            } else if pd.net_qty > Decimal::ZERO {
+                PositionSide::Long
+            } else {
+                PositionSide::Short
+            };
+
+            // Update open pnl if we have a last price using signed quantity (side implied)
             if let Some(new_open) =
-                self.compute_open_pnl(&pd.instrument, pd.average_price, pd.net_qty, pd.side)
+                self.compute_open_pnl(&pd.instrument, pd.average_price, pd.net_qty)
             {
                 pd.open_pnl = new_open;
             }
@@ -428,8 +437,7 @@ impl Portfolio {
 
         if let Some(mut pd_ref) = self.positions.get_mut(instrument) {
             let pd = pd_ref.value_mut();
-            if let Some(new_open) =
-                self.compute_open_pnl(instrument, pd.average_price, pd.net_qty, pd.side)
+            if let Some(new_open) = self.compute_open_pnl(instrument, pd.average_price, pd.net_qty)
             {
                 pd.open_pnl = new_open;
             }
@@ -446,12 +454,12 @@ impl Portfolio {
     // ===== Helpers =====
 
     /// Compute open PnL using last mark, tick_size and value_per_tick for the single provider.
+    /// Sign is derived solely from qty: positive = long, negative = short.
     fn compute_open_pnl(
         &self,
         instr: &Instrument,
         avg_px: Decimal,
         qty: Decimal,
-        side: PositionSide,
     ) -> Option<Decimal> {
         if let Some(contract_map) = CONTRACTS.get(&self.provider())
             && let Some(contract) = contract_map.get(instr)
@@ -460,11 +468,7 @@ impl Portfolio {
             let tick_size = contract.tick_size;
             let value_per_tick = contract.value_per_tick;
             let lp = *last_price.value();
-            return match side {
-                PositionSide::Long => Some(((lp - avg_px) / tick_size) * value_per_tick * qty),
-                PositionSide::Short => Some(((avg_px - lp) / tick_size) * value_per_tick * qty),
-                PositionSide::Flat => Some(dec!(0)),
-            };
+            return Some(((lp - avg_px) / tick_size) * value_per_tick * qty);
         }
         None
     }
@@ -526,7 +530,7 @@ impl Portfolio {
             let mut pd = p.value().clone();
 
             if let Some(new_open) =
-                self.compute_open_pnl(&pd.instrument, pd.average_price, pd.net_qty, pd.side)
+                self.compute_open_pnl(&pd.instrument, pd.average_price, pd.net_qty)
             {
                 pd.open_pnl = new_open;
             }
@@ -579,8 +583,7 @@ impl Portfolio {
     /// Adjust a PositionsBatch by recomputing open_pnl using last known marks (pure transform).
     pub fn adjust_positions_batch_open_pnl(&self, mut batch: PositionsBatch) -> PositionsBatch {
         for p in batch.positions.iter_mut() {
-            if let Some(new_open) =
-                self.compute_open_pnl(&p.instrument, p.average_price, p.net_qty, p.side)
+            if let Some(new_open) = self.compute_open_pnl(&p.instrument, p.average_price, p.net_qty)
             {
                 p.open_pnl = new_open;
             }
