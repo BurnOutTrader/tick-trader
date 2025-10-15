@@ -290,8 +290,10 @@ impl BacktestFeeder {
                 VecDeque<Lot>,
             > = HashMap::new();
             // Contracts cache for tick conversion
-            let mut contracts_cache: HashMap<ProviderKind, HashMap<Instrument, FuturesContract>> =
-                HashMap::new();
+            let mut contracts_cache: HashMap<
+                ProviderKind,
+                ahash::AHashMap<Instrument, FuturesContract>,
+            > = HashMap::new();
 
             // Active subscriptions
             let mut keys: HashMap<(Topic, SymbolKey), KeyState> = HashMap::new();
@@ -448,7 +450,31 @@ impl BacktestFeeder {
                                     can_trade: true,
                                 };
                                 let account = Portfolio::new(req.key.clone(), delta);
-                                PORTFOLIOS.insert(req.key, account);
+                                PORTFOLIOS.insert(req.key.clone(), account);
+
+                                // On account initialization, load contracts for this provider from DB and
+                                // initialize the global CONTRACTS map used by portfolio/open PnL, and also
+                                // prime the local contracts cache for tick conversion.
+                                let provider = req.key.provider;
+                                // Determine cutoff time as in InstrumentsMapRequest to avoid lookahead bias
+                                let cutoff_dt = if let Some(dt) = cfg.range_start {
+                                    dt
+                                } else if let Some(ref clk) = clock {
+                                    clk.now_dt()
+                                } else {
+                                    Utc.timestamp_opt(0, 0).unwrap()
+                                };
+                                let _cutoff_naive = cutoff_dt.date_naive();
+                                #[allow(clippy::collapsible_if)]
+                                if let Ok(map) =
+                                    tt_database::queries::get_contracts_map(&conn, provider).await
+                                {
+                                    if let std::collections::hash_map::Entry::Vacant(e) =
+                                        contracts_cache.entry(provider)
+                                    {
+                                        e.insert(map);
+                                    }
+                                }
                             }
                         }
                         Request::InstrumentsMapRequest(req) => {
@@ -815,19 +841,14 @@ impl BacktestFeeder {
                                         // Ensure contracts cache for this provider (for tick conversion)
                                         if let std::collections::hash_map::Entry::Vacant(e) =
                                             contracts_cache.entry(so.provider)
-                                        && let Ok(map) =
-                                            tt_database::queries::get_contracts_map(
-                                                &conn,
-                                                so.provider,
-                                            )
-                                            .await
+                                            && let Ok(map) =
+                                                tt_database::queries::get_contracts_map(
+                                                    &conn,
+                                                    so.provider,
+                                                )
+                                                .await
                                         {
-                                            let mut imap: HashMap<Instrument, FuturesContract> =
-                                                HashMap::new();
-                                            for fc in map.into_values() {
-                                                imap.insert(fc.instrument.clone(), fc);
-                                            }
-                                            e.insert(imap);
+                                            e.insert(map);
                                         }
 
                                         let (tick_size, value_per_tick) = if let Some(imap) =
