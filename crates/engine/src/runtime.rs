@@ -1,54 +1,41 @@
-use crate::engine::EngineAccountsState;
 use crate::models::{Command, DataTopic};
 use crate::statics::bus::{bus, initialize_accounts};
-use crate::statics::clock::CLOCK;
 use crate::statics::consolidators::CONSOLIDATORS;
 use crate::statics::core::{LAST_ASK, LAST_BID, LAST_PRICE};
-use crate::statics::portfolio::{PORTFOLIOS, Portfolio};
 use crate::statics::subscriptions::CMD_Q;
 use crate::traits::Strategy;
-use ahash::AHashMap;
 use chrono::Utc;
 use dashmap::DashMap;
 use smallvec::SmallVec;
-use std::clone;
-use std::future::pending;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc};
 use std::time::Duration;
-use tokio::sync::{Notify, mpsc};
+use tokio::sync::{Notify};
 use tokio::task::JoinHandle;
 use tracing::error;
 use tracing::info;
 use tt_types::consolidators::ConsolidatorKey;
 use tt_types::data::core::Candle;
 use tt_types::data::core::{Bbo, Tick};
-use tt_types::data::mbp10::{Action, Mbp10};
+use tt_types::data::mbp10::{Mbp10};
 use tt_types::keys::{AccountKey, SymbolKey, Topic};
 use tt_types::providers::ProviderKind;
-use tt_types::securities::security::FuturesContract;
 use tt_types::securities::symbols::Instrument;
-use tt_types::wire::Bytes;
+use tt_types::wire::{Bytes, QuoteBatch};
 use tt_types::wire::{
-    BarBatch, InstrumentsMapRequest, Kick, OrdersBatch, PositionsBatch, QuoteBatch, Request,
+    BarBatch, Request,
     Response, TickBatch,
 };
 
 pub struct EngineRuntime {
     backtest_mode: bool,
     backtest_notify: Option<Arc<Notify>>,
-    rx: Option<mpsc::Receiver<Response>>,
     task: Option<tokio::task::JoinHandle<()>>,
-    state: Arc<EngineAccountsState>,
     // Vendor securities cache and watchers
-    securities_by_provider: Arc<DashMap<ProviderKind, AHashMap<Instrument, FuturesContract>>>,
-    watching_providers: Arc<DashMap<ProviderKind, ()>>,
     // Active SHM polling tasks keyed by (topic,key)
     shm_tasks: Arc<DashMap<(Topic, SymbolKey), tokio::task::JoinHandle<()>>>,
     // Keys for which SHM has been disabled due to fatal errors; fall back to UDS frames per-strategy
     shm_blacklist: Arc<DashMap<(Topic, SymbolKey), ()>>,
     slow_spin_ns: Option<u64>,
-    consolidators:
-        Arc<DashMap<ConsolidatorKey, Box<dyn tt_types::consolidators::Consolidator + Send>>>,
 }
 
 impl EngineRuntime {
@@ -58,23 +45,13 @@ impl EngineRuntime {
     /// - bus: Connected ClientMessageBus used for all requests and streaming responses.
     /// - slow_spin: Optional nanos to sleep when polling SHM without new data (to avoid tight loops).
     pub fn new(slow_spin: Option<u64>) -> Self {
-        let instruments = Arc::new(DashMap::new());
         Self {
             backtest_mode: false,
             backtest_notify: None,
-            rx: None,
             task: None,
-            state: Arc::new(EngineAccountsState {
-                last_orders: Arc::new(RwLock::new(None)),
-                last_positions: Arc::new(RwLock::new(None)),
-                last_accounts: Arc::new(RwLock::new(None)),
-            }),
-            securities_by_provider: instruments.clone(),
-            watching_providers: Arc::new(DashMap::new()),
             shm_tasks: Arc::new(DashMap::new()),
             shm_blacklist: Arc::new(DashMap::new()),
             slow_spin_ns: slow_spin,
-            consolidators: Arc::new(DashMap::new()),
         }
     }
 
@@ -274,7 +251,7 @@ impl EngineRuntime {
                                 Response::AccountDeltaBatch(_ab) => {
                                     // Account deltas are recorded internally but not forwarded to strategies.
                                 }
-                                Response::ClosedTrades(t) => {
+                                Response::ClosedTrades(_t) => {
 
                                 }
                                 Response::Tick {

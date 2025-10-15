@@ -3,7 +3,6 @@ use rust_decimal::Decimal;
 use std::str::FromStr;
 use std::time::Duration;
 use tokio::time::sleep;
-use tracing::info;
 use tracing::level_filters::LevelFilter;
 
 use tt_engine::backtest::orchestrator::{BacktestConfig, start_backtest};
@@ -11,14 +10,13 @@ use tt_engine::models::DataTopic;
 use tt_engine::traits::Strategy;
 
 use tt_types::accounts::account::AccountName;
-use tt_types::accounts::events::AccountDelta;
 use tt_types::data::core::Candle;
 use tt_types::data::mbp10::Mbp10;
 use tt_types::keys::{AccountKey, SymbolKey};
 use tt_types::providers::{ProjectXTenant, ProviderKind};
 use tt_types::rolling_window::RollingWindow;
 use tt_types::securities::symbols::Instrument;
-use tt_types::wire::{self, OrderType, Trade};
+use tt_types::wire::{self, OrderType};
 
 use colored::Colorize;
 use std::collections::HashMap;

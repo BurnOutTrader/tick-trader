@@ -74,7 +74,7 @@ pub async fn start_backtest<S: Strategy>(
     conn: tt_database::init::Connection,
     mut cfg: BacktestConfig,
     strategy: S,
-) -> Result<(())> {
+) -> Result<()> {
     // If the caller specified start/end dates, map them into the feeder's date-time range.
     if cfg.start_date.is_some() || cfg.end_date.is_some() {
         if let Some(sd) = cfg.start_date {
@@ -92,7 +92,7 @@ pub async fn start_backtest<S: Strategy>(
 
     let notify = Arc::new(Notify::new());
     // Start the DB-backed feeder which gives us an in-process bus.
-    let feeder = BacktestFeeder::start_with_db(
+    let _ = BacktestFeeder::start_with_db(
         conn,
         cfg.feeder.clone(),
         cfg.clock.clone(),
@@ -103,7 +103,7 @@ pub async fn start_backtest<S: Strategy>(
     let mut rt = EngineRuntime::new_backtest(cfg.slow_spin, Some(notify.clone()));
 
     // Start the strategy.
-    let handle = rt.start(strategy, true).await?;
+    let _ = rt.start(strategy, true).await?;
 
     // Validate step > 0 and spawn orchestrator loop to advance time in discrete steps.
     if cfg.step <= chrono::Duration::zero() {
@@ -146,7 +146,7 @@ pub async fn start_backtest_with_dates<S: Strategy>(
     strategy: S,
     start_date: NaiveDate,
     end_date: NaiveDate,
-) -> Result<(())> {
+) -> Result<()> {
     cfg.start_date = Some(start_date);
     cfg.end_date = Some(end_date);
     start_backtest(conn, cfg, strategy).await

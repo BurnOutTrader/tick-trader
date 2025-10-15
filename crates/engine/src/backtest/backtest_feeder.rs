@@ -24,7 +24,7 @@ use crate::backtest::realism_models::traits::{
     FeeModel, FillModel, LatencyModel, SessionCalendar, SlippageModel,
 };
 use crate::client::ClientMessageBus;
-use crate::statics::bus::{BUS_CLIENT, bus};
+use crate::statics::bus::BUS_CLIENT;
 
 /// Windowed DB feeder that simulates a provider by emitting Responses over an in-process bus.
 /// It listens for SubscribeKey/UnsubscribeKey requests on a request channel you provide when
@@ -198,7 +198,7 @@ impl BacktestFeeder {
             .set(bus)
             .expect("DANGER: bus client already initialized in backtest");
 
-        let join = tokio::spawn(async move {
+        let _ = tokio::spawn(async move {
             let notify = backtest_notify;
             async fn await_ack(notify: &Option<Arc<Notify>>) {
                 if let Some(n) = notify {

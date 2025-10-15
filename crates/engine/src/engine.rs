@@ -5,13 +5,12 @@ use ahash::AHashMap;
 use anyhow::anyhow;
 use sqlx::{Pool, Postgres};
 use std::collections::VecDeque;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use tracing::info;
 use tt_types::keys::{SymbolKey, Topic};
 use tt_types::server_side::traits::{MarketDataProvider, ProbeStatus, ProviderParams};
-use tt_types::wire::{AccountDeltaBatch, OrdersBatch, PositionsBatch};
 
 #[allow(dead_code)]
 #[derive(Default)]
@@ -175,10 +174,4 @@ impl<P: MarketDataProvider + 'static> Engine<P> {
             ring.pop_front();
         }
     }
-}
-
-pub(crate) struct EngineAccountsState {
-    pub(crate) last_orders: Arc<RwLock<Option<OrdersBatch>>>,
-    pub(crate) last_positions: Arc<RwLock<Option<PositionsBatch>>>,
-    pub(crate) last_accounts: Arc<RwLock<Option<AccountDeltaBatch>>>,
 }
