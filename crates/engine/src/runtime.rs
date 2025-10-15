@@ -108,6 +108,8 @@ impl EngineRuntime {
         info!("engine: invoking strategy.on_start");
         strategy.on_start();
         info!("engine: strategy.on_start returned");
+        // Flush any pending commands that on_start may have enqueued.
+        Self::drain_commands_for_task().await;
         // Auto-subscribe to account streams declared by the strategy, if any.
         // We lock briefly to fetch the list, then drop before awaiting network calls.
         let accounts_to_init: Vec<AccountKey> = strategy.accounts();
@@ -436,6 +438,8 @@ impl EngineRuntime {
                                 | Response::AccountInfoResponse(_) => {}
                                 Response::DbUpdateComplete { .. } => {}
                             }
+                            // Flush any pending commands emitted by strategy callbacks.
+                            Self::drain_commands_for_task().await;
                             // After processing a message in backtest mode, notify feeder so it can proceed to the next one.
                             if backtest_mode {
                                 if let Some(notify) = &backtest_notify_for_task {
