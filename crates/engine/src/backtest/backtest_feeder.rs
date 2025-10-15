@@ -11,8 +11,8 @@ use tt_types::data::mbp10::BookLevels;
 use tt_types::engine_id::EngineUuid;
 use tt_types::keys::{AccountKey, SymbolKey, Topic};
 use tt_types::providers::ProviderKind;
-use tt_types::securities::symbols::Instrument;
 use tt_types::securities::security::FuturesContract;
+use tt_types::securities::symbols::Instrument;
 use tt_types::wire::{AccountDeltaBatch, BarBatch, Request, Response};
 
 use crate::backtest::backtest_clock::BacktestClock;
@@ -224,7 +224,7 @@ impl BacktestFeeder {
                 side: tt_types::accounts::events::Side,
                 qty: i64, // unsigned logical quantity per exchange conventions (positive)
                 price: Decimal,
-                time: DateTime<Utc>,
+                _time: DateTime<Utc>,
             }
             struct SimOrder {
                 spec: tt_types::wire::PlaceOrder,
@@ -794,11 +794,13 @@ impl BacktestFeeder {
                                     // Update positions via lots matching and realize PnL when reducing
                                     for f in &fills {
                                         let acct_name = so.spec.account_key.account_name.clone();
-                                        let key = (so.provider, acct_name.clone(), f.instrument.clone());
+                                        let key =
+                                            (so.provider, acct_name.clone(), f.instrument.clone());
 
                                         // Ensure a positions entry exists for snapshots
-                                        let _pos_entry = positions_ledger.entry(key.clone()).or_insert(
-                                            tt_types::accounts::events::PositionDelta {
+                                        let _pos_entry = positions_ledger
+                                            .entry(key.clone())
+                                            .or_insert(tt_types::accounts::events::PositionDelta {
                                                 instrument: f.instrument.clone(),
                                                 account_name: acct_name.clone(),
                                                 provider_kind: so.provider,
@@ -806,20 +808,32 @@ impl BacktestFeeder {
                                                 average_price: Decimal::ZERO,
                                                 open_pnl: Decimal::ZERO,
                                                 time: now,
-                                                side: tt_types::accounts::events::PositionSide::Flat,
-                                            },
-                                        );
+                                                side:
+                                                    tt_types::accounts::events::PositionSide::Flat,
+                                            });
 
                                         // Ensure contracts cache for this provider (for tick conversion)
-                                        if !contracts_cache.contains_key(&so.provider) {
-                                            if let Ok(map) = tt_database::queries::get_contracts_map(&conn, so.provider).await {
-                                                let mut imap: HashMap<Instrument, FuturesContract> = HashMap::new();
-                                                for fc in map.into_values() { imap.insert(fc.instrument.clone(), fc); }
-                                                contracts_cache.insert(so.provider, imap);
+                                        if let std::collections::hash_map::Entry::Vacant(e) =
+                                            contracts_cache.entry(so.provider)
+                                        && let Ok(map) =
+                                            tt_database::queries::get_contracts_map(
+                                                &conn,
+                                                so.provider,
+                                            )
+                                            .await
+                                        {
+                                            let mut imap: HashMap<Instrument, FuturesContract> =
+                                                HashMap::new();
+                                            for fc in map.into_values() {
+                                                imap.insert(fc.instrument.clone(), fc);
                                             }
+                                            e.insert(imap);
                                         }
-                                        let (tick_size, value_per_tick) = if let Some(imap) = contracts_cache.get(&so.provider)
-                                            && let Some(fc) = imap.get(&f.instrument) {
+
+                                        let (tick_size, value_per_tick) = if let Some(imap) =
+                                            contracts_cache.get(&so.provider)
+                                            && let Some(fc) = imap.get(&f.instrument)
+                                        {
                                             (fc.tick_size, fc.value_per_tick)
                                         } else {
                                             (Decimal::ONE, Decimal::ONE)
@@ -832,7 +846,9 @@ impl BacktestFeeder {
                                         // Determine if this fill reduces existing exposure (opposite sign)
                                         let reduces = if let Some(front) = deque.front() {
                                             front.side != fill_side
-                                        } else { false };
+                                        } else {
+                                            false
+                                        };
 
                                         let mut remaining = f.qty;
                                         let mut realized_this_fill = Decimal::ZERO;
@@ -860,13 +876,21 @@ impl BacktestFeeder {
                                                         }
                                                     }
                                                 }
-                                                let matched = if remaining < available { remaining } else { available };
+                                                let matched = if remaining < available {
+                                                    remaining
+                                                } else {
+                                                    available
+                                                };
 
                                                 // Compute realized pnl in contract currency
                                                 let matched_dec = Decimal::from(matched);
                                                 let ticks = match lot_side {
-                                                    tt_types::accounts::events::Side::Buy => (f.price - lot_px) / tick_size,
-                                                    tt_types::accounts::events::Side::Sell => (lot_px - f.price) / tick_size,
+                                                    tt_types::accounts::events::Side::Buy => {
+                                                        (f.price - lot_px) / tick_size
+                                                    }
+                                                    tt_types::accounts::events::Side::Sell => {
+                                                        (lot_px - f.price) / tick_size
+                                                    }
                                                 };
                                                 let pnl = ticks * value_per_tick * matched_dec;
                                                 realized_this_fill += pnl;
@@ -892,13 +916,17 @@ impl BacktestFeeder {
                                                     MatchingPolicy::FIFO => {
                                                         if let Some(lot) = deque.front_mut() {
                                                             lot.qty -= matched;
-                                                            if lot.qty == 0 { deque.pop_front(); }
+                                                            if lot.qty == 0 {
+                                                                deque.pop_front();
+                                                            }
                                                         }
                                                     }
                                                     MatchingPolicy::LIFO => {
                                                         if let Some(lot) = deque.back_mut() {
                                                             lot.qty -= matched;
-                                                            if lot.qty == 0 { deque.pop_back(); }
+                                                            if lot.qty == 0 {
+                                                                deque.pop_back();
+                                                            }
                                                         }
                                                     }
                                                 }
@@ -906,28 +934,41 @@ impl BacktestFeeder {
                                             }
                                             // Any residual becomes new exposure on fill side
                                             if remaining > 0 {
-                                                deque.push_back(Lot { side: fill_side, qty: remaining, price: f.price, time: now });
-                                                remaining = 0;
+                                                deque.push_back(Lot {
+                                                    side: fill_side,
+                                                    qty: remaining,
+                                                    price: f.price,
+                                                    _time: now,
+                                                });
                                             }
                                         } else {
                                             // Pure increase in exposure — append a new lot
-                                            deque.push_back(Lot { side: fill_side, qty: remaining, price: f.price, time: now });
-                                            remaining = 0;
+                                            deque.push_back(Lot {
+                                                side: fill_side,
+                                                qty: remaining,
+                                                price: f.price,
+                                                _time: now,
+                                            });
                                         }
 
                                         // Update account ledger with realized pnl if any
                                         if !realized_this_fill.is_zero() {
-                                            let acct_key = (so.provider, so.spec.account_key.account_name.clone());
-                                            let entry = accounts_ledger.entry(acct_key.clone()).or_insert(AccountDelta {
-                                                provider_kind: so.provider,
-                                                name: so.spec.account_key.account_name.clone(),
-                                                key: so.spec.account_key.clone(),
-                                                equity: account_balance,
-                                                day_realized_pnl: Decimal::ZERO,
-                                                open_pnl: Decimal::ZERO,
-                                                time: now,
-                                                can_trade: true,
-                                            });
+                                            let acct_key = (
+                                                so.provider,
+                                                so.spec.account_key.account_name.clone(),
+                                            );
+                                            let entry = accounts_ledger
+                                                .entry(acct_key.clone())
+                                                .or_insert(AccountDelta {
+                                                    provider_kind: so.provider,
+                                                    name: so.spec.account_key.account_name.clone(),
+                                                    key: so.spec.account_key.clone(),
+                                                    equity: account_balance,
+                                                    day_realized_pnl: Decimal::ZERO,
+                                                    open_pnl: Decimal::ZERO,
+                                                    time: now,
+                                                    can_trade: true,
+                                                });
                                             entry.day_realized_pnl += realized_this_fill;
                                             entry.equity += realized_this_fill;
                                             entry.time = now;
@@ -939,20 +980,30 @@ impl BacktestFeeder {
                                         if deque.is_empty() {
                                             pd.net_qty = Decimal::ZERO;
                                             pd.average_price = Decimal::ZERO;
-                                            pd.side = tt_types::accounts::events::PositionSide::Flat;
+                                            pd.side =
+                                                tt_types::accounts::events::PositionSide::Flat;
                                         } else {
-                                            let current_side = deque.front().map(|l| l.side).unwrap_or(fill_side);
+                                            let current_side =
+                                                deque.front().map(|l| l.side).unwrap_or(fill_side);
                                             let mut sum_qty: i64 = 0;
                                             let mut vwap_num = Decimal::ZERO;
                                             for l in deque.iter() {
                                                 sum_qty += l.qty;
                                                 vwap_num += l.price * Decimal::from(l.qty);
                                             }
-                                            let avg = if sum_qty > 0 { vwap_num / Decimal::from(sum_qty) } else { Decimal::ZERO };
+                                            let avg = if sum_qty > 0 {
+                                                vwap_num / Decimal::from(sum_qty)
+                                            } else {
+                                                Decimal::ZERO
+                                            };
                                             pd.average_price = avg;
                                             pd.net_qty = match current_side {
-                                                tt_types::accounts::events::Side::Buy => Decimal::from(sum_qty),
-                                                tt_types::accounts::events::Side::Sell => Decimal::from(-sum_qty),
+                                                tt_types::accounts::events::Side::Buy => {
+                                                    Decimal::from(sum_qty)
+                                                }
+                                                tt_types::accounts::events::Side::Sell => {
+                                                    Decimal::from(-sum_qty)
+                                                }
                                             };
                                             pd.side = if pd.net_qty > Decimal::ZERO {
                                                 tt_types::accounts::events::PositionSide::Long
