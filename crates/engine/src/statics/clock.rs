@@ -1,13 +1,13 @@
-use std::sync::LazyLock;
 use crate::backtest::backtest_clock::BacktestClock;
+use std::sync::LazyLock;
 
 pub(crate) static CLOCK: LazyLock<BacktestClock> = LazyLock::new(|| BacktestClock::new(0));
 
 /// Returns the current Engine date and time in UTC.
 ///
 /// This function utilizes the `CLOCK` object to retrieve the current
-/// time as a `chrono::DateTime<chrono::Utc>` instance. It is marked 
-/// with the `#[inline]` attribute to suggest inlining for performance 
+/// time as a `chrono::DateTime<chrono::Utc>` instance. It is marked
+/// with the `#[inline]` attribute to suggest inlining for performance
 /// optimization during compilation.
 ///
 /// # Returns

@@ -1,7 +1,7 @@
-use std::sync::LazyLock;
-use crossbeam::queue::ArrayQueue;
-use tt_types::keys::SymbolKey;
 use crate::models::{Command, DataTopic};
+use crossbeam::queue::ArrayQueue;
+use std::sync::LazyLock;
+use tt_types::keys::SymbolKey;
 
 pub(crate) static CMD_Q: LazyLock<ArrayQueue<Command>> = LazyLock::new(|| ArrayQueue::new(4096));
 

@@ -1,10 +1,10 @@
 pub mod backtest;
+pub(crate) mod client;
 pub(crate) mod engine;
+pub mod functions;
 pub(crate) mod helpers;
 pub mod models;
 pub mod runtime;
+pub mod statics;
 pub mod stats;
 pub mod traits;
-pub mod functions;
-pub mod statics;
-pub(crate) mod client;

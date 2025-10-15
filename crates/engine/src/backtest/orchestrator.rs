@@ -1,14 +1,12 @@
 use crate::backtest::backtest_clock::BacktestClock;
-use crate::backtest::backtest_feeder::{
-    BacktestFeeder, BacktestFeederConfig,
-};
+use crate::backtest::backtest_feeder::{BacktestFeeder, BacktestFeederConfig};
 use crate::runtime::EngineRuntime;
+use crate::statics::bus::bus;
 use crate::traits::Strategy;
 use anyhow::Result;
 use chrono::{NaiveDate, TimeZone, Utc};
 use std::sync::Arc;
 use tokio::sync::Notify;
-use crate::statics::bus::bus;
 
 /// Configuration for launching a backtest session.
 #[derive(Clone)]
@@ -102,8 +100,7 @@ pub async fn start_backtest<S: Strategy>(
     );
 
     // Create an engine runtime bound to the same bus in backtest mode.
-    let mut rt =
-        EngineRuntime::new_backtest(cfg.slow_spin, Some(notify.clone()));
+    let mut rt = EngineRuntime::new_backtest(cfg.slow_spin, Some(notify.clone()));
 
     // Start the strategy.
     let handle = rt.start(strategy, true).await?;
@@ -130,11 +127,9 @@ pub async fn start_backtest<S: Strategy>(
             now += step;
             // Request feeder to emit up to `now`
             let _ = bus
-                .handle_request(
-                    tt_types::wire::Request::BacktestAdvanceTo(tt_types::wire::BacktestAdvanceTo {
-                        to: now,
-                    }),
-                )
+                .handle_request(tt_types::wire::Request::BacktestAdvanceTo(
+                    tt_types::wire::BacktestAdvanceTo { to: now },
+                ))
                 .await;
             // Yield to allow feeder/engine to process
             tokio::task::yield_now().await;

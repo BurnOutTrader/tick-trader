@@ -1,37 +1,37 @@
-use std::clone;
-use std::future::pending;
 use crate::engine::EngineAccountsState;
 use crate::models::{Command, DataTopic};
-use crate::statics::portfolio::{Portfolio, PORTFOLIOS};
-use crate::traits::Strategy;
-use ahash::AHashMap;
-use dashmap::DashMap;
-use smallvec::SmallVec;
-use std::sync::{Arc, RwLock};
-use std::time::Duration;
-use chrono::Utc;
-use tokio::sync::{Notify, mpsc};
-use tracing::info;
-use tt_types::consolidators::ConsolidatorKey;
-use tt_types::data::core::Candle;
-use tt_types::keys::{AccountKey, SymbolKey, Topic};
-use tt_types::providers::ProviderKind;
-use tt_types::securities::security::FuturesContract;
-use tt_types::securities::symbols::Instrument;
-use tt_types::wire::{
-    BarBatch, InstrumentsMapRequest, Kick, OrdersBatch, PositionsBatch,
-    QuoteBatch, Request, Response, TickBatch,
-};
 use crate::statics::bus::{bus, initialize_accounts};
 use crate::statics::clock::CLOCK;
 use crate::statics::consolidators::CONSOLIDATORS;
 use crate::statics::core::{LAST_ASK, LAST_BID, LAST_PRICE};
+use crate::statics::portfolio::{PORTFOLIOS, Portfolio};
 use crate::statics::subscriptions::CMD_Q;
+use crate::traits::Strategy;
+use ahash::AHashMap;
+use chrono::Utc;
+use dashmap::DashMap;
+use smallvec::SmallVec;
+use std::clone;
+use std::future::pending;
+use std::sync::{Arc, RwLock};
+use std::time::Duration;
+use tokio::sync::{Notify, mpsc};
 use tokio::task::JoinHandle;
 use tracing::error;
+use tracing::info;
+use tt_types::consolidators::ConsolidatorKey;
+use tt_types::data::core::Candle;
 use tt_types::data::core::{Bbo, Tick};
 use tt_types::data::mbp10::{Action, Mbp10};
+use tt_types::keys::{AccountKey, SymbolKey, Topic};
+use tt_types::providers::ProviderKind;
+use tt_types::securities::security::FuturesContract;
+use tt_types::securities::symbols::Instrument;
 use tt_types::wire::Bytes;
+use tt_types::wire::{
+    BarBatch, InstrumentsMapRequest, Kick, OrdersBatch, PositionsBatch, QuoteBatch, Request,
+    Response, TickBatch,
+};
 
 pub struct EngineRuntime {
     backtest_mode: bool,
@@ -52,8 +52,6 @@ pub struct EngineRuntime {
 }
 
 impl EngineRuntime {
-    
-
     /// Create a new EngineRuntime bound to a ClientMessageBus.
     ///
     /// Parameters:
@@ -82,10 +80,7 @@ impl EngineRuntime {
 
     /// Construct an EngineRuntime in Backtest mode.
     /// Live-only features (SHM, Kick, vendor watch timers) are disabled.
-    pub fn new_backtest(
-        slow_spin: Option<u64>,
-        backtest_notify: Option<Arc<Notify>>,
-    ) -> Self {
+    pub fn new_backtest(slow_spin: Option<u64>, backtest_notify: Option<Arc<Notify>>) -> Self {
         let mut rt = Self::new(slow_spin);
         rt.backtest_mode = true;
         rt.backtest_notify = backtest_notify;
@@ -98,7 +93,11 @@ impl EngineRuntime {
     /// - strategy: Your Strategy implementation; on_start will be invoked with an EngineHandle.
     ///
     /// Returns: EngineHandle for issuing subscriptions and orders from your strategy.
-    pub async fn start<S: Strategy>(&mut self, mut strategy: S, backtest_mode: bool) -> anyhow::Result<()> {
+    pub async fn start<S: Strategy>(
+        &mut self,
+        mut strategy: S,
+        backtest_mode: bool,
+    ) -> anyhow::Result<()> {
         let mut receiver = bus().add_client();
         let shm_tasks = self.shm_tasks.clone();
         let shm_blacklist_for_task = self.shm_blacklist.clone();
@@ -452,7 +451,7 @@ impl EngineRuntime {
             }
         });
 
-                self.task = Some(handle_task);
+        self.task = Some(handle_task);
         Ok(())
     }
 
@@ -463,35 +462,27 @@ impl EngineRuntime {
             match cmd {
                 Command::Subscribe { topic, key } => {
                     let _ = bus
-                        .handle_request(
-                            Request::SubscribeKey(SubscribeKey {
-                                topic,
-                                key,
-                                latest_only: false,
-                                from_seq: 0,
-                            }),
-                        )
+                        .handle_request(Request::SubscribeKey(SubscribeKey {
+                            topic,
+                            key,
+                            latest_only: false,
+                            from_seq: 0,
+                        }))
                         .await;
                 }
                 Command::Unsubscribe { topic, key } => {
                     let _ = bus
-                        .handle_request(
-                            Request::UnsubscribeKey(UnsubscribeKey { topic, key }),
-                        )
+                        .handle_request(Request::UnsubscribeKey(UnsubscribeKey { topic, key }))
                         .await;
                 }
                 Command::Place(spec) => {
                     let _ = bus.handle_request(Request::PlaceOrder(spec)).await;
                 }
                 Command::Cancel(spec) => {
-                    let _ = bus
-                        .handle_request(Request::CancelOrder(spec))
-                        .await;
+                    let _ = bus.handle_request(Request::CancelOrder(spec)).await;
                 }
                 Command::Replace(spec) => {
-                    let _ = bus
-                        .handle_request(Request::ReplaceOrder(spec))
-                        .await;
+                    let _ = bus.handle_request(Request::ReplaceOrder(spec)).await;
                 }
             }
         }
@@ -549,6 +540,7 @@ impl EngineRuntime {
 
 #[cfg(test)]
 mod engine_shm_tests {
+    use crate::client::ClientMessageBus;
     use crate::runtime::EngineRuntime;
     use crate::traits::Strategy;
     use std::str::FromStr;
@@ -557,7 +549,6 @@ mod engine_shm_tests {
     use tt_types::providers::ProviderKind;
     use tt_types::securities::symbols::Instrument;
     use tt_types::wire::Response;
-    use crate::client::ClientMessageBus;
 
     struct NopStrategy;
     impl Strategy for NopStrategy {}

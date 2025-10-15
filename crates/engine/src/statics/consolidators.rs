@@ -1,10 +1,11 @@
-use std::sync::LazyLock;
+use crate::models::DataTopic;
 use dashmap::DashMap;
+use std::sync::LazyLock;
 use tt_types::consolidators::{Consolidator, ConsolidatorKey};
 use tt_types::keys::SymbolKey;
-use crate::models::DataTopic;
 
-pub(crate) static CONSOLIDATORS: LazyLock<DashMap<ConsolidatorKey, Box<dyn Consolidator>>> = LazyLock::new(|| DashMap::new());
+pub(crate) static CONSOLIDATORS: LazyLock<DashMap<ConsolidatorKey, Box<dyn Consolidator>>> =
+    LazyLock::new(|| DashMap::new());
 
 // === REGISTRATION ===
 /// Register a consolidator to be driven by the engine for the given data stream key.

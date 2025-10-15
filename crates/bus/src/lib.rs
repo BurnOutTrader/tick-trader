@@ -1,6 +1,5 @@
 pub mod router;
 
-
 #[cfg(feature = "server")]
 pub mod metrics;
 

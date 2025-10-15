@@ -1,19 +1,19 @@
-use std::sync::{LazyLock, OnceLock};
+use crate::client::ClientMessageBus;
+use crate::models::{Command, DataTopic};
 use crossbeam::queue::ArrayQueue;
 use futures_util::{SinkExt, StreamExt};
+use std::sync::{LazyLock, OnceLock};
 use tokio::net::UnixStream;
 use tokio::sync::mpsc;
 use tokio_util::bytes;
+use tokio_util::codec::length_delimited::LengthDelimitedCodec;
+use tokio_util::codec::{FramedRead, FramedWrite};
 use tracing::{info, warn};
 use tt_types::keys::{AccountKey, SymbolKey, Topic};
 use tt_types::providers::ProviderKind;
 use tt_types::securities::security::FuturesContract;
 use tt_types::securities::symbols::Instrument;
 use tt_types::wire::{Bytes, Request, WireMessage};
-use crate::client::ClientMessageBus;
-use crate::models::{Command, DataTopic};
-use tokio_util::codec::length_delimited::LengthDelimitedCodec;
-use tokio_util::codec::{FramedRead, FramedWrite};
 
 // Single global bus client instance; initialized once when transport is ready.
 pub(crate) static BUS_CLIENT: OnceLock<ClientMessageBus> = OnceLock::new();
@@ -91,11 +91,12 @@ pub async fn connect_live_bus() -> anyhow::Result<()> {
     Ok(())
 }
 
-
 /// Get a reference to the global bus client. Panics if not initialized.
 #[inline]
 pub fn bus() -> &'static ClientMessageBus {
-    BUS_CLIENT.get().expect("BUS_CLIENT not initialized; call init_bus() first")
+    BUS_CLIENT
+        .get()
+        .expect("BUS_CLIENT not initialized; call init_bus() first")
 }
 
 /// Enqueue a command for the engine to process (fire-and-forget).
@@ -134,15 +135,14 @@ pub async fn list_instruments(
     }
 }
 
-pub async fn get_instruments_map(
-    provider: ProviderKind,
-) -> anyhow::Result<Vec<FuturesContract>> {
+pub async fn get_instruments_map(provider: ProviderKind) -> anyhow::Result<Vec<FuturesContract>> {
     use std::time::Duration;
     use tokio::time::timeout;
     use tt_types::wire::{InstrumentsMapRequest, Response as WireResp};
-    let rx = crate::statics::bus::bus().request_with_corr(|corr_id| {
-        Request::InstrumentsMapRequest(InstrumentsMapRequest { provider, corr_id })
-    })
+    let rx = crate::statics::bus::bus()
+        .request_with_corr(|corr_id| {
+            Request::InstrumentsMapRequest(InstrumentsMapRequest { provider, corr_id })
+        })
         .await;
     match timeout(Duration::from_secs(2), rx).await {
         Ok(Ok(WireResp::InstrumentsMapResponse(imr))) => Ok(imr.contracts),
@@ -165,8 +165,8 @@ pub async fn get_account_info(
     match timeout(Duration::from_secs(2), rx).await {
         Ok(Ok(WireResp::AccountInfoResponse(air))) => Ok(air),
         Ok(Ok(_other)) => Err(anyhow::anyhow!(
-                "unexpected response for AccountInfoRequest"
-            )),
+            "unexpected response for AccountInfoRequest"
+        )),
         _ => Err(anyhow::anyhow!("timeout waiting for AccountInfoResponse")),
     }
 }
@@ -174,23 +174,22 @@ pub async fn get_account_info(
 pub async fn subscribe_symbol(topic: Topic, key: SymbolKey) -> anyhow::Result<()> {
     // Forward to server
     crate::statics::bus::bus()
-        .handle_request(
-            Request::SubscribeKey(tt_types::wire::SubscribeKey {
-                topic,
-                key,
-                latest_only: false,
-                from_seq: 0,
-            }),
-        )
+        .handle_request(Request::SubscribeKey(tt_types::wire::SubscribeKey {
+            topic,
+            key,
+            latest_only: false,
+            from_seq: 0,
+        }))
         .await?;
     Ok(())
 }
 
 pub async fn unsubscribe_symbol(topic: Topic, key: SymbolKey) -> anyhow::Result<()> {
     crate::statics::bus::bus()
-        .handle_request(
-            Request::UnsubscribeKey(tt_types::wire::UnsubscribeKey { topic, key }),
-        )
+        .handle_request(Request::UnsubscribeKey(tt_types::wire::UnsubscribeKey {
+            topic,
+            key,
+        }))
         .await?;
     Ok(())
 }
@@ -200,77 +199,58 @@ pub async fn subscribe_key(data_topic: DataTopic, key: SymbolKey) -> anyhow::Res
     // Ensure vendor securities refresh is active for this provider
     let topic = data_topic.to_topic_or_err()?;
     crate::statics::bus::bus()
-        .handle_request(
-            Request::SubscribeKey(tt_types::wire::SubscribeKey {
-                topic,
-                key,
-                latest_only: false,
-                from_seq: 0,
-            }),
-        )
+        .handle_request(Request::SubscribeKey(tt_types::wire::SubscribeKey {
+            topic,
+            key,
+            latest_only: false,
+            from_seq: 0,
+        }))
         .await?;
     Ok(())
 }
 
-pub async fn unsubscribe_key(
-    data_topic: DataTopic,
-    key: SymbolKey,
-) -> anyhow::Result<()> {
+pub async fn unsubscribe_key(data_topic: DataTopic, key: SymbolKey) -> anyhow::Result<()> {
     let topic = data_topic.to_topic_or_err()?;
-    unsubscribe_symbol(topic, key, ).await
+    unsubscribe_symbol(topic, key).await
 }
 
 // Orders API helpers
-pub async fn send_order_for_execution(
-    spec: tt_types::wire::PlaceOrder,
-) -> anyhow::Result<()> {
+pub async fn send_order_for_execution(spec: tt_types::wire::PlaceOrder) -> anyhow::Result<()> {
     crate::statics::bus::bus()
-        .handle_request(
-            tt_types::wire::Request::PlaceOrder(spec),
-        )
+        .handle_request(tt_types::wire::Request::PlaceOrder(spec))
         .await?;
     Ok(())
 }
 
 pub async fn cancel_order(spec: tt_types::wire::CancelOrder) -> anyhow::Result<()> {
     crate::statics::bus::bus()
-        .handle_request(
-            tt_types::wire::Request::CancelOrder(spec),
-        )
+        .handle_request(tt_types::wire::Request::CancelOrder(spec))
         .await?;
     Ok(())
 }
 
 pub async fn replace_order(spec: tt_types::wire::ReplaceOrder) -> anyhow::Result<()> {
     crate::statics::bus::bus()
-        .handle_request(
-            tt_types::wire::Request::ReplaceOrder(spec),
-        )
+        .handle_request(tt_types::wire::Request::ReplaceOrder(spec))
         .await?;
     Ok(())
 }
 
 // Account interest: auto-subscribe all execution streams for an account
-pub async fn activate_account_interest(
-    key: tt_types::keys::AccountKey,
-) -> anyhow::Result<()> {
+pub async fn activate_account_interest(key: tt_types::keys::AccountKey) -> anyhow::Result<()> {
     crate::statics::bus::bus()
-        .handle_request(
-            tt_types::wire::Request::SubscribeAccount(tt_types::wire::SubscribeAccount { key }),
-        )
+        .handle_request(tt_types::wire::Request::SubscribeAccount(
+            tt_types::wire::SubscribeAccount { key },
+        ))
         .await?;
     Ok(())
 }
 
-pub async fn deactivate_account_interest(
-    key: tt_types::keys::AccountKey,
-) -> anyhow::Result<()> {
+pub async fn deactivate_account_interest(key: tt_types::keys::AccountKey) -> anyhow::Result<()> {
     crate::statics::bus::bus()
-        .handle_request(
-            tt_types::wire::Request::UnsubscribeAccount(tt_types::wire::UnsubscribeAccount {
-                key,
-            }),
-        )
+        .handle_request(tt_types::wire::Request::UnsubscribeAccount(
+            tt_types::wire::UnsubscribeAccount { key },
+        ))
         .await?;
     Ok(())
 }
@@ -289,10 +269,7 @@ where
 }
 
 /// Convenience: initialize by account names for a given provider kind.
-pub async fn initialize_account_names<I>(
-    provider: ProviderKind,
-    names: I,
-) -> anyhow::Result<()>
+pub async fn initialize_account_names<I>(provider: ProviderKind, names: I) -> anyhow::Result<()>
 where
     I: IntoIterator<Item = tt_types::accounts::account::AccountName>,
 {

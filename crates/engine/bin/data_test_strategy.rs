@@ -18,8 +18,7 @@ use tt_types::wire;
 use tt_types::wire::Trade;
 
 #[derive(Default)]
-struct DataTestStrategy {
-}
+struct DataTestStrategy {}
 
 impl Strategy for DataTestStrategy {
     fn on_start(&mut self) {

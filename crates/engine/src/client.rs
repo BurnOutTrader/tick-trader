@@ -1,8 +1,8 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use dashmap::DashMap;
-use std::sync::{atomic::{AtomicU64, Ordering}};
-use tokio::sync::{broadcast, mpsc, oneshot};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::broadcast::{Receiver, Sender};
+use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing::error;
 use tt_types::wire::{Request, Response};
 
@@ -18,7 +18,7 @@ pub struct ClientMessageBus {
     next_id: AtomicU64,
     pub(crate) req_tx: mpsc::Sender<Request>,
     next_corr_id: AtomicU64,
-    pending: DashMap<u64, oneshot::Sender<Response>>
+    pending: DashMap<u64, oneshot::Sender<Response>>,
 }
 
 impl ClientMessageBus {
@@ -49,8 +49,8 @@ impl ClientMessageBus {
     }
 
     pub fn route_response(&self, response: Response, cuid: u64) {
-        if let Some((_,mut sender)) = self.pending.remove(&cuid) {
-            if let Err(e) =  sender.send(response) {
+        if let Some((_, mut sender)) = self.pending.remove(&cuid) {
+            if let Err(e) = sender.send(response) {
                 error!("route_response: failed to route response: {:?}", e);
             }
         }

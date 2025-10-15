@@ -8,12 +8,11 @@ use tt_types::accounts::events::{
     AccountDelta, OrderUpdate, PositionDelta, PositionSide, ProviderOrderId,
 };
 use tt_types::engine_id::EngineUuid;
-use tt_types::keys::{AccountKey};
+use tt_types::keys::AccountKey;
 use tt_types::providers::ProviderKind;
-use tt_types::securities::symbols::Instrument;
 use tt_types::securities::security::FuturesContract;
+use tt_types::securities::symbols::Instrument;
 use tt_types::wire::{AccountDeltaBatch, OrdersBatch, PositionsBatch, Response, Trade};
-
 
 /// Key for tracking an order in the open orders map
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -38,11 +37,12 @@ impl OrderKey {
     }
 }
 
-
-pub(crate) static PORTFOLIOS: LazyLock<DashMap<AccountKey, Portfolio>> = LazyLock::new(|| DashMap::new());
+pub(crate) static PORTFOLIOS: LazyLock<DashMap<AccountKey, Portfolio>> =
+    LazyLock::new(|| DashMap::new());
 
 // Global contracts registry: provider -> instrument -> contract
-static CONTRACTS: LazyLock<DashMap<ProviderKind, AHashMap<Instrument, FuturesContract>>> = LazyLock::new(|| DashMap::new());
+static CONTRACTS: LazyLock<DashMap<ProviderKind, AHashMap<Instrument, FuturesContract>>> =
+    LazyLock::new(|| DashMap::new());
 
 /// Initialize/replace contracts for a provider
 pub fn initialize_contracts(provider: ProviderKind, contracts: Vec<FuturesContract>) {
@@ -124,7 +124,12 @@ pub fn apply_closed_trades(account_key: AccountKey, trades: Vec<Trade>) {
     }
 }
 
-pub fn apply_mark(provider: ProviderKind, instrument: &Instrument, price: Decimal, now: DateTime<Utc>) {
+pub fn apply_mark(
+    provider: ProviderKind,
+    instrument: &Instrument,
+    price: Decimal,
+    now: DateTime<Utc>,
+) {
     for kv in PORTFOLIOS.iter() {
         if kv.value().provider() == provider {
             kv.update_apply_last_price(instrument, price, now);
@@ -205,7 +210,11 @@ pub fn open_positions(account_key: &AccountKey, now: DateTime<Utc>) -> Positions
     if let Some(p) = PORTFOLIOS.get(account_key) {
         p.positions_snapshot(now)
     } else {
-        PositionsBatch { topic: tt_types::keys::Topic::Positions, seq: 0, positions: vec![] }
+        PositionsBatch {
+            topic: tt_types::keys::Topic::Positions,
+            seq: 0,
+            positions: vec![],
+        }
     }
 }
 
@@ -217,7 +226,10 @@ pub fn open_order_count(account_key: &AccountKey) -> usize {
         .unwrap_or(0)
 }
 
-pub fn open_orders_for_instrument(account_key: &AccountKey, instrument: &Instrument) -> Vec<OrderUpdate> {
+pub fn open_orders_for_instrument(
+    account_key: &AccountKey,
+    instrument: &Instrument,
+) -> Vec<OrderUpdate> {
     PORTFOLIOS
         .get(account_key)
         .map(|p| p.open_orders_for_instrument(instrument))
@@ -257,14 +269,11 @@ pub struct Portfolio {
 }
 
 impl Portfolio {
-    pub fn new(
-        account_key: AccountKey,
-        account_init: AccountDelta
-    ) -> Self {
+    pub fn new(account_key: AccountKey, account_init: AccountDelta) -> Self {
         Self {
             account_key,
             positions: Default::default(),
-            account:RwLock::new(account_init),
+            account: RwLock::new(account_init),
             open_orders: Default::default(),
             completed_orders: Default::default(),
             closed_trades: Default::default(),
@@ -273,7 +282,9 @@ impl Portfolio {
     }
 
     #[inline]
-    fn provider(&self) -> ProviderKind { self.account_key.provider }
+    fn provider(&self) -> ProviderKind {
+        self.account_key.provider
+    }
 
     #[inline]
     fn is_our_account(&self, provider: ProviderKind, name: &AccountName) -> bool {
@@ -291,25 +302,35 @@ impl Portfolio {
             }
             Response::PositionsBatch(pb) => {
                 // Keep only positions for our account, then apply
-                let ours: Vec<PositionDelta> = pb.positions
+                let ours: Vec<PositionDelta> = pb
+                    .positions
                     .into_iter()
                     .filter(|p| self.is_our_account(p.provider_kind, &p.account_name))
                     .collect();
 
                 if !ours.is_empty() {
-                    let batch = PositionsBatch { topic: pb.topic, seq: pb.seq, positions: ours };
+                    let batch = PositionsBatch {
+                        topic: pb.topic,
+                        seq: pb.seq,
+                        positions: ours,
+                    };
                     self.apply_positions_batch(batch.clone(), now);
                     // Return adjusted open_pnl values based on last_price
                     let adj = self.adjust_positions_batch_open_pnl(batch);
                     Response::PositionsBatch(adj)
                 } else {
                     // Nothing for us — pass through unchanged
-                    Response::PositionsBatch(PositionsBatch { topic: pb.topic, seq: pb.seq, positions: vec![] })
+                    Response::PositionsBatch(PositionsBatch {
+                        topic: pb.topic,
+                        seq: pb.seq,
+                        positions: vec![],
+                    })
                 }
             }
             Response::AccountDeltaBatch(mut ab) => {
                 // Keep only our account's deltas
-                ab.accounts.retain(|a| self.is_our_account(a.provider_kind, &a.name));
+                ab.accounts
+                    .retain(|a| self.is_our_account(a.provider_kind, &a.name));
                 if !ab.accounts.is_empty() {
                     for a in ab.accounts.iter().cloned() {
                         self.apply_account_delta_batch(a);
@@ -326,7 +347,8 @@ impl Portfolio {
             }
             Response::ClosedTrades(trades) => {
                 // Keep only our account's trades
-                let ours: Vec<Trade> = trades.into_iter()
+                let ours: Vec<Trade> = trades
+                    .into_iter()
                     .filter(|t| self.is_our_account(t.provider, &t.account_name))
                     .collect();
                 if !ours.is_empty() {
@@ -350,7 +372,10 @@ impl Portfolio {
                     self.open_orders.insert(key, o.clone());
                 } else {
                     self.open_orders.remove(&key);
-                    let mut comp = self.completed_orders.write().expect("poisoned completed_orders");
+                    let mut comp = self
+                        .completed_orders
+                        .write()
+                        .expect("poisoned completed_orders");
                     comp.insert(key, o.clone());
                 }
             }
@@ -365,7 +390,9 @@ impl Portfolio {
             pd.provider_kind = self.provider();
 
             // Update open pnl if we have a last price
-            if let Some(new_open) = self.compute_open_pnl(&pd.instrument, pd.average_price, pd.net_qty, pd.side) {
+            if let Some(new_open) =
+                self.compute_open_pnl(&pd.instrument, pd.average_price, pd.net_qty, pd.side)
+            {
                 pd.open_pnl = new_open;
             }
 
@@ -393,12 +420,19 @@ impl Portfolio {
 
     //todo there is no point doing this on every incoming data point, we can just calculate if open_pnl is called.
     /// Update mark for an instrument and recompute that instrument's open_pnl.
-    pub fn update_apply_last_price(&self, instrument: &Instrument, price: Decimal, _now: DateTime<Utc>) {
+    pub fn update_apply_last_price(
+        &self,
+        instrument: &Instrument,
+        price: Decimal,
+        _now: DateTime<Utc>,
+    ) {
         self.last_price.insert(instrument.clone(), price);
 
         if let Some(mut pd_ref) = self.positions.get_mut(instrument) {
             let pd = pd_ref.value_mut();
-            if let Some(new_open) = self.compute_open_pnl(instrument, pd.average_price, pd.net_qty, pd.side) {
+            if let Some(new_open) =
+                self.compute_open_pnl(instrument, pd.average_price, pd.net_qty, pd.side)
+            {
                 pd.open_pnl = new_open;
             }
             pd.side = if pd.net_qty.is_zero() {
@@ -429,9 +463,9 @@ impl Portfolio {
                 let value_per_tick = contract.value_per_tick;
                 let lp = last_price.value().clone();
                 return match side {
-                    PositionSide::Long  => Some(((lp - avg_px) / tick_size) * value_per_tick * qty),
+                    PositionSide::Long => Some(((lp - avg_px) / tick_size) * value_per_tick * qty),
                     PositionSide::Short => Some(((avg_px - lp) / tick_size) * value_per_tick * qty),
-                    PositionSide::Flat  => Some(dec!(0)),
+                    PositionSide::Flat => Some(dec!(0)),
                 };
             }
         }
@@ -449,12 +483,20 @@ impl Portfolio {
     }
 
     pub fn net_qty(&self, instrument: &Instrument) -> Decimal {
-        self.position(instrument).map(|p| p.net_qty).unwrap_or(Decimal::ZERO)
+        self.position(instrument)
+            .map(|p| p.net_qty)
+            .unwrap_or(Decimal::ZERO)
     }
 
-    pub fn is_long(&self, instrument: &Instrument) -> bool  { self.net_qty(instrument) >  Decimal::ZERO }
-    pub fn is_short(&self, instrument: &Instrument) -> bool { self.net_qty(instrument) <  Decimal::ZERO }
-    pub fn is_flat(&self, instrument: &Instrument) -> bool  { self.net_qty(instrument) == Decimal::ZERO }
+    pub fn is_long(&self, instrument: &Instrument) -> bool {
+        self.net_qty(instrument) > Decimal::ZERO
+    }
+    pub fn is_short(&self, instrument: &Instrument) -> bool {
+        self.net_qty(instrument) < Decimal::ZERO
+    }
+    pub fn is_flat(&self, instrument: &Instrument) -> bool {
+        self.net_qty(instrument) == Decimal::ZERO
+    }
 
     pub fn account_delta(&self) -> AccountDelta {
         self.account.read().expect("poisoned account").clone()
@@ -468,7 +510,9 @@ impl Portfolio {
         self.account.read().expect("poisoned account").equity
     }
 
-    pub fn open_order_count(&self) -> usize { self.open_orders.len() }
+    pub fn open_order_count(&self) -> usize {
+        self.open_orders.len()
+    }
 
     pub fn open_orders_for_instrument(&self, instrument: &Instrument) -> Vec<OrderUpdate> {
         self.open_orders
@@ -484,7 +528,9 @@ impl Portfolio {
         for p in self.positions.iter() {
             let mut pd = p.value().clone();
 
-            if let Some(new_open) = self.compute_open_pnl(&pd.instrument, pd.average_price, pd.net_qty, pd.side) {
+            if let Some(new_open) =
+                self.compute_open_pnl(&pd.instrument, pd.average_price, pd.net_qty, pd.side)
+            {
                 pd.open_pnl = new_open;
             }
             pd.side = if pd.net_qty.is_zero() {
@@ -499,7 +545,11 @@ impl Portfolio {
             pd.time = now;
             out.push(pd);
         }
-        PositionsBatch { topic: tt_types::keys::Topic::Positions, seq: 0, positions: out }
+        PositionsBatch {
+            topic: tt_types::keys::Topic::Positions,
+            seq: 0,
+            positions: out,
+        }
     }
 
     /// Build a snapshot batch with a single AccountDelta (this account), recomputing open/day PnL.
@@ -509,7 +559,7 @@ impl Portfolio {
         let can_trade = base.can_trade;
 
         let open = self.account_open_pnl_sum();
-        let day  = self.account_day_realized_pnl_utc(now);
+        let day = self.account_day_realized_pnl_utc(now);
 
         let delta = AccountDelta {
             provider_kind: self.provider(),
@@ -522,13 +572,19 @@ impl Portfolio {
             can_trade,
         };
 
-        AccountDeltaBatch { topic: tt_types::keys::Topic::AccountEvt, seq: 0, accounts: vec![delta] }
+        AccountDeltaBatch {
+            topic: tt_types::keys::Topic::AccountEvt,
+            seq: 0,
+            accounts: vec![delta],
+        }
     }
 
     /// Adjust a PositionsBatch by recomputing open_pnl using last known marks (pure transform).
     pub fn adjust_positions_batch_open_pnl(&self, mut batch: PositionsBatch) -> PositionsBatch {
         for p in batch.positions.iter_mut() {
-            if let Some(new_open) = self.compute_open_pnl(&p.instrument, p.average_price, p.net_qty, p.side) {
+            if let Some(new_open) =
+                self.compute_open_pnl(&p.instrument, p.average_price, p.net_qty, p.side)
+            {
                 p.open_pnl = new_open;
             }
         }
@@ -561,4 +617,3 @@ impl Portfolio {
         sum
     }
 }
-

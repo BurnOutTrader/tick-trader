@@ -1,14 +1,16 @@
-use std::sync::LazyLock;
+use crate::models::Command;
+use crate::statics::subscriptions::CMD_Q;
 use dashmap::DashMap;
 use rust_decimal::prelude::ToPrimitive;
+use std::sync::LazyLock;
 use tt_types::engine_id::EngineUuid;
 use tt_types::keys::AccountKey;
 use tt_types::securities::symbols::Instrument;
-use crate::statics::subscriptions::CMD_Q;
-use crate::models::Command;
 
-pub(crate) static PROVIDER_ORDER_IDS: LazyLock<DashMap<EngineUuid, String>> = LazyLock::new(|| DashMap::new());
-pub(crate) static ENGINE_ORDER_ACCOUNTS: LazyLock<DashMap<EngineUuid, AccountKey>> = LazyLock::new(|| DashMap::new());
+pub(crate) static PROVIDER_ORDER_IDS: LazyLock<DashMap<EngineUuid, String>> =
+    LazyLock::new(|| DashMap::new());
+pub(crate) static ENGINE_ORDER_ACCOUNTS: LazyLock<DashMap<EngineUuid, AccountKey>> =
+    LazyLock::new(|| DashMap::new());
 
 #[allow(clippy::too_many_arguments)]
 /// Convenience: construct a `PlaceOrder` from parameters and enqueue it.
@@ -46,8 +48,7 @@ pub fn place_order(
         take_profit,
     };
     // Record mapping so we can cancel/replace with minimal info later
-    ENGINE_ORDER_ACCOUNTS
-        .insert(engine_uuid, account_key_clone);
+    ENGINE_ORDER_ACCOUNTS.insert(engine_uuid, account_key_clone);
     // Fire-and-forget: enqueue; engine task will send to execution provider
     let _ = CMD_Q.push(Command::Place(spec));
     Ok(engine_uuid)

@@ -1,13 +1,14 @@
-use std::sync::LazyLock;
-use dashmap::DashMap;
-use anyhow::anyhow;
-use tt_types::engine_id::EngineUuid;
-use tt_types::wire::{CancelOrder, ReplaceOrder};
-use crate::statics::subscriptions::CMD_Q;
 use crate::models::Command;
 use crate::statics::order_placement::{ENGINE_ORDER_ACCOUNTS, PROVIDER_ORDER_IDS};
+use crate::statics::subscriptions::CMD_Q;
+use anyhow::anyhow;
+use dashmap::DashMap;
+use std::sync::LazyLock;
+use tt_types::engine_id::EngineUuid;
+use tt_types::wire::{CancelOrder, ReplaceOrder};
 
-pub(crate) static PENDING_CANCELS: LazyLock<DashMap<EngineUuid, CancelOrder>> = LazyLock::new(|| DashMap::new());
+pub(crate) static PENDING_CANCELS: LazyLock<DashMap<EngineUuid, CancelOrder>> =
+    LazyLock::new(|| DashMap::new());
 
 // Fire-and-forget: enqueue cancel; engine task performs I/O
 pub fn cancel_order(order_id: EngineUuid) -> anyhow::Result<()> {
@@ -39,7 +40,8 @@ pub fn cancel_order(order_id: EngineUuid) -> anyhow::Result<()> {
     }
 }
 
-pub(crate) static PENDING_REPLACES: LazyLock<DashMap<EngineUuid, ReplaceOrder>> = LazyLock::new(|| DashMap::new());
+pub(crate) static PENDING_REPLACES: LazyLock<DashMap<EngineUuid, ReplaceOrder>> =
+    LazyLock::new(|| DashMap::new());
 
 // Fire-and-forget: enqueue replace; engine task performs I/O
 pub fn replace_order(

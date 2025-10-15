@@ -24,7 +24,7 @@ use crate::backtest::realism_models::traits::{
     FeeModel, FillModel, LatencyModel, SessionCalendar, SlippageModel,
 };
 use crate::client::ClientMessageBus;
-use crate::statics::bus::{bus, BUS_CLIENT};
+use crate::statics::bus::{BUS_CLIENT, bus};
 
 /// Windowed DB feeder that simulates a provider by emitting Responses over an in-process bus.
 /// It listens for SubscribeKey/UnsubscribeKey requests on a request channel you provide when
@@ -194,8 +194,10 @@ impl BacktestFeeder {
         // Create internal request channel for the write loop
         let (req_tx, mut req_rx) = mpsc::channel::<Request>(1024);
         let bus = ClientMessageBus::new_with_transport(req_tx.clone());
-        BUS_CLIENT.set(bus).expect("DANGER: bus client already initialized in backtest");
-        
+        BUS_CLIENT
+            .set(bus)
+            .expect("DANGER: bus client already initialized in backtest");
+
         let join = tokio::spawn(async move {
             let notify = backtest_notify;
             async fn await_ack(notify: &Option<Arc<Notify>>) {
@@ -360,27 +362,24 @@ impl BacktestFeeder {
             ) {
                 match tde {
                     tt_database::queries::TopicDataEnum::Tick(t) => {
-                        let _ = bus
-                            .broadcast(Response::Tick {
-                                tick: t.clone(),
-                                provider_kind: provider,
-                            });
+                        let _ = bus.broadcast(Response::Tick {
+                            tick: t.clone(),
+                            provider_kind: provider,
+                        });
                         await_ack(notify).await;
                     }
                     tt_database::queries::TopicDataEnum::Bbo(b) => {
-                        let _ = bus
-                            .broadcast(Response::Quote {
-                                bbo: b.clone(),
-                                provider_kind: provider,
-                            });
+                        let _ = bus.broadcast(Response::Quote {
+                            bbo: b.clone(),
+                            provider_kind: provider,
+                        });
                         await_ack(notify).await;
                     }
                     tt_database::queries::TopicDataEnum::Mbp10(m) => {
-                        let _ = bus
-                            .broadcast(Response::Mbp10 {
-                                mbp10: m.clone(),
-                                provider_kind: provider,
-                            });
+                        let _ = bus.broadcast(Response::Mbp10 {
+                            mbp10: m.clone(),
+                            provider_kind: provider,
+                        });
                         await_ack(notify).await;
                     }
                     tt_database::queries::TopicDataEnum::Candle(c) => {
@@ -441,8 +440,10 @@ impl BacktestFeeder {
                                         contracts,
                                         corr_id,
                                     };
-                                    let _ = bus
-                                        .route_response(Response::InstrumentsMapResponse(resp), corr_id);
+                                    let _ = bus.route_response(
+                                        Response::InstrumentsMapResponse(resp),
+                                        corr_id,
+                                    );
                                     await_ack(&notify).await;
                                 }
                                 Err(e) => {
@@ -452,8 +453,10 @@ impl BacktestFeeder {
                                         contracts: Vec::new(),
                                         corr_id,
                                     };
-                                    let _ = bus
-                                        .route_response(Response::InstrumentsMapResponse(resp), corr_id);
+                                    let _ = bus.route_response(
+                                        Response::InstrumentsMapResponse(resp),
+                                        corr_id,
+                                    );
                                     await_ack(&notify).await;
                                 }
                             }
@@ -463,12 +466,11 @@ impl BacktestFeeder {
                             let instr = skreq.key.instrument.clone();
                             let topic = skreq.topic;
                             let provider = skreq.key.provider;
-                            let _ = bus
-                                .broadcast(Response::SubscribeResponse {
-                                    topic,
-                                    instrument: instr.clone(),
-                                    success: true,
-                                });
+                            let _ = bus.broadcast(Response::SubscribeResponse {
+                                topic,
+                                instrument: instr.clone(),
+                                success: true,
+                            });
                             await_ack(&notify).await;
 
                             // Determine start time from DB extent (earliest available); fallback to epoch if none
@@ -525,8 +527,7 @@ impl BacktestFeeder {
                                         Ok(map) => {
                                             for (_t, vec) in map.iter() {
                                                 for item in vec {
-                                                    emit_one(bus, item, provider, &notify)
-                                                        .await;
+                                                    emit_one(bus, item, provider, &notify).await;
                                                 }
                                             }
                                         }
@@ -535,11 +536,10 @@ impl BacktestFeeder {
                                 }
                             }
                             // Signal warmup complete to the engine/strategy (even if warmup==0)
-                            let _ = bus
-                                .broadcast(Response::WarmupComplete {
-                                    topic,
-                                    instrument: instr.clone(),
-                                });
+                            let _ = bus.broadcast(Response::WarmupComplete {
+                                topic,
+                                instrument: instr.clone(),
+                            });
                             await_ack(&notify).await;
                             // Prime first window after start
                             ks.cursor = start;
@@ -550,11 +550,10 @@ impl BacktestFeeder {
                         Request::UnsubscribeKey(ureq) => {
                             keys.remove(&(ureq.topic, ureq.key.clone()));
                             // No specific unsubscribe response in wire; engine will see UnsubscribeResponse only from server in live.
-                            let _ = bus
-                                .broadcast(Response::UnsubscribeResponse {
-                                    topic: ureq.topic,
-                                    instrument: ureq.key.instrument.clone(),
-                                });
+                            let _ = bus.broadcast(Response::UnsubscribeResponse {
+                                topic: ureq.topic,
+                                instrument: ureq.key.instrument.clone(),
+                            });
                             await_ack(&notify).await;
                         }
                         Request::SubscribeAccount(_sa) => {
@@ -970,8 +969,7 @@ impl BacktestFeeder {
                                         seq: 0,
                                         accounts: accounts_vec,
                                     };
-                                    let _ = bus
-                                        .broadcast(Response::AccountDeltaBatch(ab));
+                                    let _ = bus.broadcast(Response::AccountDeltaBatch(ab));
                                     await_ack(&notify).await;
                                 }
                             }
@@ -1001,8 +999,7 @@ impl BacktestFeeder {
                                         seq: 0,
                                         positions: positions_vec,
                                     };
-                                    let _ = bus
-                                        .broadcast(Response::PositionsBatch(pb));
+                                    let _ = bus.broadcast(Response::PositionsBatch(pb));
                                     await_ack(&notify).await;
                                 }
                             }
@@ -1012,16 +1009,14 @@ impl BacktestFeeder {
                                 }
                             }
                             // After draining up to watermark (and emitting due orders), notify runtime of logical time
-                            let _ = bus
-                                .broadcast(Response::BacktestTimeUpdated { now });
+                            let _ = bus.broadcast(Response::BacktestTimeUpdated { now });
                             await_ack(&notify).await;
                             // If we have an end range and reached/passed it, emit BacktestCompleted once
                             if !completed_emitted
                                 && let Some(end) = cfg.range_end
                                 && now >= end
                             {
-                                let _ = bus
-                                    .broadcast(Response::BacktestCompleted { end });
+                                let _ = bus.broadcast(Response::BacktestCompleted { end });
                                 await_ack(&notify).await;
                                 completed_emitted = true;
                             }
