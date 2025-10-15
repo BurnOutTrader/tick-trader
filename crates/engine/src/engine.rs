@@ -5,7 +5,7 @@ use ahash::AHashMap;
 use anyhow::anyhow;
 use sqlx::{Pool, Postgres};
 use std::collections::VecDeque;
-use std::sync::{Arc};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use tracing::info;

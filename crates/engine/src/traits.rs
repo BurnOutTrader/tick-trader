@@ -4,7 +4,7 @@ use tt_types::data::mbp10::Mbp10;
 use tt_types::keys::AccountKey;
 use tt_types::providers::ProviderKind;
 use tt_types::securities::symbols::Instrument;
-use tt_types::wire::{OrdersBatch};
+use tt_types::wire::OrdersBatch;
 
 pub trait Strategy: Send + 'static {
     fn on_start(&mut self) {}

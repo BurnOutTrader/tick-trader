@@ -7,24 +7,21 @@ use crate::traits::Strategy;
 use chrono::Utc;
 use dashmap::DashMap;
 use smallvec::SmallVec;
-use std::sync::{Arc};
+use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{Notify};
+use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 use tracing::error;
 use tracing::info;
 use tt_types::consolidators::ConsolidatorKey;
 use tt_types::data::core::Candle;
 use tt_types::data::core::{Bbo, Tick};
-use tt_types::data::mbp10::{Mbp10};
+use tt_types::data::mbp10::Mbp10;
 use tt_types::keys::{AccountKey, SymbolKey, Topic};
 use tt_types::providers::ProviderKind;
 use tt_types::securities::symbols::Instrument;
+use tt_types::wire::{BarBatch, Request, Response, TickBatch};
 use tt_types::wire::{Bytes, QuoteBatch};
-use tt_types::wire::{
-    BarBatch, Request,
-    Response, TickBatch,
-};
 
 pub struct EngineRuntime {
     backtest_mode: bool,
