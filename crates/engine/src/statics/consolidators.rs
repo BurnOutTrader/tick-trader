@@ -5,7 +5,7 @@ use tt_types::consolidators::{Consolidator, ConsolidatorKey};
 use tt_types::keys::SymbolKey;
 
 pub(crate) static CONSOLIDATORS: LazyLock<DashMap<ConsolidatorKey, Box<dyn Consolidator>>> =
-    LazyLock::new(|| DashMap::new());
+    LazyLock::new(DashMap::new);
 
 // === REGISTRATION ===
 /// Register a consolidator to be driven by the engine for the given data stream key.

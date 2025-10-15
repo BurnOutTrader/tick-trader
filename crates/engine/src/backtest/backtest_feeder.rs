@@ -198,7 +198,7 @@ impl BacktestFeeder {
             .set(bus)
             .expect("DANGER: bus client already initialized in backtest");
 
-        let _ = tokio::spawn(async move {
+        std::mem::drop(tokio::spawn(async move {
             let notify = backtest_notify;
             async fn await_ack(notify: &Option<Arc<Notify>>) {
                 if let Some(n) = notify {
@@ -440,7 +440,7 @@ impl BacktestFeeder {
                                         contracts,
                                         corr_id,
                                     };
-                                    let _ = bus.route_response(
+                                    bus.route_response(
                                         Response::InstrumentsMapResponse(resp),
                                         corr_id,
                                     );
@@ -453,7 +453,7 @@ impl BacktestFeeder {
                                         contracts: Vec::new(),
                                         corr_id,
                                     };
-                                    let _ = bus.route_response(
+                                    bus.route_response(
                                         Response::InstrumentsMapResponse(resp),
                                         corr_id,
                                     );
@@ -637,7 +637,7 @@ impl BacktestFeeder {
                                                     }
                                                 }
                                             }
-                                            emit_one(&bus, &item, ks.provider, &notify).await;
+                                            emit_one(bus, &item, ks.provider, &notify).await;
                                         }
                                         if t > ks.cursor {
                                             ks.cursor = t;
@@ -1289,7 +1289,7 @@ impl BacktestFeeder {
                     tokio::task::yield_now().await;
                 }
             }
-        });
+        }));
 
         Ok(())
     }

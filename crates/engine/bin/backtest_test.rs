@@ -112,7 +112,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Configure and start backtest
     let cfg = BacktestConfig::from_to(chrono::Duration::minutes(1), start_date, end_date);
-    let strategy = BacktestDataStrategy::default();
+    let strategy = BacktestDataStrategy;
     start_backtest(db, cfg, strategy).await?;
 
     // Let it run for a short while to stream historical data

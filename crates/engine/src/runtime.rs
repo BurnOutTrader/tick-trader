@@ -414,10 +414,10 @@ impl EngineRuntime {
                             // Flush any pending commands emitted by strategy callbacks.
                             Self::drain_commands_for_task().await;
                             // After processing a message in backtest mode, notify feeder so it can proceed to the next one.
-                            if backtest_mode {
-                                if let Some(notify) = &backtest_notify_for_task {
-                                    notify.notify_one();
-                                }
+                            if backtest_mode
+                                && let Some(notify) = &backtest_notify_for_task
+                            {
+                                notify.notify_one();
                             }
                         }
                     }
@@ -534,7 +534,7 @@ mod engine_shm_tests {
         let bus = ClientMessageBus::new_with_transport(req_tx);
 
         let mut rt = EngineRuntime::new(Some(1));
-        let _handle = rt.start(NopStrategy, true).await.expect("engine start");
+        rt.start(NopStrategy, true).await.expect("engine start");
 
         let key = SymbolKey::new(
             Instrument::from_str("TST.Z25").unwrap(),
@@ -575,7 +575,7 @@ mod engine_shm_tests {
         // Pre-mark the stream as SHM-disabled
         rt.shm_blacklist.insert((Topic::MBP10, key.clone()), ());
 
-        let _handle = rt.start(NopStrategy, true).await.expect("engine start");
+        rt.start(NopStrategy, true).await.expect("engine start");
 
         let ann = tt_types::wire::AnnounceShm {
             topic: Topic::MBP10,

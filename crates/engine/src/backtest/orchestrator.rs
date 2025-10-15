@@ -103,7 +103,7 @@ pub async fn start_backtest<S: Strategy>(
     let mut rt = EngineRuntime::new_backtest(cfg.slow_spin, Some(notify.clone()));
 
     // Start the strategy.
-    let _ = rt.start(strategy, true).await?;
+    rt.start(strategy, true).await?;
 
     // Validate step > 0 and spawn orchestrator loop to advance time in discrete steps.
     if cfg.step <= chrono::Duration::zero() {

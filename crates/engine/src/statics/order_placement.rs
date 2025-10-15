@@ -8,9 +8,9 @@ use tt_types::keys::AccountKey;
 use tt_types::securities::symbols::Instrument;
 
 pub(crate) static PROVIDER_ORDER_IDS: LazyLock<DashMap<EngineUuid, String>> =
-    LazyLock::new(|| DashMap::new());
+    LazyLock::new(DashMap::new);
 pub(crate) static ENGINE_ORDER_ACCOUNTS: LazyLock<DashMap<EngineUuid, AccountKey>> =
-    LazyLock::new(|| DashMap::new());
+    LazyLock::new(DashMap::new);
 
 #[allow(clippy::too_many_arguments)]
 /// Convenience: construct a `PlaceOrder` from parameters and enqueue it.

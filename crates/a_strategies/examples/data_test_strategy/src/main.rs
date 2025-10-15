@@ -103,7 +103,7 @@ async fn main() -> anyhow::Result<()> {
 
     let mut engine = EngineRuntime::new(Some(100_000));
     let strategy = DataTestStrategy::default();
-    let _handle = engine.start(strategy, false).await?;
+    engine.start(strategy, false).await?;
 
     sleep(Duration::from_secs(60)).await;
 

@@ -38,11 +38,11 @@ impl OrderKey {
 }
 
 pub(crate) static PORTFOLIOS: LazyLock<DashMap<AccountKey, Portfolio>> =
-    LazyLock::new(|| DashMap::new());
+    LazyLock::new(DashMap::new);
 
 // Global contracts registry: provider -> instrument -> contract
 static CONTRACTS: LazyLock<DashMap<ProviderKind, AHashMap<Instrument, FuturesContract>>> =
-    LazyLock::new(|| DashMap::new());
+    LazyLock::new(DashMap::new);
 
 /// Initialize/replace contracts for a provider
 pub fn initialize_contracts(provider: ProviderKind, contracts: Vec<FuturesContract>) {
@@ -455,19 +455,18 @@ impl Portfolio {
         qty: Decimal,
         side: PositionSide,
     ) -> Option<Decimal> {
-        if let Some(contract_map) = CONTRACTS.get(&self.provider()) {
-            if let Some(contract) = contract_map.get(instr)
-                && let Some(last_price) = self.last_price.get(instr)
-            {
-                let tick_size = contract.tick_size;
-                let value_per_tick = contract.value_per_tick;
-                let lp = last_price.value().clone();
-                return match side {
-                    PositionSide::Long => Some(((lp - avg_px) / tick_size) * value_per_tick * qty),
-                    PositionSide::Short => Some(((avg_px - lp) / tick_size) * value_per_tick * qty),
-                    PositionSide::Flat => Some(dec!(0)),
-                };
-            }
+        if let Some(contract_map) = CONTRACTS.get(&self.provider())
+            && let Some(contract) = contract_map.get(instr)
+            && let Some(last_price) = self.last_price.get(instr)
+        {
+            let tick_size = contract.tick_size;
+            let value_per_tick = contract.value_per_tick;
+            let lp = *last_price.value();
+            return match side {
+                PositionSide::Long => Some(((lp - avg_px) / tick_size) * value_per_tick * qty),
+                PositionSide::Short => Some(((avg_px - lp) / tick_size) * value_per_tick * qty),
+                PositionSide::Flat => Some(dec!(0)),
+            };
         }
         None
     }
