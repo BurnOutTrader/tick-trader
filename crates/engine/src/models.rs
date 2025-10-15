@@ -92,7 +92,7 @@ pub struct StreamMetrics {
 // Replay cache skeletons
 #[derive(Debug, Clone)]
 pub struct TickRec {
-    pub ts_ns: i64,
+    pub ts: Instant,
     pub bytes: usize,
 }
 
@@ -104,7 +104,7 @@ pub struct BarRec {
 
 #[derive(Debug, Clone)]
 pub struct DepthDeltaRec {
-    pub ts_ns: i64,
+    pub ts: Instant,
     pub bytes: usize,
 }
 

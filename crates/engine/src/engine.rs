@@ -138,15 +138,14 @@ impl<P: MarketDataProvider + 'static> Engine<P> {
         m.last_upstream_data_at = Some(now);
         let q = inner.caches.ticks.entry(sk).or_default();
         q.push_back(TickRec {
-            ts_ns: now.elapsed().as_nanos() as i64,
+            ts: now,
             bytes: batch_bytes,
         });
-        // Evict by time window
+        // Evict by time window using per-record timestamps
         let window = Duration::from_secs(self.cfg.ticks_replay_secs);
         let nowi = Instant::now();
-        while let Some(_front) = q.front() {
-            // Here we used now elapsed placeholder; in real we would compare to message ts
-            if nowi.duration_since(now) > window {
+        while let Some(front) = q.front() {
+            if nowi.duration_since(front.ts) > window {
                 q.pop_front();
             } else {
                 break;
@@ -165,13 +164,16 @@ impl<P: MarketDataProvider + 'static> Engine<P> {
         m.bytes += bytes as u64;
         m.last_upstream_data_at = Some(now);
         let ring = inner.caches.depth_ring.entry(sk).or_default();
-        ring.push_back(DepthDeltaRec {
-            ts_ns: now.elapsed().as_nanos() as i64,
-            bytes,
-        });
-        // Cap by approximate time: keep last N entries within depth_ring_secs (simplified)
-        while ring.len() > 1024 {
-            ring.pop_front();
+        ring.push_back(DepthDeltaRec { ts: now, bytes });
+        // Evict by time window using per-record timestamps for depth ring
+        let window = Duration::from_secs(self.cfg.depth_ring_secs);
+        let nowi = Instant::now();
+        while let Some(front) = ring.front() {
+            if nowi.duration_since(front.ts) > window {
+                ring.pop_front();
+            } else {
+                break;
+            }
         }
     }
 }
