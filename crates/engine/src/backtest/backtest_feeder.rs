@@ -323,6 +323,9 @@ impl BacktestFeeder {
             let mut books: HashMap<SymbolKey, BookLevels> = HashMap::new();
             // Orchestrator-controlled logical time watermark; only emit events <= this time.
             let mut watermark: Option<DateTime<Utc>> = None;
+            // Queue of requests issued before the first watermark is set. These are buffered
+            // so strategies can place orders on WarmupComplete without being rejected.
+            let mut pre_wm_queue: Vec<tt_types::wire::Request> = Vec::new();
             // Ensure we emit BacktestCompleted exactly once when end is reached
             let mut completed_emitted: bool = false;
             // Track per-day forced liquidations to avoid duplicate actions within the same trading day
@@ -668,7 +671,262 @@ impl BacktestFeeder {
                         }
                         Request::BacktestAdvanceTo(bta) => {
                             // Update watermark and drain events up to this time
+                            let was_none = watermark.is_none();
                             watermark = Some(bta.to);
+                            // If this is the first watermark, process any buffered order/cxl/replace requests now
+                            if was_none && !pre_wm_queue.is_empty() {
+                                use tt_types::wire::Request as _Req;
+                                for pending in pre_wm_queue.drain(..) {
+                                    match pending {
+                                        _Req::PlaceOrder(mut spec) => {
+                                            // Enqueue into simulation engine; do not emit immediately
+                                            let prov = spec.account_key.provider;
+                                            let acct_name = spec.account_key.account_name.clone();
+                                            // Logical base time from orchestrator
+                                            let base = watermark.expect(
+                                                "no watermark set; backtest must drive time via BacktestAdvanceTo",
+                                            );
+                                            // Ensure an engine order id exists (prefer embedded tag)
+                                            let (engine_order_id, user_tag) = if let Some(tag) =
+                                                &spec.custom_tag
+                                            {
+                                                if let Some((eng, user_tag)) =
+                                                    EngineUuid::extract_and_remove_engine_tag(tag)
+                                                {
+                                                    (eng, user_tag)
+                                                } else {
+                                                    (EngineUuid::new(), None)
+                                                }
+                                            } else {
+                                                (EngineUuid::new(), None)
+                                            };
+                                            let provider_order_id =
+                                                ProviderOrderId(format!("bt-{}", engine_order_id));
+
+                                            // Normalize quantity sign to platform standard and validate non-zero
+                                            let mut reject = false;
+                                            let normalized_qty = spec.side.normalize_qty(spec.qty);
+                                            if normalized_qty == 0 {
+                                                reject = true;
+                                            } else {
+                                                spec.qty = normalized_qty;
+                                            }
+
+                                            match spec.order_type {
+                                                tt_types::wire::OrderType::Stop => {
+                                                    if spec.stop_price.is_none() {
+                                                        reject = true;
+                                                    }
+                                                }
+                                                tt_types::wire::OrderType::TrailingStop => {
+                                                    // Trailing stops require a trail distance; initial stop_price is derived/ratcheted by the fill model
+                                                    if spec.trail_price.is_none() {
+                                                        reject = true;
+                                                    }
+                                                }
+                                                tt_types::wire::OrderType::StopLimit => {
+                                                    if spec.stop_price.is_none()
+                                                        || spec.limit_price.is_none()
+                                                    {
+                                                        reject = true;
+                                                    }
+                                                }
+                                                _ => {}
+                                            }
+
+                                            if reject {
+                                                // Immediately emit a rejected order update with user's original tag
+                                                let upd = OrderUpdate {
+                                                    account_name: spec
+                                                        .account_key
+                                                        .account_name
+                                                        .clone(),
+                                                    instrument: spec.instrument.clone(),
+                                                    provider_kind: prov,
+                                                    provider_order_id: Some(
+                                                        provider_order_id.clone(),
+                                                    ),
+                                                    order_id: engine_order_id,
+                                                    state: OrderState::Rejected,
+                                                    leaves: 0,
+                                                    cum_qty: 0,
+                                                    avg_fill_px: Decimal::ZERO,
+                                                    tag: user_tag.clone(),
+                                                    time: base,
+                                                    side: spec.side,
+                                                };
+                                                let ob = tt_types::wire::OrdersBatch {
+                                                    topic: Topic::Orders,
+                                                    seq: 0,
+                                                    orders: vec![upd],
+                                                };
+                                                let _ = bus.broadcast(Response::OrdersBatch(ob));
+                                                await_ack(&notify).await;
+                                                continue;
+                                            }
+
+                                            // Initialize per-order latency model; use shared calendar
+                                            let mut lat = (cfg.make_latency)();
+                                            // Instantiate per-order fill/slippage/fee models and normalize on submit
+                                            let mut fill_model = (cfg.make_fill)();
+                                            fill_model.on_submit(base, &mut spec);
+                                            let slip_model = (cfg.make_slippage)();
+                                            let fee_model = (cfg.make_fee)();
+                                            let latency_model = (cfg.make_latency)();
+
+                                            // Determine effective ack base time according to session state and policy
+                                            let is_closed_or_halt = !cal_model
+                                                .is_open(&spec.instrument, base)
+                                                || cal_model.is_halt(&spec.instrument, base);
+                                            // Early rejection if policy is Reject during closed/halts
+                                            if is_closed_or_halt
+                                                && matches!(
+                                                    cfg.order_ack_closed_policy,
+                                                    OrderAckDuringClosedPolicy::Reject
+                                                )
+                                            {
+                                                let upd = OrderUpdate {
+                                                    account_name: spec
+                                                        .account_key
+                                                        .account_name
+                                                        .clone(),
+                                                    instrument: spec.instrument.clone(),
+                                                    provider_kind: prov,
+                                                    provider_order_id: Some(
+                                                        provider_order_id.clone(),
+                                                    ),
+                                                    order_id: engine_order_id,
+                                                    state: OrderState::Rejected,
+                                                    leaves: 0,
+                                                    cum_qty: 0,
+                                                    avg_fill_px: Decimal::ZERO,
+                                                    tag: user_tag.clone(),
+                                                    time: base,
+                                                    side: spec.side,
+                                                };
+                                                let ob = tt_types::wire::OrdersBatch {
+                                                    topic: Topic::Orders,
+                                                    seq: 0,
+                                                    orders: vec![upd],
+                                                };
+                                                let _ = bus.broadcast(Response::OrdersBatch(ob));
+                                                await_ack(&notify).await;
+                                                continue;
+                                            }
+                                            let ack_base = if is_closed_or_halt
+                                                && matches!(
+                                                    cfg.order_ack_closed_policy,
+                                                    OrderAckDuringClosedPolicy::DeferAckUntilOpen
+                                                ) {
+                                                if let Some(next_open) = cal_model
+                                                    .next_open_after(&spec.instrument, base)
+                                                {
+                                                    next_open
+                                                } else {
+                                                    base + ChronoDuration::seconds(1)
+                                                }
+                                            } else {
+                                                base
+                                            };
+
+                                            // Schedule ack and (first) fill per latency
+                                            let ack_at = ack_base + to_chrono(lat.submit_to_ack());
+                                            let fill_at =
+                                                ack_at + to_chrono(lat.ack_to_first_fill());
+
+                                            // Stash order
+                                            let orig_qty = spec.qty;
+                                            let sim = SimOrder {
+                                                spec,
+                                                provider: prov,
+                                                engine_order_id,
+                                                provider_order_id,
+                                                ack_at,
+                                                fill_at,
+                                                ack_emitted: false,
+                                                user_tag,
+                                                done: false,
+                                                // lifecycle
+                                                orig_qty,
+                                                cum_qty: 0,
+                                                cum_vwap_num: Decimal::ZERO,
+                                                // cancel state
+                                                cancel_at: None,
+                                                cancel_pending: false,
+                                                // replace state
+                                                replace_at: None,
+                                                replace_pending: false,
+                                                replace_req: None,
+                                                // models
+                                                fill_model,
+                                                slip_model,
+                                                fee_model,
+                                                latency_model,
+                                                fees: Decimal::ZERO,
+                                                resting: false,
+                                            };
+                                            // Ensure ledger entry exists for this account
+                                            let acct_key = (prov, acct_name.clone());
+                                            accounts_ledger.entry(acct_key.clone()).or_insert(
+                                                AccountDelta {
+                                                    provider_kind: prov,
+                                                    name: acct_name.clone(),
+                                                    key: AccountKey::new(prov, acct_name.clone()),
+                                                    equity: account_balance,
+                                                    day_realized_pnl: Decimal::ZERO,
+                                                    open_pnl: Decimal::ZERO,
+                                                    time: base,
+                                                    can_trade: true,
+                                                },
+                                            );
+                                            sim_orders.entry(engine_order_id).or_insert(sim);
+                                        }
+                                        _Req::CancelOrder(cxl) => {
+                                            // Schedule a cancel using provider_order_id; ignore if not found
+                                            let base = watermark.expect(
+                                                "no watermark set; backtest must drive time via BacktestAdvanceTo",
+                                            );
+                                            // Create a latency model instance for timing
+                                            let mut lat = (cfg.make_latency)();
+                                            let when = base + to_chrono(lat.cancel_rtt());
+                                            // Find matching order by provider_order_id and account name
+                                            let target_id = cxl.provider_order_id;
+                                            let acct = cxl.account_name;
+                                            for (_eid, so) in sim_orders.iter_mut() {
+                                                if so.provider_order_id.0 == target_id
+                                                    && so.spec.account_key.account_name == acct
+                                                {
+                                                    so.cancel_at = Some(when);
+                                                    so.cancel_pending = true;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                        _Req::ReplaceOrder(rpl) => {
+                                            // Schedule a replace using provider_order_id; ignore if not found
+                                            let base = watermark.expect(
+                                                "no watermark set; backtest must drive time via BacktestAdvanceTo",
+                                            );
+                                            let mut lat = (cfg.make_latency)();
+                                            let when = base + to_chrono(lat.replace_rtt());
+                                            let target_id = rpl.provider_order_id.clone();
+                                            let acct = rpl.account_name.clone();
+                                            for (_eid, so) in sim_orders.iter_mut() {
+                                                if so.provider_order_id.0 == target_id
+                                                    && so.spec.account_key.account_name == acct
+                                                {
+                                                    so.replace_at = Some(when);
+                                                    so.replace_pending = true;
+                                                    so.replace_req = Some(rpl.clone());
+                                                    // Do NOT block fills; order remains live until replace takes effect
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
                             // Drain in-order up to watermark
                             'drain: loop {
                                 if let Some(next) = heap.peek() {
@@ -1451,6 +1709,11 @@ impl BacktestFeeder {
                             }
                         }
                         Request::PlaceOrder(mut spec) => {
+                            // If watermark has not been established yet, buffer this order until the first advance
+                            if watermark.is_none() {
+                                pre_wm_queue.push(Request::PlaceOrder(spec));
+                                continue;
+                            }
                             // Enqueue into simulation engine; do not emit immediately
                             let prov = spec.account_key.provider;
                             let acct_name = spec.account_key.account_name.clone();
@@ -1638,6 +1901,11 @@ impl BacktestFeeder {
                             sim_orders.entry(engine_order_id).or_insert(sim);
                         }
                         Request::CancelOrder(cxl) => {
+                            // If no watermark yet, buffer cancel until first advance
+                            if watermark.is_none() {
+                                pre_wm_queue.push(Request::CancelOrder(cxl));
+                                continue;
+                            }
                             // Schedule a cancel using provider_order_id; ignore if not found
                             let base = watermark.expect(
                                 "no watermark set; backtest must drive time via BacktestAdvanceTo",
@@ -1659,6 +1927,11 @@ impl BacktestFeeder {
                             }
                         }
                         Request::ReplaceOrder(rpl) => {
+                            // If no watermark yet, buffer replace until first advance
+                            if watermark.is_none() {
+                                pre_wm_queue.push(Request::ReplaceOrder(rpl));
+                                continue;
+                            }
                             // Schedule a replace using provider_order_id; ignore if not found
                             let base = watermark.expect(
                                 "no watermark set; backtest must drive time via BacktestAdvanceTo",
