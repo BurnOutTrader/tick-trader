@@ -25,8 +25,9 @@ static CMD_Q: LazyLock<ArrayQueue<Command>> = LazyLock::new(|| ArrayQueue::new(2
 /// If path starts with '@' or a leading NUL ("\0"), on Linux it will use abstract namespace.
 /// On macOS and others, provide a filesystem path like "/tmp/tick-trader.sock".
 /// ONLY FOR LIVE MODE
-pub async fn connect(path: &str) -> anyhow::Result<()> {
-    let sock = UnixStream::connect(path).await?;
+pub async fn connect_live_bus() -> anyhow::Result<()> {
+    let addr = std::env::var("TT_BUS_ADDR").unwrap_or_else(|_| "/tmp/tick-trader.sock".to_string());
+    let sock = UnixStream::connect(addr).await?;
     let (r, w) = sock.into_split();
     // Match server/router framing: allow up to 8 MiB frames
     let codec = LengthDelimitedCodec::builder()

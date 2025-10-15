@@ -4,7 +4,6 @@ use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering as Ato};
 use tokio::time::{Duration, Instant as TInstant, timeout};
 use tracing::level_filters::LevelFilter;
-use tt_bus::ClientMessageBus;
 use tt_types::data::core::Utc;
 use tt_types::keys::{SymbolKey, Topic};
 use tt_types::providers::{ProjectXTenant, ProviderKind};
@@ -18,13 +17,8 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_max_level(LevelFilter::INFO)
         .init();
-    let addr = std::env::var("TT_BUS_ADDR").unwrap_or_else(|_| "/tmp/tick-trader.sock".to_string());
-    let bus = ClientMessageBus::connect(&addr).await?;
-
-    // register client
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<Response>(1024);
-    let sub_id = bus.add_client(tx).await;
-
+    
+    let bus = bus();
     // simple ping sanity check (optional but useful)
     bus.handle_request(
         &sub_id,
