@@ -128,7 +128,7 @@ pub async fn list_instruments(
         })
         .await;
     // Wait briefly for the server to respond; if unsupported, return empty
-    match timeout(Duration::from_millis(750), rx).await {
+    match timeout(Duration::from_secs(2), rx).await {
         Ok(Ok(WireResp::InstrumentsResponse(ir))) => Ok(ir.instruments),
         Ok(Ok(_other)) => Ok(vec![]),
         _ => Ok(vec![]),

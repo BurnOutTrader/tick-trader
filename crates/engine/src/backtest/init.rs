@@ -4,6 +4,7 @@
 //! sensible defaults (CME-like) and convenient hooks to customize realism models
 //! without having to stitch together factories manually.
 
+use crate::backtest::backtest_feeder::MatchingPolicy;
 use std::sync::Arc;
 
 use chrono::Duration as ChronoDuration;
@@ -54,6 +55,7 @@ impl BacktestInit {
             make_slippage: Arc::new(|| Box::new(NoSlippage::new())),
             make_fee: Arc::new(|| Box::new(PxFlatFee::new())),
             calendar: Arc::new(HoursCalendar::default()) as Arc<dyn SessionCalendar>,
+            matching_policy: MatchingPolicy::FIFO,
         };
         Self {
             feeder,
