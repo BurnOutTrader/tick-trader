@@ -287,7 +287,7 @@ impl EngineRuntime {
                                 } => {
                                     let symbol_key = SymbolKey::new(tick.instrument.clone(), provider_kind);
                                     LAST_PRICE.insert(symbol_key, tick.price);
-                                    crate::statics::portfolio::apply_mark(provider_kind, &tick.instrument, tick.price, Utc::now());
+                                    crate::statics::portfolio::apply_mark(provider_kind, &tick.instrument, tick.price, crate::statics::clock::time_now());
                                     strategy.on_tick(&tick, provider_kind);
                                 }
                                 Response::Quote { bbo, provider_kind } => {
