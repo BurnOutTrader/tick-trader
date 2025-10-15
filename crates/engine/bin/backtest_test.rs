@@ -1,8 +1,8 @@
 use chrono::Utc;
 use colored::Colorize;
+use rust_decimal::dec;
 use std::str::FromStr;
 use std::time::Duration;
-use rust_decimal::dec;
 use tokio::time::sleep;
 use tracing::info;
 use tracing::level_filters::LevelFilter;
@@ -112,7 +112,7 @@ async fn main() -> anyhow::Result<()> {
     // Configure and start backtest
     let cfg = BacktestConfig::from_to(chrono::Duration::minutes(1), start_date, end_date);
     let strategy = BacktestDataStrategy;
-    start_backtest(db, cfg, strategy,dec!(150_000)).await?;
+    start_backtest(db, cfg, strategy, dec!(150_000)).await?;
 
     // Let it run for a short while to stream historical data
     sleep(Duration::from_secs(200)).await;

@@ -21,8 +21,7 @@
 
 The engine can place live orders and is intended strictly for testing and evaluation. Do not use in production.
 
-- Portfolio manager is non permanent and will be replaced next.
-- Publish a reference “live test” strategy
+- Strategy Engine switched to a static layout, both live and backtest require testing, possibly features are now broken.
 - Surface EngineHandle helpers via top‑level exports
 - Move non-strategy functions and objects into features
 - Warm up consolidators from live data plus the historical catalog

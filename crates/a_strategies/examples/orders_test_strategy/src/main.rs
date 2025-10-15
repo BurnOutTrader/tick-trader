@@ -1,5 +1,5 @@
 use chrono::Utc;
-use rust_decimal::{dec, Decimal};
+use rust_decimal::{Decimal, dec};
 use std::str::FromStr;
 use std::time::Duration;
 use tokio::time::sleep;
@@ -367,7 +367,6 @@ impl Strategy for BacktestOrdersStrategy {
                     let s = p.to_clean_string();
                     println!("{}", s.cyan());
                 }
-
             } else {
                 warn!("No portfolio found: {:?}", &self.account);
             }
@@ -421,7 +420,7 @@ async fn main() -> anyhow::Result<()> {
     // Configure and start backtest
     let cfg = BacktestConfig::from_to(chrono::Duration::milliseconds(250), start_date, end_date);
     let strategy = BacktestOrdersStrategy::default();
-    start_backtest(db, cfg, strategy,dec!(150_000)).await?;
+    start_backtest(db, cfg, strategy, dec!(150_000)).await?;
 
     // Allow time for data and order lifecycle to flow
     sleep(Duration::from_secs(500)).await;

@@ -5,8 +5,8 @@ use crate::statics::bus::bus;
 use crate::traits::Strategy;
 use anyhow::Result;
 use chrono::{NaiveDate, TimeZone, Utc};
+use rust_decimal::{Decimal, dec};
 use std::sync::Arc;
-use rust_decimal::{dec, Decimal};
 use tokio::sync::Notify;
 
 /// Configuration for launching a backtest session.
@@ -75,7 +75,7 @@ pub async fn start_backtest<S: Strategy>(
     conn: tt_database::init::Connection,
     mut cfg: BacktestConfig,
     strategy: S,
-    account_balance: Decimal
+    account_balance: Decimal,
 ) -> Result<()> {
     // If the caller specified start/end dates, map them into the feeder's date-time range.
     if cfg.start_date.is_some() || cfg.end_date.is_some() {
@@ -93,13 +93,33 @@ pub async fn start_backtest<S: Strategy>(
     }
 
     let notify = Arc::new(Notify::new());
+
+    // Determine start time for clock seeding (default to epoch if not set)
+    let start_dt = cfg
+        .feeder
+        .range_start
+        .unwrap_or_else(|| Utc.timestamp_opt(0, 0).unwrap());
+
+    // Ensure we have a shared BacktestClock and set it as the global time source
+    let clock: Arc<BacktestClock> = if let Some(c) = cfg.clock.clone() {
+        c
+    } else {
+        let secs = start_dt.timestamp().max(0) as u64;
+        let ns = start_dt.timestamp_subsec_nanos() as u64;
+        Arc::new(BacktestClock::new(
+            secs.saturating_mul(1_000_000_000).saturating_add(ns),
+        ))
+    };
+    crate::statics::clock::set_backtest_clock(clock.clone());
+    cfg.clock = Some(clock.clone());
+
     // Start the DB-backed feeder which gives us an in-process bus.
     let _ = BacktestFeeder::start_with_db(
         conn,
         cfg.feeder.clone(),
         cfg.clock.clone(),
         Some(notify.clone()),
-        account_balance
+        account_balance,
     );
 
     // Create an engine runtime bound to the same bus in backtest mode.

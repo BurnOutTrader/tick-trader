@@ -125,7 +125,7 @@ impl EngineRuntime {
                                     for mut entry in CONSOLIDATORS.iter_mut() {
                                         let provider = entry.key().provider;        // read key (cheap)
                                         if let Some(tt_types::consolidators::ConsolidatedOut::Candle(c)) =
-                                            entry.value_mut().on_time(Utc::now())
+                                            entry.value_mut().on_time(crate::statics::clock::time_now())
                                         {
                                             outs.push((provider, c));
                                         }
@@ -143,7 +143,8 @@ impl EngineRuntime {
                                     if !backtest_mode {
                                        panic!("Backtest time created in live mode")
                                     }
-                                    // Record logical time for other emissions
+                                    // Sync global backtest clock facade so all time reads use this logical time
+                                    crate::statics::clock::backtest_advance_to(now);
                                     // 1) Drive time-based consolidators using orchestrator-provided logical time
                                     if !CONSOLIDATORS.is_empty() {
                                         let mut outs: SmallVec<[(ProviderKind, Candle); 16]> = SmallVec::new();
@@ -175,7 +176,7 @@ impl EngineRuntime {
                                     for t in ticks {
                                         let symbol_key = SymbolKey::new(t.instrument.clone(), provider_kind);
                                         LAST_PRICE.insert(symbol_key, t.price);
-                                        crate::statics::portfolio::apply_mark(provider_kind, &t.instrument, t.price, Utc::now());
+                                        crate::statics::portfolio::apply_mark(provider_kind, &t.instrument, t.price, crate::statics::clock::time_now());
                                         strategy.on_tick(&t, provider_kind);
                                         // Drive any consolidators registered for ticks on this key
                                         let key = ConsolidatorKey::new(t.instrument.clone(), provider_kind, Topic::Ticks);
@@ -216,7 +217,7 @@ impl EngineRuntime {
                                         // Use close as mark
                                         let symbol_key = SymbolKey::new(b.instrument.clone(), provider_kind);
                                         LAST_PRICE.insert(symbol_key, b.close);
-                                        crate::statics::portfolio::apply_mark(provider_kind, &b.instrument, b.close, Utc::now());
+                                        crate::statics::portfolio::apply_mark(provider_kind, &b.instrument, b.close, crate::statics::clock::time_now());
                                         strategy.on_bar(&b, provider_kind);
                                         // Drive consolidators for incoming candles (candle-to-candle)
                                         let tpc = match b.resolution {
@@ -267,7 +268,7 @@ impl EngineRuntime {
                                         let key = AccountKey::new(p.provider_kind, p.account_name.clone());
                                         groups.entry(key).or_default().push(p);
                                     }
-                                    let now = Utc::now();
+                                    let now = crate::statics::clock::time_now();
                                     for (key, positions) in groups {
                                         let batch = tt_types::wire::PositionsBatch { topic, seq, positions };
                                         crate::statics::portfolio::apply_positions_batch(key, batch, now);

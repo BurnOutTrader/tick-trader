@@ -1,5 +1,5 @@
 use chrono::Utc;
-use rust_decimal::{dec, Decimal};
+use rust_decimal::{Decimal, dec};
 use std::str::FromStr;
 use std::time::Duration;
 use tokio::time::sleep;
@@ -365,7 +365,6 @@ impl Strategy for BacktestOrdersStrategy {
                     let s = p.to_clean_string();
                     println!("{}", s.cyan());
                 }
-
             }
         }
         // Check completion criteria only after all planned test orders have been sent.

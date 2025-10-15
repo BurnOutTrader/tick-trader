@@ -18,7 +18,6 @@ use tt_types::wire::{AccountDeltaBatch, OrdersBatch, PositionsBatch, Response, T
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum OrderKeyId {
     Client(EngineUuid),
-    #[allow(dead_code)]
     Provider(ProviderOrderId),
 }
 
@@ -37,8 +36,7 @@ impl OrderKey {
     }
 }
 
-pub static PORTFOLIOS: LazyLock<DashMap<AccountKey, Portfolio>> =
-    LazyLock::new(DashMap::new);
+pub static PORTFOLIOS: LazyLock<DashMap<AccountKey, Portfolio>> = LazyLock::new(DashMap::new);
 
 // Global contracts registry: provider -> instrument -> contract
 static CONTRACTS: LazyLock<DashMap<ProviderKind, AHashMap<Instrument, FuturesContract>>> =
@@ -85,7 +83,7 @@ fn default_account_delta_for(key: &AccountKey, now: DateTime<Utc>) -> AccountDel
 
 fn ensure_portfolio(key: &AccountKey) {
     if !PORTFOLIOS.contains_key(key) {
-        let now = Utc::now();
+        let now = crate::statics::clock::time_now();
         let init = default_account_delta_for(key, now);
         PORTFOLIOS.insert(key.clone(), Portfolio::new(key.clone(), init));
     }

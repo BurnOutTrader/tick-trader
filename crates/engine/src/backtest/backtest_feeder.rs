@@ -25,8 +25,8 @@ use crate::backtest::realism_models::traits::{
 };
 use crate::client::ClientMessageBus;
 use crate::statics::bus::BUS_CLIENT;
-use crate::statics::clock::CLOCK;
-use crate::statics::portfolio::{Portfolio, PORTFOLIOS};
+use crate::statics::clock::time_now;
+use crate::statics::portfolio::{PORTFOLIOS, Portfolio};
 
 /// Windowed DB feeder that simulates a provider by emitting Responses over an in-process bus.
 /// It listens for SubscribeKey/UnsubscribeKey requests on a request channel you provide when
@@ -192,7 +192,7 @@ impl BacktestFeeder {
         cfg: BacktestFeederConfig,
         clock: Option<Arc<BacktestClock>>,
         backtest_notify: Option<Arc<Notify>>,
-        account_balance: Decimal
+        account_balance: Decimal,
     ) -> anyhow::Result<()> {
         // Create internal request channel for the write loop
         let (req_tx, mut req_rx) = mpsc::channel::<Request>(1024);
@@ -406,7 +406,7 @@ impl BacktestFeeder {
                 while let Ok(req) = req_rx.try_recv() {
                     use tt_types::wire::Request;
                     match req {
-                        Request::SubscribeAccount(req ) => {
+                        Request::SubscribeAccount(req) => {
                             if !PORTFOLIOS.contains_key(&req.key) {
                                 let delta = AccountDelta {
                                     provider_kind: req.key.provider,
@@ -415,7 +415,7 @@ impl BacktestFeeder {
                                     equity: account_balance,
                                     day_realized_pnl: Decimal::ZERO,
                                     open_pnl: Decimal::ZERO,
-                                    time: CLOCK.now_dt(),
+                                    time: time_now(),
                                     can_trade: true,
                                 };
                                 let account = Portfolio::new(req.key.clone(), delta);

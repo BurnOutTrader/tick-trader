@@ -24,6 +24,7 @@ pub fn add_consolidator(
 
 // === Removal ===
 /// Remove a consolidator bring driven by the engine.
+#[inline]
 pub fn remove_consolidator(from_data_topic: DataTopic, for_key: SymbolKey) {
     let topic = from_data_topic.to_topic_or_err().unwrap();
     let key = ConsolidatorKey::new(for_key.instrument, for_key.provider, topic);
