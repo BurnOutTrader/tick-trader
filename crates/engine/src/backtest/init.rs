@@ -41,6 +41,7 @@ impl BacktestInit {
     /// hours calendar, 2d window with 1d lookahead.
     pub fn px_defaults() -> Self {
         let feeder = BacktestFeederConfig {
+            flatten_before_close: None,
             window: ChronoDuration::days(2),
             lookahead: ChronoDuration::days(1),
             warmup: ChronoDuration::zero(),
@@ -134,5 +135,14 @@ impl BacktestInit {
             start_date: None,
             end_date: None,
         }
+    }
+}
+
+impl BacktestInit {
+    /// Configure the backtest to auto-flatten open positions within the specified window before session close.
+    /// Set to Some(duration) to enable, or None (default) to disable.
+    pub fn with_flatten_before_close(mut self, dur: ChronoDuration) -> Self {
+        self.feeder.flatten_before_close = Some(dur);
+        self
     }
 }

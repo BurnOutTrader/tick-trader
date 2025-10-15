@@ -1,7 +1,7 @@
 use chrono::{DateTime, Duration as ChronoDuration, TimeZone, Utc};
 use rust_decimal::Decimal;
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BinaryHeap, HashMap, VecDeque};
+use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use tokio::sync::{Notify, mpsc};
 use tracing::{info, warn};
@@ -50,6 +50,8 @@ pub enum OrderAckDuringClosedPolicy {
 
 #[derive(Clone)]
 pub struct BacktestFeederConfig {
+    /// Optional liquidation window: flatten open positions within this duration before session close
+    pub flatten_before_close: Option<ChronoDuration>,
     /// Size of prefetch window for each key (e.g., 30 minutes)
     pub window: ChronoDuration,
     /// Size of lookahead buffer beyond the prefetch window (e.g., 5 minutes)
@@ -80,6 +82,7 @@ pub struct BacktestFeederConfig {
 impl Default for BacktestFeederConfig {
     fn default() -> BacktestFeederConfig {
         Self {
+            flatten_before_close: None,
             window: ChronoDuration::days(2),
             lookahead: ChronoDuration::days(1),
             warmup: ChronoDuration::days(1),
@@ -322,6 +325,13 @@ impl BacktestFeeder {
             let mut watermark: Option<DateTime<Utc>> = None;
             // Ensure we emit BacktestCompleted exactly once when end is reached
             let mut completed_emitted: bool = false;
+            // Track per-day forced liquidations to avoid duplicate actions within the same trading day
+            let mut forced_liq_today: HashSet<(
+                ProviderKind,
+                tt_types::accounts::account::AccountName,
+                Instrument,
+                chrono::NaiveDate,
+            )> = HashSet::new();
 
             // helper: ensure a key has data loaded up to cursor+window
             async fn ensure_window(
@@ -1216,6 +1226,152 @@ impl BacktestFeeder {
                                 let _ = bus.broadcast(Response::OrdersBatch(ob));
                                 await_ack(&notify).await;
                             }
+
+                            // Risk: auto-liquidate positions within X minutes before session close (ProjectX policy)
+                            if let Some(liq_window) = cfg.flatten_before_close {
+                                // Collect keys to avoid borrow issues
+                                let keys: Vec<(
+                                    ProviderKind,
+                                    tt_types::accounts::account::AccountName,
+                                    Instrument,
+                                )> = positions_ledger.keys().cloned().collect();
+                                for key in keys {
+                                    if let Some(pd) = positions_ledger.get(&key) {
+                                        if pd.net_qty.is_zero() {
+                                            continue;
+                                        }
+                                        let instr = pd.instrument.clone();
+                                        // Only enforce while session is open
+                                        if !cal_model.is_open(&instr, now) {
+                                            continue;
+                                        }
+                                        if let Some(close) = cal_model.next_close_after(&instr, now)
+                                        {
+                                            let until_close = close - now;
+                                            if until_close <= liq_window {
+                                                // Avoid double-liquidation on the same trading day
+                                                let day = cal_model.trading_day(&instr, now);
+                                                let tag =
+                                                    (key.0, key.1.clone(), instr.clone(), day);
+                                                if !forced_liq_today.insert(tag) {
+                                                    continue;
+                                                }
+
+                                                // Determine reference price: last known mark
+                                                let sym_key = SymbolKey::new(instr.clone(), key.0);
+                                                let ref_px = if let Some(m) = marks.get(&sym_key) {
+                                                    m.ref_px()
+                                                } else {
+                                                    Decimal::ZERO
+                                                };
+                                                if ref_px.is_zero() {
+                                                    continue;
+                                                }
+
+                                                // Tick conversion
+                                                let (tick_size, value_per_tick) = if let Some(imap) =
+                                                    contracts_cache.get(&key.0)
+                                                    && let Some(fc) = imap.get(&instr)
+                                                {
+                                                    (fc.tick_size, fc.value_per_tick)
+                                                } else {
+                                                    (Decimal::ONE, Decimal::ONE)
+                                                };
+
+                                                // Consume all open lots to flat
+                                                let deque = lots_ledger
+                                                    .entry((key.0, key.1.clone(), instr.clone()))
+                                                    .or_default();
+                                                while let Some(lot) = match cfg.matching_policy {
+                                                    MatchingPolicy::FIFO => deque.front().cloned(),
+                                                    MatchingPolicy::LIFO => deque.back().cloned(),
+                                                } {
+                                                    let matched = lot.qty;
+                                                    let matched_dec = Decimal::from(matched);
+                                                    // Realized PnL vs liquidation price
+                                                    let ticks = match lot.side {
+                                                        tt_types::accounts::events::Side::Buy => {
+                                                            (ref_px - lot.price) / tick_size
+                                                        }
+                                                        tt_types::accounts::events::Side::Sell => {
+                                                            (lot.price - ref_px) / tick_size
+                                                        }
+                                                    };
+                                                    let pnl = ticks * value_per_tick * matched_dec;
+                                                    // Record trade
+                                                    closed_trades.push(tt_types::wire::Trade {
+                                                        id: EngineUuid::new(),
+                                                        provider: key.0,
+                                                        account_name: key.1.clone(),
+                                                        instrument: instr.clone(),
+                                                        creation_time: now,
+                                                        price: ref_px,
+                                                        profit_and_loss: pnl,
+                                                        fees: Decimal::ZERO,
+                                                        side: lot.side,
+                                                        size: matched_dec,
+                                                        voided: false,
+                                                        order_id: "forced-liquidation".to_string(),
+                                                    });
+                                                    // Remove from deque
+                                                    match cfg.matching_policy {
+                                                        MatchingPolicy::FIFO => {
+                                                            if let Some(front) = deque.front_mut() {
+                                                                front.qty -= matched;
+                                                                if front.qty == 0 {
+                                                                    deque.pop_front();
+                                                                }
+                                                            }
+                                                        }
+                                                        MatchingPolicy::LIFO => {
+                                                            if let Some(back) = deque.back_mut() {
+                                                                back.qty -= matched;
+                                                                if back.qty == 0 {
+                                                                    deque.pop_back();
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                    // Update account ledgers
+                                                    let acct_key = (key.0, key.1.clone());
+                                                    let entry = accounts_ledger
+                                                        .entry(acct_key.clone())
+                                                        .or_insert(AccountDelta {
+                                                            provider_kind: key.0,
+                                                            name: key.1.clone(),
+                                                            key: AccountKey::new(
+                                                                key.0,
+                                                                key.1.clone(),
+                                                            ),
+                                                            equity: account_balance,
+                                                            day_realized_pnl: Decimal::ZERO,
+                                                            open_pnl: Decimal::ZERO,
+                                                            time: now,
+                                                            can_trade: true,
+                                                        });
+                                                    entry.day_realized_pnl += pnl;
+                                                    entry.equity += pnl;
+                                                    entry.time = now;
+                                                    updated_accounts.push((key.0, key.1.clone()));
+                                                }
+                                                // Update position to flat
+                                                if let Some(pdm) = positions_ledger.get_mut(&key) {
+                                                    pdm.net_qty = Decimal::ZERO;
+                                                    pdm.average_price = Decimal::ZERO;
+                                                    pdm.side = tt_types::accounts::events::PositionSide::Flat;
+                                                    pdm.time = now;
+                                                }
+                                                touched_positions.push((
+                                                    key.0,
+                                                    key.1.clone(),
+                                                    instr.clone(),
+                                                ));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
                             // Emit account snapshots for any accounts updated by fees this tick
                             if !updated_accounts.is_empty() {
                                 // Deduplicate keys without requiring Ord
