@@ -49,9 +49,9 @@ impl ClientMessageBus {
     }
 
     pub fn route_response(&self, response: Response, cuid: u64) {
-        if let Some(sender) = self.pending.get(&cuid) {
-            if let Err(e) =  sender.value().send(response) {
-                error!("route_response: failed to route response: {}", e);
+        if let Some((_,mut sender)) = self.pending.remove(&cuid) {
+            if let Err(e) =  sender.send(response) {
+                error!("route_response: failed to route response: {:?}", e);
             }
         }
     }

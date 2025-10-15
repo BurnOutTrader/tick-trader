@@ -12,8 +12,8 @@ use tracing::info;
 use tracing::level_filters::LevelFilter;
 
 use tt_engine::backtest::orchestrator::{BacktestConfig, start_backtest};
-use tt_engine::golabal_static::EngineHandle;
 use tt_engine::models::DataTopic;
+use tt_engine::statics::subscriptions::subscribe;
 use tt_engine::traits::Strategy;
 
 use tt_types::accounts::account::AccountName;
@@ -25,17 +25,15 @@ use tt_types::securities::symbols::Instrument;
 use tt_types::wire::{self, Trade};
 
 struct TestStrategy {
-    engine: Option<EngineHandle>,
     sk: SymbolKey,
     bars_seen: Arc<AtomicUsize>,
     signal_tx: Option<oneshot::Sender<()>>, // signal when we see first few bars
 }
 
 impl Strategy for TestStrategy {
-    fn on_start(&mut self, h: EngineHandle) {
+    fn on_start(&mut self) {
         info!("test strategy start");
-        h.subscribe_now(DataTopic::Candles1m, self.sk.clone());
-        self.engine = Some(h);
+        subscribe(DataTopic::Candles1m, self.sk.clone());
     }
 
     fn on_stop(&mut self) {
@@ -56,9 +54,6 @@ impl Strategy for TestStrategy {
 
     fn on_mbp10(&mut self, _d: &Mbp10, _provider_kind: ProviderKind) {}
     fn on_orders_batch(&mut self, _b: &wire::OrdersBatch) {}
-    fn on_positions_batch(&mut self, _b: &wire::PositionsBatch) {}
-    fn on_account_delta(&mut self, _accounts: &[AccountDelta]) {}
-    fn on_trades_closed(&mut self, _trades: Vec<Trade>) {}
 
     fn on_subscribe(&mut self, _instrument: Instrument, _data_topic: DataTopic, _success: bool) {}
     fn on_unsubscribe(&mut self, _instrument: Instrument, _data_topic: DataTopic) {}
@@ -125,7 +120,6 @@ async fn backtest_feeder_emits_candles_to_strategy() -> anyhow::Result<()> {
     let bars_seen = Arc::new(AtomicUsize::new(0));
 
     let strategy = TestStrategy {
-        engine: None,
         sk: sk.clone(),
         bars_seen: bars_seen.clone(),
         signal_tx: Some(tx),
@@ -133,12 +127,10 @@ async fn backtest_feeder_emits_candles_to_strategy() -> anyhow::Result<()> {
 
     // Start backtest with the chosen date range
     let cfg = BacktestConfig::from_to(chrono::Duration::minutes(1), start_date, end_date);
-    let (_engine_handle, feeder_handle) = start_backtest(db, cfg, strategy).await?;
+    start_backtest(db, cfg, strategy).await?;
 
     // Wait until the strategy sees a few bars or timeout
     let wait_res = timeout(Duration::from_secs(10), rx).await;
-    // Stop feeder regardless of outcome
-    feeder_handle.stop().await;
 
     match wait_res {
         Ok(Ok(())) => {

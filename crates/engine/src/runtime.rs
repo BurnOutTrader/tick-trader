@@ -1,3 +1,4 @@
+use std::clone;
 use std::future::pending;
 use crate::engine::EngineAccountsState;
 use crate::models::{Command, DataTopic};
@@ -29,7 +30,7 @@ use crate::statics::subscriptions::CMD_Q;
 use tokio::task::JoinHandle;
 use tracing::error;
 use tt_types::data::core::{Bbo, Tick};
-use tt_types::data::mbp10::Mbp10;
+use tt_types::data::mbp10::{Action, Mbp10};
 use tt_types::wire::Bytes;
 
 pub struct EngineRuntime {
@@ -140,377 +141,316 @@ impl EngineRuntime {
 
             loop {
                 tokio::select! {
-                    // Drive time-based consolidation first if due
-                    _ = ticker.tick() => {
-                        if !self.backtest_mode {
-                            // 1) Walk consolidators mutably and collect outputs.
-                            if !CONSOLIDATORS.is_empty() {
-                                let mut outs: SmallVec<[(ProviderKind, Candle); 16]> = SmallVec::new();
-                                for mut entry in CONSOLIDATORS.iter_mut() {
-                                    let provider = entry.key().provider;        // read key (cheap)
-                                    if let Some(tt_types::consolidators::ConsolidatedOut::Candle(c)) =
-                                        entry.value_mut().on_time(Utc::now())
-                                    {
-                                        outs.push((provider, c));
-                                    }
-                                } // all MapRefMut guards dropped here; no locks held
-                                for (prov, c) in outs {
-                                    strategy.on_bar(&c, prov);
-                                }
-                            }
-                        }
-                    },
-                    resp_opt = receiver.recv() => {
-                        if let Ok(resp) = resp_opt {
-                        match resp {
-                            Response::BacktestTimeUpdated { now } => {
-                                if self.backtest_mode {
-                                   panic!("Backtest time created in live mode")
-                                }
-                                // Record logical time for other emissions
-                                // 1) Drive time-based consolidators using orchestrator-provided logical time
+                        // Drive a time-based consolidation first if due
+                        _ = ticker.tick() => {
+                            if !backtest_mode {
+                                // 1) Walk consolidators mutably and collect outputs.
                                 if !CONSOLIDATORS.is_empty() {
                                     let mut outs: SmallVec<[(ProviderKind, Candle); 16]> = SmallVec::new();
                                     for mut entry in CONSOLIDATORS.iter_mut() {
-                                        let provider = entry.key().provider;
-                                        if let Some(tt_types::consolidators::ConsolidatedOut::Candle(c)) = entry.value_mut().on_time(now) {
+                                        let provider = entry.key().provider;        // read key (cheap)
+                                        if let Some(tt_types::consolidators::ConsolidatedOut::Candle(c)) =
+                                            entry.value_mut().on_time(Utc::now())
+                                        {
                                             outs.push((provider, c));
                                         }
-                                    }
+                                    } // all MapRefMut guards dropped here; no locks held
                                     for (prov, c) in outs {
                                         strategy.on_bar(&c, prov);
                                     }
                                 }
-                                // 3) Flat-by-close enforcement is handled by backtest risk models; do not enforce in runtime
-                            },
-                            Response::BacktestCompleted { end: _ } => {
-                                // Graceful shutdown: stop strategy and terminate engine task
-                                strategy.on_stop();
-                                return;
-                            },
-                            Response::WarmupComplete{ .. } => {
-                               strategy.on_warmup_complete();
-                            },
-                            Response::TickBatch(TickBatch {
-                                ticks,
-                                provider_kind,
-                                ..
-                            }) => {
-                                for t in ticks {
-                                    let symbol_key = SymbolKey::new(t.instrument.clone(), provider_kind)
-                                    LAST_PRICE.insert(symbol_key, t.price);
-                                    strategy.on_tick(&t, provider_kind);
-                                    // Drive any consolidators registered for ticks on this key
-                                    let key = ConsolidatorKey::new(t.instrument.clone(), provider_kind, Topic::Ticks);
-                                    if let Some(mut cons) = CONSOLIDATORS
-                                        .get_mut(&key)
-                                        && let Some(out) = cons.on_tick(&t)
-                                        && let tt_types::consolidators::ConsolidatedOut::Candle(ref c) = out
-                                    {
-                                        strategy.on_bar(c, provider_kind);
-                                    }
-                                }
                             }
-                            Response::QuoteBatch(QuoteBatch {
-                                quotes,
-                                provider_kind,
-                                ..
-                            }) => {
-                                for q in quotes {
-                                    let symbol_key = SymbolKey::new(q.instrument.clone(), provider_kind)
-                                    LAST_ASK.insert(symbol_key, q.ask); LAST_BID.insert(symbol_key, q.bid);
-                                    strategy.on_quote(&q, provider_kind);
-                                    let key = ConsolidatorKey::new(q.instrument.clone(), provider_kind, Topic::Quotes);
-                                    if let Some(mut cons) = CONSOLIDATORS
-                                        .get_mut(&key)
-                                        && let Some(out) = cons.on_bbo(&q)
-                                        && let tt_types::consolidators::ConsolidatedOut::Candle(ref c) = out
-                                    {
-                                        strategy.on_bar(c, provider_kind);
+                        },
+                        resp_opt = receiver.recv() => {
+                            if let Ok(resp) = resp_opt {
+                            match resp {
+                                Response::BacktestTimeUpdated { now } => {
+                                    if !backtest_mode {
+                                       panic!("Backtest time created in live mode")
                                     }
-                                }
-                            }
-                            Response::BarBatch(BarBatch {
-                                bars,
-                                provider_kind,
-                                ..
-                            }) => {
-                                for b in bars {
-                                    // Use close as mark
-                                    let symbol_key = SymbolKey::new(t.instrument.clone(), provider_kind)
-                                    LAST_PRICE.insert(symbol_key, t.price);
-                                    strategy.on_bar(&b, provider_kind);
-                                    // Drive consolidators for incoming candles (candle-to-candle)
-                                    let tpc = match b.resolution {
-                                        tt_types::data::models::Resolution::Seconds(1) => Topic::Candles1s,
-                                        tt_types::data::models::Resolution::Minutes(1) => Topic::Candles1m,
-                                        tt_types::data::models::Resolution::Hours(1) => Topic::Candles1h,
-                                        tt_types::data::models::Resolution::Daily => Topic::Candles1d,
-                                        tt_types::data::models::Resolution::Weekly => Topic::Candles1d,
-                                        _ => Topic::Candles1d,
-                                    };
-                                    let key = ConsolidatorKey::new(b.instrument.clone(), provider_kind, tpc);
-                                    if let Some(mut cons) =
-                                        CONSOLIDATORS.get_mut(&key)
-                                        && let Some(out) = cons.on_candle(&b)
-                                        && let tt_types::consolidators::ConsolidatedOut::Candle(ref c) = out
-                                    {
-                                        strategy.on_bar(c, provider_kind);
-                                    }
-                                }
-                            }
-                            Response::MBP10Batch(ob) => {
-                                strategy.on_mbp10(&ob.event, ob.provider_kind);
-                            }
-                            Response::OrdersBatch(ob) => {
-                                let resp2 = pm.process_response(tt_types::wire::Response::OrdersBatch(ob.clone()), CLOCK.now_dt());
-                                if let tt_types::wire::Response::OrdersBatch(ob2) = resp2 {
-                                    {
-                                        let mut g =
-                                            state.last_orders.write().expect("orders lock poisoned");
-                                        *g = Some(ob2.clone());
-                                    }
-                                    {
-                                        for o in ob2.orders.iter() {
-                                            if let Some(pid) = &o.provider_order_id {
-                                                handle_inner_for_task
-                                                    .provider_order_ids
-                                                    .insert(o.order_id, pid.0.clone());
-                                                // If there is a pending cancel for this engine order, dispatch it now
-                                                if let Some((_, mut spec)) = handle_inner_for_task.pending_cancels.remove(&o.order_id) {
-                                                    // fill provider order id and send
-                                                    spec.provider_order_id = pid.0.clone();
-                                                    let _ = bus_for_task
-                                                        .handle_request(Request::CancelOrder(spec))
-                                                        .await;
-                                                }
-                                                // If there is a pending replace order, dispatch it now
-                                                else if let Some((_, mut spec)) = handle_inner_for_task.pending_replaces.remove(&o.order_id) {
-                                                    // fill provider order id and send
-                                                    spec.provider_order_id = pid.0.clone();
-                                                    let _ = bus_for_task
-                                                        .handle_request(Request::ReplaceOrder(spec))
-                                                        .await;
-                                                }
+                                    // Record logical time for other emissions
+                                    // 1) Drive time-based consolidators using orchestrator-provided logical time
+                                    if !CONSOLIDATORS.is_empty() {
+                                        let mut outs: SmallVec<[(ProviderKind, Candle); 16]> = SmallVec::new();
+                                        for mut entry in CONSOLIDATORS.iter_mut() {
+                                            let provider = entry.key().provider;
+                                            if let Some(tt_types::consolidators::ConsolidatedOut::Candle(c)) = entry.value_mut().on_time(now) {
+                                                outs.push((provider, c));
                                             }
-                                            if o.state.is_eol() {
-                                                handle_inner_for_task.engine_order_accounts.remove(&o.order_id);
-                                                handle_inner_for_task.provider_order_ids.remove(&o.order_id);
-                                            }
-
+                                        }
+                                        for (prov, c) in outs {
+                                            strategy.on_bar(&c, prov);
                                         }
                                     }
-                                    strategy_for_task.on_orders_batch(&ob2);
-                                }
-                            }
-                            Response::PositionsBatch(pb) => {
-                                let resp2 = pm
-                                    .process_response(tt_types::wire::Response::PositionsBatch(pb.clone()), CLOCK.now_dt());
-                                if let tt_types::wire::Response::PositionsBatch(pb2) = resp2 {
-                                    {
-                                        let mut g = state
-                                            .last_positions
-                                            .write()
-                                            .expect("positions lock poisoned");
-                                        *g = Some(pb2.clone());
+                                    // 3) Flat-by-close enforcement is handled by backtest risk models; do not enforce in runtime
+                                },
+                                Response::BacktestCompleted { end: _ } => {
+                                    // Graceful shutdown: stop strategy and terminate engine task
+                                    strategy.on_stop();
+                                    return;
+                                },
+                                Response::WarmupComplete{ .. } => {
+                                   strategy.on_warmup_complete();
+                                },
+                                Response::TickBatch(TickBatch {
+                                    ticks,
+                                    provider_kind,
+                                    ..
+                                }) => {
+                                    for t in ticks {
+                                        let symbol_key = SymbolKey::new(t.instrument.clone(), provider_kind);
+                                        LAST_PRICE.insert(symbol_key, t.price);
+                                        strategy.on_tick(&t, provider_kind);
+                                        // Drive any consolidators registered for ticks on this key
+                                        let key = ConsolidatorKey::new(t.instrument.clone(), provider_kind, Topic::Ticks);
+                                        if let Some(mut cons) = CONSOLIDATORS
+                                            .get_mut(&key)
+                                            && let Some(out) = cons.on_tick(&t)
+                                            && let tt_types::consolidators::ConsolidatedOut::Candle(ref c) = out
+                                        {
+                                            strategy.on_bar(c, provider_kind);
+                                        }
                                     }
-                                    // In backtest mode, whenever positions structurally change, emit an account snapshot too.
                                 }
-                            }
-                            Response::AccountDeltaBatch(ab) => {
-                                let resp2 = pm.process_response(tt_types::wire::Response::AccountDeltaBatch(ab.clone()), CLOCK.now_dt());
-                                if let tt_types::wire::Response::AccountDeltaBatch(ab2) = resp2 {
-                                    {
-                                        let mut g =
-                                            state.last_accounts.write().expect("accounts lock poisoned");
-                                        *g = Some(ab2.clone());
+                                Response::QuoteBatch(QuoteBatch {
+                                    quotes,
+                                    provider_kind,
+                                    ..
+                                }) => {
+                                    for q in quotes {
+                                        let symbol_key = SymbolKey::new(q.instrument.clone(), provider_kind);
+                                        LAST_ASK.insert(symbol_key.clone(), q.ask); LAST_BID.insert(symbol_key, q.bid);
+                                        strategy.on_quote(&q, provider_kind);
+                                        let key = ConsolidatorKey::new(q.instrument.clone(), provider_kind, Topic::Quotes);
+                                        if let Some(mut cons) = CONSOLIDATORS
+                                            .get_mut(&key)
+                                            && let Some(out) = cons.on_bbo(&q)
+                                            && let tt_types::consolidators::ConsolidatedOut::Candle(ref c) = out
+                                        {
+                                            strategy.on_bar(c, provider_kind);
+                                        }
                                     }
                                 }
-                            }
-                            Response::ClosedTrades(t) => {
-                                let resp2 =
-                                    pm.process_response(tt_types::wire::Response::ClosedTrades(t.clone()), CLOCK.now_dt());
-                                if let tt_types::wire::Response::ClosedTrades(t2) = resp2 {
-                                    strategy_for_task.on_trades_closed(t2);
+                                Response::BarBatch(BarBatch {
+                                    bars,
+                                    provider_kind,
+                                    ..
+                                }) => {
+                                    for b in bars {
+                                        // Use close as mark
+                                        let symbol_key = SymbolKey::new(b.instrument.clone(), provider_kind);
+                                        LAST_PRICE.insert(symbol_key, b.close);
+                                        strategy.on_bar(&b, provider_kind);
+                                        // Drive consolidators for incoming candles (candle-to-candle)
+                                        let tpc = match b.resolution {
+                                            tt_types::data::models::Resolution::Seconds(1) => Topic::Candles1s,
+                                            tt_types::data::models::Resolution::Minutes(1) => Topic::Candles1m,
+                                            tt_types::data::models::Resolution::Hours(1) => Topic::Candles1h,
+                                            tt_types::data::models::Resolution::Daily => Topic::Candles1d,
+                                            tt_types::data::models::Resolution::Weekly => Topic::Candles1d,
+                                            _ => Topic::Candles1d,
+                                        };
+                                        let key = ConsolidatorKey::new(b.instrument.clone(), provider_kind, tpc);
+                                        if let Some(mut cons) =
+                                            CONSOLIDATORS.get_mut(&key)
+                                            && let Some(out) = cons.on_candle(&b)
+                                            && let tt_types::consolidators::ConsolidatedOut::Candle(ref c) = out
+                                        {
+                                            strategy.on_bar(c, provider_kind);
+                                        }
+                                    }
                                 }
-                            }
-                            Response::Tick {
-                                tick,
-                                provider_kind,
-                            } => {
+                                Response::MBP10Batch(ob) => {
+                                    strategy.on_mbp10(&ob.event, ob.provider_kind);
+                                }
+                                Response::OrdersBatch(ob) => {
+                                    // Forward order updates to the strategy. Internal state updates are handled elsewhere.
+                                    strategy.on_orders_batch(&ob);
+                                }
+                                Response::PositionsBatch(_pb) => {
+                                    // Positions are recorded internally but not forwarded to strategies.
+                                }
+                                Response::AccountDeltaBatch(_ab) => {
+                                    // Account deltas are recorded internally but not forwarded to strategies.
+                                }
+                                Response::ClosedTrades(t) => {
 
-                                strategy_for_task.on_tick(&tick, provider_kind);
-                            }
-                            Response::Quote { bbo, provider_kind } => {
-                                let mid = (bbo.bid + bbo.ask) / rust_decimal::Decimal::from(2);
-                                pm.update_apply_last_price(provider_kind, &bbo.instrument, mid, handle_inner_for_task.now_dt());
-                                strategy_for_task.on_quote(&bbo, provider_kind);
-                            }
-                            Response::Bar {
-                                candle,
-                                provider_kind,
-                            } => {
-                                pm.update_apply_last_price(provider_kind, &candle.instrument, candle.close, CLOCK.now_dt());
-                                strategy_for_task.on_bar(&candle, provider_kind);
-                            }
-                            Response::Mbp10 {
-                                mbp10,
-                                provider_kind,
-                            } => {
-                                //todo, the way we apply Mpd10 will not actually be this way, it will be broken down by types.
-                                // trades and bbo can build bars from the single feed.
-                                pm.update_apply_last_price(provider_kind, &mbp10.instrument, mbp10.price, CLOCK.now_dt());
-                                strategy_for_task.on_mbp10(&mbp10, provider_kind);
-                            }
-                            Response::AnnounceShm(ann) => {
-                                if handle_inner_for_task.backtest_mode { continue; }
+                                }
+                                Response::Tick {
+                                    tick,
+                                    provider_kind,
+                                } => {
+                                    let symbol_key = SymbolKey::new(tick.instrument.clone(), provider_kind);
+                                    LAST_PRICE.insert(symbol_key, tick.price);
+                                    strategy.on_tick(&tick, provider_kind);
+                                }
+                                Response::Quote { bbo, provider_kind } => {
+                                    let symbol_key = SymbolKey::new(bbo.instrument.clone(), provider_kind);
+                                    LAST_BID.insert(symbol_key.clone(), bbo.bid);
+                                    LAST_ASK.insert(symbol_key.clone(), bbo.ask);
+                                    strategy.on_quote(&bbo, provider_kind);
+                                }
+                                Response::Bar {
+                                    candle,
+                                    provider_kind,
+                                } => {
+                                    let symbol_key = SymbolKey::new(candle.instrument.clone(), provider_kind);
+                                    LAST_PRICE.insert(symbol_key, candle.close);
+                                    strategy.on_bar(&candle, provider_kind);
+                                }
+                                Response::Mbp10 {
+                                    mbp10,
+                                    provider_kind,
+                                } => {
+                                    //let symbol_key = SymbolKey::new(mbp10.instrument.clone(), provider_kind);
+                                    //LAST_PRICE.insert(symbol_key, mbp10.price); //todo
+                                    strategy.on_mbp10(&mbp10, provider_kind);
+                                }
+                                Response::AnnounceShm(ann) => {
+                                    if backtest_mode { continue; }
 
-                                let topic = ann.topic;
-                                let key = ann.key.clone();
-                                // If this (topic,key) was blacklisted due to SHM errors, skip spawning reader
-                                if shm_blacklist_for_task.get(&(topic, key.clone())).is_some() {
-                                    info!(?topic, ?key, "SHM disabled for this stream; staying on UDS");
-                                } else if shm_tasks.get(&(topic, key.clone())).is_none() {
-                                    let tx_shm = tx_for_task.clone();
-                                    let value = key.clone();
-                                    let sub_id = sub_id_for_task.clone();
-                                    let shm_blacklist = shm_blacklist_for_task.clone();
+                                    let topic = ann.topic;
+                                    let key = ann.key.clone();
+                                    // If this (topic,key) was blacklisted due to SHM errors, skip spawning reader
+                                    if shm_blacklist_for_task.get(&(topic, key.clone())).is_some() {
+                                        info!(?topic, ?key, "SHM disabled for this stream; staying on UDS");
+                                    } else if shm_tasks.get(&(topic, key.clone())).is_none() {
+                                        let value = key.clone();
+                                        let shm_blacklist = shm_blacklist_for_task.clone();
 
-                                    let handle: JoinHandle<()> = tokio::spawn(async move {
-                                        let mut last_seq: u32 = 0;
-                                        let mut consecutive_failures: u32 = 0;
-                                        loop {
-                                            let mut progressed = false;
-                                            #[allow(clippy::collapsible_if)]
-                                            if let Some(reader) = tt_shm::ensure_reader(topic, &value) {
-                                                if let Some((seq, buf)) = reader.read_with_seq() {
-                                                    if seq != last_seq {
-                                                        progressed = true;
-                                                        last_seq = seq;
-                                                        let maybe_resp = match topic {
-                                                            Topic::Quotes => Bbo::from_bytes(&buf)
-                                                                .ok()
-                                                                .map(|bbo| Response::Quote {
-                                                                    bbo,
-                                                                    provider_kind: key.provider,
-                                                                }),
-                                                            Topic::Ticks => Tick::from_bytes(&buf)
-                                                                .ok()
-                                                                .map(|t| Response::Tick {
-                                                                    tick: t,
-                                                                    provider_kind: key.provider,
-                                                                }),
-                                                            Topic::MBP10 => Mbp10::from_bytes(&buf)
-                                                                .ok()
-                                                                .map(|m| Response::Mbp10 {
-                                                                    mbp10: m,
-                                                                    provider_kind: key.provider,
-                                                                }),
-                                                            _ => None,
-                                                        };
-                                                        if let Some(resp) = maybe_resp {
-                                                            consecutive_failures = 0;
-                                                            if tx_shm.is_closed() {
-                                                                error!(
-                                                                    "tx shm channel closed; terminating SHM task"
-                                                                );
-                                                                break;
-                                                            }
-                                                            if let Err(e) = tx_shm.send(resp).await {
-                                                                error!(
-                                                                    "tx shm send failed: {e}; terminating SHM task"
-                                                                );
-                                                                break;
-                                                            }
-                                                        } else {
-                                                            // Parse failure or unsupported topic buffer
-                                                            consecutive_failures =
-                                                                consecutive_failures.saturating_add(1);
-                                                            if consecutive_failures >= 8 {
-                                                                // Mark this (topic,key) as SHM-failed and request framed fallback
-                                                                info!(?topic, key = ?value, fails = consecutive_failures, "SHM decode failures; falling back to UDS for this stream");
-                                                                shm_blacklist
-                                                                    .insert((topic, value.clone()), ());
-                                                                // Ask server to (re)subscribe; providers may resume framed publishing when SHM is disabled client-side
-                                                                let _ = bus()
-                                                                    .handle_request(
-                                                                        Request::SubscribeKey(
-                                                                            tt_types::wire::SubscribeKey {
-                                                                                topic,
-                                                                                key: value.clone(),
-                                                                                latest_only: false,
-                                                                                from_seq: 0,
-                                                                            },
-                                                                        ),
-                                                                    )
-                                                                    .await;
-                                                                break;
+                                        let handle: JoinHandle<()> = tokio::spawn(async move {
+                                            let mut last_seq: u32 = 0;
+                                            let mut consecutive_failures: u32 = 0;
+                                            loop {
+                                                let mut progressed = false;
+                                                #[allow(clippy::collapsible_if)]
+                                                if let Some(reader) = tt_shm::ensure_reader(topic, &value) {
+                                                    if let Some((seq, buf)) = reader.read_with_seq() {
+                                                        if seq != last_seq {
+                                                            progressed = true;
+                                                            last_seq = seq;
+                                                            let maybe_resp = match topic {
+                                                                Topic::Quotes => Bbo::from_bytes(&buf)
+                                                                    .ok()
+                                                                    .map(|bbo| Response::Quote {
+                                                                        bbo,
+                                                                        provider_kind: key.provider,
+                                                                    }),
+                                                                Topic::Ticks => Tick::from_bytes(&buf)
+                                                                    .ok()
+                                                                    .map(|t| Response::Tick {
+                                                                        tick: t,
+                                                                        provider_kind: key.provider,
+                                                                    }),
+                                                                Topic::MBP10 => Mbp10::from_bytes(&buf)
+                                                                    .ok()
+                                                                    .map(|m| Response::Mbp10 {
+                                                                        mbp10: m,
+                                                                        provider_kind: key.provider,
+                                                                    }),
+                                                                _ => None,
+                                                            };
+                                                            if let Some(resp) = maybe_resp {
+                                                                consecutive_failures = 0;
+                                                                // Broadcast directly to the local bus so engine loop receives it
+                                                                if let Err(e) = bus().broadcast(resp) {
+                                                                    error!("tx shm broadcast failed: {e}; terminating SHM task");
+                                                                    break;
+                                                                }
+                                                            } else {
+                                                                // Parse failure or unsupported topic buffer
+                                                                consecutive_failures =
+                                                                    consecutive_failures.saturating_add(1);
+                                                                if consecutive_failures >= 8 {
+                                                                    // Mark this (topic,key) as SHM-failed and request framed fallback
+                                                                    info!(?topic, key = ?value, fails = consecutive_failures, "SHM decode failures; falling back to UDS for this stream");
+                                                                    shm_blacklist
+                                                                        .insert((topic, value.clone()), ());
+                                                                    // Ask server to (re)subscribe; providers may resume framed publishing when SHM is disabled client-side
+                                                                    let _ = bus()
+                                                                        .handle_request(
+                                                                            Request::SubscribeKey(
+                                                                                tt_types::wire::SubscribeKey {
+                                                                                    topic,
+                                                                                    key: value.clone(),
+                                                                                    latest_only: false,
+                                                                                    from_seq: 0,
+                                                                                },
+                                                                            ),
+                                                                        )
+                                                                        .await;
+                                                                    break;
+                                                                }
                                                             }
                                                         }
                                                     }
                                                 }
-                                            }
 
-                                            // If no progress (no reader, no new seq, or decode produced no message),
-                                            // yield/sleep so task can be aborted and we avoid busy-spin.
-                                            if !progressed {
-                                                if let Some(ns) = slow_spin_ns {
-                                                    tokio::time::sleep(Duration::from_nanos(ns)).await;
-                                                } else {
-                                                    tokio::task::yield_now().await;
+                                                // If no progress (no reader, no new seq, or decode produced no message),
+                                                // yield/sleep so task can be aborted and we avoid busy-spin.
+                                                if !progressed {
+                                                    if let Some(ns) = slow_spin_ns {
+                                                        tokio::time::sleep(Duration::from_nanos(ns)).await;
+                                                    } else {
+                                                        tokio::task::yield_now().await;
+                                                    }
                                                 }
                                             }
-                                        }
-                                    });
-                                    shm_tasks.insert((topic, key), handle);
-                                }
-                            }
-                            Response::SubscribeResponse {
-                                topic,
-                                instrument,
-                                success,
-                            } => {
-                                let data_topic = DataTopic::from(topic);
-                                strategy.on_subscribe(instrument, data_topic, success);
-                            }
-                            Response::UnsubscribeResponse { topic, instrument } => {
-                                // Stop any SHM polling task(s) for this topic/instrument
-                                let to_remove: Vec<(Topic, SymbolKey)> = shm_tasks
-                                    .iter()
-                                    .filter_map(|e| {
-                                        let (t, k) = (e.key().0, e.key().1.clone());
-                                        if t == topic && k.instrument == instrument {
-                                            Some((t, k))
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .collect();
-                                for (tk, kk) in to_remove {
-                                    if let Some((_, handle)) = shm_tasks.remove(&(tk, kk)) {
-                                        handle.abort();
+                                        });
+                                        shm_tasks.insert((topic, key), handle);
                                     }
                                 }
-                                let data_topic = DataTopic::from(topic);
-                                strategy.on_unsubscribe(instrument, data_topic);
+                                Response::SubscribeResponse {
+                                    topic,
+                                    instrument,
+                                    success,
+                                } => {
+                                    let data_topic = DataTopic::from(topic);
+                                    strategy.on_subscribe(instrument, data_topic, success);
+                                }
+                                Response::UnsubscribeResponse { topic, instrument } => {
+                                    // Stop any SHM polling task(s) for this topic/instrument
+                                    let to_remove: Vec<(Topic, SymbolKey)> = shm_tasks
+                                        .iter()
+                                        .filter_map(|e| {
+                                            let (t, k) = (e.key().0, e.key().1.clone());
+                                            if t == topic && k.instrument == instrument {
+                                                Some((t, k))
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .collect();
+                                    for (tk, kk) in to_remove {
+                                        if let Some((_, handle)) = shm_tasks.remove(&(tk, kk)) {
+                                            handle.abort();
+                                        }
+                                    }
+                                    let data_topic = DataTopic::from(topic);
+                                    strategy.on_unsubscribe(instrument, data_topic);
+                                }
+                                Response::Pong(_)
+                                | Response::InstrumentsResponse(_)
+                                | Response::InstrumentsMapResponse(_)
+                                | Response::VendorData(_)
+                                | Response::AccountInfoResponse(_) => {}
+                                Response::DbUpdateComplete { .. } => {}
                             }
-                            Response::Pong(_)
-                            | Response::InstrumentsResponse(_)
-                            | Response::InstrumentsMapResponse(_)
-                            | Response::VendorData(_)
-                            | Response::AccountInfoResponse(_) => {}
-                            Response::DbUpdateComplete { .. } => {}
                             // After processing a message in backtest mode, notify feeder so it can proceed to the next one.
-                            if backtest_mode && let Some(notify) = &backtest_notify {
-                                notify.notify_one();
-                            };
+                            if backtest_mode {
+                                if let Some(notify) = &backtest_notify_for_task {
+                                    notify.notify_one();
+                                }
+                            }
                         }
                     }
                 }
             }
-            strategy.on_stop();
-            Ok(())
-        }
+        });
+
+                self.task = Some(handle_task);
+        Ok(())
+    }
 
     async fn drain_commands_for_task() {
         use tt_types::wire::{SubscribeKey, UnsubscribeKey};
@@ -601,6 +541,7 @@ impl EngineRuntime {
             rt.block_on(fut)
         }
     }
+}
 
 #[cfg(test)]
 mod engine_shm_tests {
@@ -639,7 +580,7 @@ mod engine_shm_tests {
         };
 
         // Deliver AnnounceShm to the engine via in-memory bus routing.
-        let _ = bus.route_response(Response::AnnounceShm(ann)).await;
+        let _ = bus.broadcast(Response::AnnounceShm(ann));
 
         // Give the engine loop a short moment to spawn the task.
         sleep(Duration::from_millis(20)).await;
@@ -665,7 +606,7 @@ mod engine_shm_tests {
         // Pre-mark the stream as SHM-disabled
         rt.shm_blacklist.insert((Topic::MBP10, key.clone()), ());
 
-        let _handle = rt.start(NopStrategy).await.expect("engine start");
+        let _handle = rt.start(NopStrategy, true).await.expect("engine start");
 
         let ann = tt_types::wire::AnnounceShm {
             topic: Topic::MBP10,
@@ -674,7 +615,7 @@ mod engine_shm_tests {
             layout_ver: 1,
             size: 4096,
         };
-        let _ = bus.route_response(Response::AnnounceShm(ann)).await;
+        let _ = bus.broadcast(Response::AnnounceShm(ann));
 
         // Give the engine loop a short moment; it should NOT spawn a task for blacklisted key.
         sleep(Duration::from_millis(20)).await;
@@ -683,9 +624,5 @@ mod engine_shm_tests {
             rt.shm_tasks.get(&(Topic::MBP10, key.clone())).is_none(),
             "SHM task should not be spawned for blacklisted stream"
         );
-
-        let _ = tokio::time::timeout(Duration::from_secs(2), rt.stop())
-            .await
-            .expect("engine stop should not hang");
     }
 }

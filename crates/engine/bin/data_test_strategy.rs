@@ -3,10 +3,10 @@ use std::time::Duration;
 use tokio::time::sleep;
 use tracing::info;
 use tracing::level_filters::LevelFilter;
-use tt_bus::ClientMessageBus;
-use tt_engine::golabal_static::EngineHandle;
 use tt_engine::models::DataTopic;
 use tt_engine::runtime::EngineRuntime;
+use tt_engine::statics::bus::connect_live_bus;
+use tt_engine::statics::subscriptions::subscribe;
 use tt_engine::traits::Strategy;
 use tt_types::accounts::account::AccountName;
 use tt_types::accounts::events::AccountDelta;
@@ -19,21 +19,19 @@ use tt_types::wire::Trade;
 
 #[derive(Default)]
 struct DataTestStrategy {
-    engine: Option<EngineHandle>,
 }
 
 impl Strategy for DataTestStrategy {
-    fn on_start(&mut self, h: EngineHandle) {
+    fn on_start(&mut self) {
         info!("strategy start");
         // Non-blocking subscribe via handle command queue
-        h.subscribe_now(
+        subscribe(
             DataTopic::MBP10,
             SymbolKey::new(
                 Instrument::from_str("MNQ.Z25").unwrap(),
                 ProviderKind::ProjectX(ProjectXTenant::Topstep),
             ),
         );
-        self.engine = Some(h);
     }
 
     fn on_stop(&mut self) {
@@ -63,20 +61,6 @@ impl Strategy for DataTestStrategy {
         println!("{:?}", b);
     }
 
-    fn on_positions_batch(&mut self, b: &wire::PositionsBatch) {
-        println!("{:?}", b);
-    }
-
-    fn on_account_delta(&mut self, accounts: &[AccountDelta]) {
-        for account_delta in accounts {
-            println!("{:?}", account_delta);
-        }
-    }
-
-    fn on_trades_closed(&mut self, _trades: Vec<Trade>) {
-        // implement when needed
-    }
-
     fn on_subscribe(&mut self, instrument: Instrument, data_topic: DataTopic, success: bool) {
         println!(
             "Subscribed to {} on topic {:?}: Success: {}",
@@ -103,16 +87,13 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_max_level(LevelFilter::INFO)
         .init();
+    connect_live_bus().await?;
 
-    let addr = std::env::var("TT_BUS_ADDR").unwrap_or_else(|_| "/tmp/tick-trader.sock".to_string());
-    let bus = ClientMessageBus::connect(&addr).await?;
-
-    let mut engine = EngineRuntime::new(bus.clone(), Some(500_000));
+    let mut engine = EngineRuntime::new(Some(500_000));
     let strategy = DataTestStrategy::default();
-    let _handle = engine.start(strategy).await?;
+    let _handle = engine.start(strategy, false).await?;
 
     sleep(Duration::from_secs(60)).await;
 
-    engine.stop().await?;
     Ok(())
 }

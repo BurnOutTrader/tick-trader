@@ -8,6 +8,7 @@ use anyhow::Result;
 use chrono::{NaiveDate, TimeZone, Utc};
 use std::sync::Arc;
 use tokio::sync::Notify;
+use crate::statics::bus::bus;
 
 /// Configuration for launching a backtest session.
 #[derive(Clone)]
@@ -105,15 +106,14 @@ pub async fn start_backtest<S: Strategy>(
         EngineRuntime::new_backtest(cfg.slow_spin, Some(notify.clone()));
 
     // Start the strategy.
-    let handle = rt.start(strategy).await?;
+    let handle = rt.start(strategy, true).await?;
 
     // Validate step > 0 and spawn orchestrator loop to advance time in discrete steps.
     if cfg.step <= chrono::Duration::zero() {
         anyhow::bail!("BacktestConfig.step must be positive");
     }
     let step = cfg.step;
-    let bus = feeder.bus.clone();
-    let sub_id = handle.inner.sub_id.clone();
+    let bus = bus();
     let start = cfg
         .feeder
         .range_start
@@ -131,7 +131,6 @@ pub async fn start_backtest<S: Strategy>(
             // Request feeder to emit up to `now`
             let _ = bus
                 .handle_request(
-                    &sub_id,
                     tt_types::wire::Request::BacktestAdvanceTo(tt_types::wire::BacktestAdvanceTo {
                         to: now,
                     }),
@@ -142,7 +141,7 @@ pub async fn start_backtest<S: Strategy>(
         }
     });
 
-    Ok((handle, feeder))
+    Ok(())
 }
 
 /// Convenience helper: launch a backtest with explicit start/end dates.

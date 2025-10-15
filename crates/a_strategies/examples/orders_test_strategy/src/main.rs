@@ -7,7 +7,6 @@ use tracing::info;
 use tracing::level_filters::LevelFilter;
 
 use tt_engine::backtest::orchestrator::{BacktestConfig, start_backtest};
-use tt_engine::golabal_static::EngineHandle;
 use tt_engine::models::DataTopic;
 use tt_engine::traits::Strategy;
 
@@ -24,9 +23,10 @@ use tt_types::wire::{self, OrderType, Trade};
 use colored::Colorize;
 use std::collections::HashMap;
 use tt_database::schema::ensure_schema;
+use tt_engine::statics::order_placement::place_order;
+use tt_engine::statics::subscriptions::subscribe;
 
 struct BacktestOrdersStrategy {
-    engine: Option<EngineHandle>,
     sk: SymbolKey,
     account: AccountKey,
     last_bars: RollingWindow<Candle>,
@@ -55,7 +55,6 @@ impl BacktestOrdersStrategy {
             AccountName::from_str("PRAC-V2-6").unwrap(),
         );
         Self {
-            engine: None,
             sk,
             account,
             last_bars: RollingWindow::new(10),
@@ -87,11 +86,10 @@ impl BacktestOrdersStrategy {
 }
 
 impl Strategy for BacktestOrdersStrategy {
-    fn on_start(&mut self, h: EngineHandle) {
+    fn on_start(&mut self) {
         println!("backtest orders strategy start");
         // Subscribe to a modest data stream so marks update
-        h.subscribe_now(DataTopic::Candles1m, self.sk.clone());
-        self.engine = Some(h);
+        subscribe(DataTopic::Candles1m, self.sk.clone());
     }
 
     fn on_warmup_complete(&mut self) {
@@ -124,17 +122,14 @@ impl Strategy for BacktestOrdersStrategy {
 
         self.bar_idx = self.bar_idx.saturating_add(1);
         let last = c.close;
-        let h = match &self.engine {
-            Some(h) => h.clone(),
-            None => return,
-        };
+
         let side_buy = tt_types::accounts::events::Side::Buy;
         let side_sell = tt_types::accounts::events::Side::Sell;
         match self.bar_idx {
             1 => {
                 let tag = "MKT_BUY";
                 self.record_expect(tag, true);
-                let _ = h.place_order(
+                let _ = place_order(
                     self.account.clone(),
                     self.sk.instrument.clone(),
                     side_buy,
@@ -151,7 +146,7 @@ impl Strategy for BacktestOrdersStrategy {
             50 => {
                 let tag = "MKT_SELL";
                 self.record_expect(tag, true);
-                let _ = h.place_order(
+                let _ = place_order(
                     self.account.clone(),
                     self.sk.instrument.clone(),
                     side_sell,
@@ -168,7 +163,7 @@ impl Strategy for BacktestOrdersStrategy {
             100 => {
                 let tag = "LIM_BUY";
                 self.record_expect(tag, true);
-                let _ = h.place_order(
+                let _ = place_order(
                     self.account.clone(),
                     self.sk.instrument.clone(),
                     side_buy,
@@ -185,7 +180,7 @@ impl Strategy for BacktestOrdersStrategy {
             200 => {
                 let tag = "LIM_SELL";
                 self.record_expect(tag, true);
-                let _ = h.place_order(
+                let _ = place_order(
                     self.account.clone(),
                     self.sk.instrument.clone(),
                     side_sell,
@@ -202,7 +197,7 @@ impl Strategy for BacktestOrdersStrategy {
             300 => {
                 let tag = "STP_BUY";
                 self.record_expect(tag, true);
-                let _ = h.place_order(
+                let _ = place_order(
                     self.account.clone(),
                     self.sk.instrument.clone(),
                     side_buy,
@@ -219,7 +214,7 @@ impl Strategy for BacktestOrdersStrategy {
             350 => {
                 let tag = "STP_SELL";
                 self.record_expect(tag, true);
-                let _ = h.place_order(
+                let _ = place_order(
                     self.account.clone(),
                     self.sk.instrument.clone(),
                     side_sell,
@@ -236,7 +231,7 @@ impl Strategy for BacktestOrdersStrategy {
             400 => {
                 let tag = "STPLMT_BUY";
                 self.record_expect(tag, true);
-                let _ = h.place_order(
+                let _ = place_order(
                     self.account.clone(),
                     self.sk.instrument.clone(),
                     side_buy,
@@ -253,7 +248,7 @@ impl Strategy for BacktestOrdersStrategy {
             450 => {
                 let tag = "STPLMT_SELL";
                 self.record_expect(tag, true);
-                let _ = h.place_order(
+                let _ = place_order(
                     self.account.clone(),
                     self.sk.instrument.clone(),
                     side_sell,
@@ -270,7 +265,7 @@ impl Strategy for BacktestOrdersStrategy {
             500 => {
                 let tag = "JOIN_BID_BUY";
                 self.record_expect(tag, false);
-                let _ = h.place_order(
+                let _ = place_order(
                     self.account.clone(),
                     self.sk.instrument.clone(),
                     side_buy,
@@ -287,7 +282,7 @@ impl Strategy for BacktestOrdersStrategy {
             550 => {
                 let tag = "JOIN_ASK_SELL";
                 self.record_expect(tag, false);
-                let _ = h.place_order(
+                let _ = place_order(
                     self.account.clone(),
                     self.sk.instrument.clone(),
                     side_sell,
@@ -304,7 +299,7 @@ impl Strategy for BacktestOrdersStrategy {
             600 => {
                 let tag = "TRAIL_BUY";
                 self.record_expect(tag, false);
-                let _ = h.place_order(
+                let _ = place_order(
                     self.account.clone(),
                     self.sk.instrument.clone(),
                     side_buy,
@@ -321,7 +316,7 @@ impl Strategy for BacktestOrdersStrategy {
             650 => {
                 let tag = "TRAIL_SELL";
                 self.record_expect(tag, false);
-                let _ = h.place_order(
+                let _ = place_order(
                     self.account.clone(),
                     self.sk.instrument.clone(),
                     side_sell,
@@ -382,26 +377,6 @@ impl Strategy for BacktestOrdersStrategy {
         }
     }
 
-    fn on_positions_batch(&mut self, b: &wire::PositionsBatch) {
-        for p in &b.positions {
-            let p_msg = p.to_clean_string();
-            println!("{}", p_msg.as_str().cyan());
-        }
-    }
-
-    fn on_account_delta(&mut self, accounts: &[AccountDelta]) {
-        for a in accounts {
-            let acc_msg = a.to_clean_string();
-            println!("{}", acc_msg.purple());
-        }
-    }
-
-    fn on_trades_closed(&mut self, trades: Vec<Trade>) {
-        for t in trades {
-            info!("{:?}", t)
-        }
-    }
-
     fn on_subscribe(&mut self, instrument: Instrument, data_topic: DataTopic, _success: bool) {
         println!("Subscribed: {:?} {:?}", instrument, data_topic);
     }
@@ -434,7 +409,7 @@ async fn main() -> anyhow::Result<()> {
     // Configure and start backtest
     let cfg = BacktestConfig::from_to(chrono::Duration::milliseconds(250), start_date, end_date);
     let strategy = BacktestOrdersStrategy::default();
-    let (_engine_handle, _feeder_handle) = start_backtest(db, cfg, strategy).await?;
+    start_backtest(db, cfg, strategy).await?;
 
     // Allow time for data and order lifecycle to flow
     sleep(Duration::from_secs(500)).await;

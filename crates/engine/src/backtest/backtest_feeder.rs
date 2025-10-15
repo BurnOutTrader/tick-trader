@@ -816,6 +816,7 @@ impl BacktestFeeder {
                                             .or_insert(AccountDelta {
                                                 provider_kind: so.provider,
                                                 name: so.spec.account_key.account_name.clone(),
+                                                key: so.spec.account_key.clone(),
                                                 equity: Decimal::ZERO,
                                                 day_realized_pnl: Decimal::ZERO,
                                                 open_pnl: Decimal::ZERO,
@@ -945,7 +946,7 @@ impl BacktestFeeder {
                                     seq: 0,
                                     orders: due,
                                 };
-                                let _ = bus.route_response(Response::OrdersBatch(ob)).await;
+                                let _ = bus.broadcast(Response::OrdersBatch(ob));
                                 await_ack(&notify).await;
                             }
                             // Emit account snapshots for any accounts updated by fees this tick
@@ -970,8 +971,7 @@ impl BacktestFeeder {
                                         accounts: accounts_vec,
                                     };
                                     let _ = bus
-                                        .route_response(Response::AccountDeltaBatch(ab))
-                                        .await;
+                                        .broadcast(Response::AccountDeltaBatch(ab));
                                     await_ack(&notify).await;
                                 }
                             }
@@ -1002,8 +1002,7 @@ impl BacktestFeeder {
                                         positions: positions_vec,
                                     };
                                     let _ = bus
-                                        .route_response(Response::PositionsBatch(pb))
-                                        .await;
+                                        .broadcast(Response::PositionsBatch(pb));
                                     await_ack(&notify).await;
                                 }
                             }
@@ -1014,8 +1013,7 @@ impl BacktestFeeder {
                             }
                             // After draining up to watermark (and emitting due orders), notify runtime of logical time
                             let _ = bus
-                                .route_response(Response::BacktestTimeUpdated { now })
-                                .await;
+                                .broadcast(Response::BacktestTimeUpdated { now });
                             await_ack(&notify).await;
                             // If we have an end range and reached/passed it, emit BacktestCompleted once
                             if !completed_emitted
@@ -1023,8 +1021,7 @@ impl BacktestFeeder {
                                 && now >= end
                             {
                                 let _ = bus
-                                    .route_response(Response::BacktestCompleted { end })
-                                    .await;
+                                    .broadcast(Response::BacktestCompleted { end });
                                 await_ack(&notify).await;
                                 completed_emitted = true;
                             }
@@ -1102,7 +1099,7 @@ impl BacktestFeeder {
                                     seq: 0,
                                     orders: vec![upd],
                                 };
-                                let _ = bus.route_response(Response::OrdersBatch(ob)).await;
+                                let _ = bus.broadcast(Response::OrdersBatch(ob));
                                 await_ack(&notify).await;
                                 continue;
                             }

@@ -9,8 +9,8 @@ use tracing::info;
 use tracing::level_filters::LevelFilter;
 use tt_database::schema::ensure_schema;
 use tt_engine::backtest::orchestrator::{BacktestConfig, start_backtest};
-use tt_engine::golabal_static::EngineHandle;
 use tt_engine::models::DataTopic;
+use tt_engine::statics::subscriptions::subscribe;
 use tt_engine::traits::Strategy;
 
 use tt_types::accounts::account::AccountName;
@@ -22,22 +22,19 @@ use tt_types::securities::symbols::Instrument;
 use tt_types::wire::{self, Trade};
 
 #[derive(Default)]
-struct BacktestDataStrategy {
-    engine: Option<EngineHandle>,
-}
+struct BacktestDataStrategy;
 
 impl Strategy for BacktestDataStrategy {
-    fn on_start(&mut self, h: EngineHandle) {
+    fn on_start(&mut self) {
         info!("backtest strategy start");
         // Subscribe using the engine handle to the desired instrument/topic
-        h.subscribe_now(
+        subscribe(
             DataTopic::Candles1m,
             SymbolKey::new(
                 Instrument::from_str("MNQ.Z25").unwrap(),
                 ProviderKind::ProjectX(ProjectXTenant::Topstep),
             ),
         );
-        self.engine = Some(h);
     }
 
     fn on_stop(&mut self) {
@@ -75,20 +72,6 @@ impl Strategy for BacktestDataStrategy {
 
     fn on_orders_batch(&mut self, b: &wire::OrdersBatch) {
         println!("{:?}", b);
-    }
-
-    fn on_positions_batch(&mut self, b: &wire::PositionsBatch) {
-        println!("{:?}", b);
-    }
-
-    fn on_account_delta(&mut self, accounts: &[AccountDelta]) {
-        for account_delta in accounts {
-            println!("{:?}", account_delta);
-        }
-    }
-
-    fn on_trades_closed(&mut self, _trades: Vec<Trade>) {
-        // implement when needed
     }
 
     fn on_subscribe(&mut self, instrument: Instrument, data_topic: DataTopic, success: bool) {
@@ -131,7 +114,7 @@ async fn main() -> anyhow::Result<()> {
     // Configure and start backtest
     let cfg = BacktestConfig::from_to(chrono::Duration::minutes(1), start_date, end_date);
     let strategy = BacktestDataStrategy::default();
-    let (_engine_handle, _feeder_handle) = start_backtest(db, cfg, strategy).await?;
+    start_backtest(db, cfg, strategy).await?;
 
     // Let it run for a short while to stream historical data
     sleep(Duration::from_secs(200)).await;
