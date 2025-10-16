@@ -44,10 +44,20 @@ impl ClientMessageBus {
     }
 
     pub fn route_response(&self, response: Response, cuid: u64) {
-        if let Some((_, sender)) = self.pending.remove(&cuid)
-            && let Err(e) = sender.send(response)
-        {
-            error!("route_response: failed to route response: {:?}", e);
+        // Try to deliver to a correlated waiter first
+        if let Some((_, sender)) = self.pending.remove(&cuid) {
+            if let Err(_canceled) = sender.send(response.clone()) {
+                // Receiver was dropped (caller didn't await or timed out). Fallback to broadcast so the
+                // message is not lost and to avoid spurious errors in backtests.
+                if let Err(e) = self.broadcast(response) {
+                    error!("route_response: receiver dropped and broadcast failed: {:?}", e);
+                }
+            }
+        } else {
+            // No correlated waiter found (could be unsolicited or already timed out); broadcast it.
+            if let Err(e) = self.broadcast(response) {
+                error!("route_response: no waiter and broadcast failed: {:?}", e);
+            }
         }
     }
 
