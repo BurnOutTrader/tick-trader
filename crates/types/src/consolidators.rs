@@ -761,3 +761,280 @@ impl Consolidator for CandlesToCandlesConsolidator {
         self.update_candle(c).map(ConsolidatedOut::Candle)
     }
 }
+
+// === Hybrid consolidator: accepts ticks during live and candles during warmup ===
+// This consolidator produces time-based candles at `dst` resolution and can be driven by either
+// Tick events (live) or Candle events (historical warmup). To allow registering under both Tick
+// and Candle topics in the engine while sharing a single state, it uses interior mutability via
+// Arc<Mutex<..>> and is Clone.
+#[derive(Clone)]
+pub struct HybridTickOrCandleToCandles {
+    inner: Arc<std::sync::Mutex<HybridInner>>,
+}
+
+struct HybridInner {
+    dst: Resolution,
+    out_symbol: String,
+    hours: Option<Arc<MarketHours>>,
+    instrument: Instrument,
+    // rolling state for the current output window
+    o: Option<Decimal>,
+    h: Option<Decimal>,
+    l: Option<Decimal>,
+    c: Option<Decimal>,
+    vol: Decimal,
+    bid_vol: Decimal,
+    ask_vol: Decimal,
+    win: Option<Win>,
+}
+
+impl HybridTickOrCandleToCandles {
+    pub fn new(
+        dst: Resolution,
+        out_symbol: String,
+        hours: Option<Arc<MarketHours>>,
+        instrument: Instrument,
+    ) -> Self {
+        let inner = HybridInner {
+            dst,
+            out_symbol,
+            hours,
+            instrument,
+            o: None,
+            h: None,
+            l: None,
+            c: None,
+            vol: Decimal::ZERO,
+            bid_vol: Decimal::ZERO,
+            ask_vol: Decimal::ZERO,
+            win: None,
+        };
+        Self {
+            inner: Arc::new(std::sync::Mutex::new(inner)),
+        }
+    }
+}
+
+impl HybridInner {
+    fn init_win(&self, t: DateTime<Utc>) -> Win {
+        match self.dst {
+            Resolution::Daily | Resolution::Weekly => {
+                let mh = self
+                    .hours
+                    .as_ref()
+                    .expect("Daily/Weekly requires MarketHours");
+                let (open, close) = session_bounds(mh, t);
+                Win::Session { open, close }
+            }
+            _ => {
+                let len = fixed_len(&self.dst);
+                let (start, end) = (floor_to(&self.dst, t), floor_to(&self.dst, t) + len);
+                Win::Fixed { start, end, len }
+            }
+        }
+    }
+
+    fn inside(&self, t: DateTime<Utc>, w: &Win) -> bool {
+        match w {
+            Win::Fixed { end, .. } => t < *end,
+            Win::Session { open, close } => t >= *open && t < *close,
+        }
+    }
+
+    fn advance(&self, t_last: DateTime<Utc>, w: &Win) -> Win {
+        match w {
+            Win::Fixed { end, len, .. } => {
+                let mut s = *end;
+                while t_last >= s {
+                    s += *len;
+                }
+                Win::Fixed {
+                    start: s - *len,
+                    end: s,
+                    len: *len,
+                }
+            }
+            Win::Session { close, .. } => {
+                let mh = self
+                    .hours
+                    .as_ref()
+                    .expect("session advance needs MarketHours");
+                let (nopen, nclose) = next_session_after(mh, *close);
+                Win::Session {
+                    open: nopen,
+                    close: nclose,
+                }
+            }
+        }
+    }
+
+    fn flush(&mut self, start: DateTime<Utc>, end: DateTime<Utc>) -> Option<Candle> {
+        if let (Some(oo), Some(hh), Some(ll), Some(cc)) = (self.o, self.h, self.l, self.c) {
+            let out = Candle {
+                symbol: self.out_symbol.clone(),
+                instrument: self.instrument.clone(),
+                time_start: start,
+                time_end: end_inclusive(end),
+                open: oo,
+                high: hh,
+                low: ll,
+                close: cc,
+                volume: self.vol,
+                ask_volume: self.ask_vol,
+                bid_volume: self.bid_vol,
+                resolution: self.dst,
+            };
+            // reset
+            self.o = None;
+            self.h = None;
+            self.l = None;
+            self.c = None;
+            self.vol = Decimal::ZERO;
+            self.bid_vol = Decimal::ZERO;
+            self.ask_vol = Decimal::ZERO;
+            return Some(out);
+        }
+        None
+    }
+
+    fn update_tick(&mut self, tk: &Tick) -> Option<Candle> {
+        let t = tk.time;
+        if self.win.is_none() {
+            self.win = Some(self.init_win(t));
+        }
+        // advance windows until t fits
+        while !self.inside(t, self.win.as_ref().unwrap()) {
+            let (start, end) = match self.win.as_ref().unwrap() {
+                Win::Fixed { start, end, .. } => (*start, *end),
+                Win::Session { open, close } => (*open, *close),
+            };
+            let flushed = self.flush(start, end);
+            let cur = self.win.take().unwrap();
+            self.win = Some(self.advance(t, &cur));
+            if flushed.is_some() {
+                return flushed;
+            }
+        }
+        // accumulate
+        if self.o.is_none() {
+            self.o = Some(tk.price);
+        }
+        self.h = Some(self.h.map_or(tk.price, |x| x.max(tk.price)));
+        self.l = Some(self.l.map_or(tk.price, |x| x.min(tk.price)));
+        self.c = Some(tk.price);
+        self.vol += tk.volume;
+        match tk.side {
+            TradeSide::Buy => self.ask_vol += tk.volume,
+            TradeSide::Sell => self.bid_vol += tk.volume,
+            TradeSide::None => {}
+        }
+        None
+    }
+
+    fn update_time(&mut self, t_now: DateTime<Utc>) -> Option<Candle> {
+        if let Some(w) = self.win.as_ref() {
+            let (start, end) = match w {
+                Win::Fixed { start, end, .. } => (*start, *end),
+                Win::Session { open, close } => (*open, *close),
+            };
+            if t_now >= end {
+                let flushed = self.flush(start, end);
+                // advance until t_now fits next window
+                let mut next_w = self.win.take().unwrap();
+                loop {
+                    let next = self.advance(t_now, &next_w);
+                    let end_next = match &next {
+                        Win::Fixed { end, .. } => *end,
+                        Win::Session { close, .. } => *close,
+                    };
+                    if t_now < end_next {
+                        next_w = next;
+                        break;
+                    } else {
+                        next_w = next;
+                    }
+                }
+                self.win = Some(next_w);
+                return flushed;
+            }
+        }
+        None
+    }
+
+    fn update_candle(&mut self, bar: &Candle) -> Option<Candle> {
+        // Equal resolution: forward the bar as-is and advance our window past it
+        if bar.resolution == self.dst {
+            // Initialize to bar's window if needed, then jump to next
+            let w = self.init_win(bar.time_start);
+            let next = self.advance(bar.time_end, &w);
+            self.win = Some(next);
+            // Reset any partial state to avoid double-flush later
+            self.o = None;
+            self.h = None;
+            self.l = None;
+            self.c = None;
+            self.vol = Decimal::ZERO;
+            self.ask_vol = Decimal::ZERO;
+            self.bid_vol = Decimal::ZERO;
+            return Some(bar.clone());
+        }
+        // If candle is coarser or incomparable, ignore; only accept strictly finer inputs
+        if let (Some(src_k), Some(dst_k)) =
+            (resolution_key(&bar.resolution), resolution_key(&self.dst))
+        && src_k >= dst_k {
+            return None;
+        }
+
+        let ts = bar.time_start;
+        if self.win.is_none() {
+            self.win = Some(self.init_win(ts));
+        }
+        while !self.inside(ts, self.win.as_ref().unwrap()) {
+            let (start, end) = match self.win.as_ref().unwrap() {
+                Win::Fixed { start, end, .. } => (*start, *end),
+                Win::Session { open, close } => (*open, *close),
+            };
+            let flushed = self.flush(start, end);
+            let cur = self.win.take().unwrap();
+            self.win = Some(self.advance(ts, &cur));
+            if flushed.is_some() {
+                return flushed;
+            }
+        }
+        // accumulate candle into current window
+        if self.o.is_none() {
+            self.o = Some(bar.open);
+        }
+        self.h = Some(self.h.map_or(bar.high, |x| x.max(bar.high)));
+        self.l = Some(self.l.map_or(bar.low, |x| x.min(bar.low)));
+        self.c = Some(bar.close);
+        self.vol += bar.volume;
+        self.ask_vol += bar.ask_volume;
+        self.bid_vol += bar.bid_volume;
+        None
+    }
+}
+
+impl Consolidator for HybridTickOrCandleToCandles {
+    fn on_tick(&mut self, tk: &Tick) -> Option<ConsolidatedOut> {
+        let mut guard = self
+            .inner
+            .lock()
+            .expect("hybrid consolidator lock poisoned");
+        guard.update_tick(tk).map(ConsolidatedOut::Candle)
+    }
+    fn on_candle(&mut self, bar: &Candle) -> Option<ConsolidatedOut> {
+        let mut guard = self
+            .inner
+            .lock()
+            .expect("hybrid consolidator lock poisoned");
+        guard.update_candle(bar).map(ConsolidatedOut::Candle)
+    }
+    fn on_time(&mut self, t: DateTime<Utc>) -> Option<ConsolidatedOut> {
+        let mut guard = self
+            .inner
+            .lock()
+            .expect("hybrid consolidator lock poisoned");
+        guard.update_time(t).map(ConsolidatedOut::Candle)
+    }
+}
