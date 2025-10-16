@@ -24,18 +24,20 @@ use tt_types::accounts::events::PositionSide;
 #[allow(unused)]
 use tt_types::accounts::events::{AccountDelta, OrderUpdate, PositionDelta, ProviderOrderId, Side};
 use tt_types::accounts::order::OrderState;
-use tt_types::data::core::Tick;
-use tt_types::data::models::{Price, TradeSide, Volume};
+use tt_types::consolidators::{CandlesToCandlesConsolidator, TicksToCandlesConsolidator};
+use tt_types::data::core::{Exchange, Tick};
+use tt_types::data::models::{Price, Resolution, TradeSide, Volume};
 use tt_types::keys::{AccountKey, Topic};
 use tt_types::providers::{ProjectXTenant, ProviderKind};
 use tt_types::securities::futures_helpers::{extract_month_year, extract_root, sanitize_code};
 use tt_types::securities::symbols::Instrument;
-use tt_types::wire::{AccountDeltaBatch, Bytes, OrdersBatch, PositionsBatch, Trade};
+use tt_types::wire::{AccountDeltaBatch, BarsBatch, Bytes, OrdersBatch, PositionsBatch, Trade};
 // Map ProjectX depth items to MBP10 incremental updates and publish individually
 use tt_types::data::mbp10::{
     Action as MbpAction, BookLevels, BookSide as MbpSide, Flags as MbpFlags, Mbp10,
 };
 use tt_types::engine_id::EngineUuid;
+use tt_types::securities::hours::market_hours::hours_for_exchange;
 
 #[allow(unused)]
 /// Realtime client scaffold for ProjectX hubs
@@ -107,6 +109,9 @@ pub struct PxWebSocketClient {
     accounts_by_id: Arc<DashMap<i64, AccountName>>,
 
     trades: Arc<DashMap<Instrument, Vec<GatewayUserTrade>>>,
+
+    main_consolidators: Arc<DashMap<Instrument, TicksToCandlesConsolidator>>,
+    sub_consolidators: Arc<DashMap<Instrument, Vec<CandlesToCandlesConsolidator>>>,
 }
 
 pub fn parse_px_instrument(input: &str) -> String {
@@ -205,6 +210,8 @@ impl PxWebSocketClient {
             // Accounts map: id -> name
             accounts_by_id: Arc::new(DashMap::new()),
             trades: Arc::new(DashMap::new()),
+            main_consolidators: Arc::new(Default::default()),
+            sub_consolidators: Arc::new(Default::default()),
         };
         // Spawn background processors per hub to keep hot path free
         let user_worker = client.clone();
@@ -805,10 +812,57 @@ impl PxWebSocketClient {
                                                 venue_seq: None,
                                             };
                                             // Write Tick snapshot to SHM
-                                            let buf = tick.to_aligned_bytes();
+                                            let buf = tick.clone().to_aligned_bytes();
                                             tt_shm::write_snapshot(Topic::Ticks, &key, &buf);
                                             // SHM is active: avoid duplicate UDS publish
                                             published += 1;
+
+                                            if let Some(mut consolidator) =
+                                                self.main_consolidators.get_mut(&instrument)
+                                            {
+                                                let new_candle_opt =
+                                                    consolidator.update_tick(&tick);
+                                                if let Some(new_candle) = new_candle_opt {
+                                                    let bar_batch = BarsBatch {
+                                                        topic: Topic::Candles1s,
+                                                        seq: 0,
+                                                        bars: vec![new_candle.clone()],
+                                                        provider_kind: self.provider_kind,
+                                                    };
+                                                    if let Err(e) =
+                                                        self.bus.publish_bar_batch(bar_batch).await
+                                                    {
+                                                        error!(target: "projectx.ws", "failed to publish BarBatch: {:?}", e);
+                                                    }
+                                                    if let Some(mut c_vec) =
+                                                        self.sub_consolidators.get_mut(&instrument)
+                                                    {
+                                                        for c in c_vec.value_mut() {
+                                                            if let Some(c_candle) =
+                                                                c.update_candle(&new_candle)
+                                                            {
+                                                                let bar_batch = BarsBatch {
+                                                                    topic: Topic::from_resolution(
+                                                                        c_candle.resolution,
+                                                                    )
+                                                                    .unwrap(),
+                                                                    seq: 0,
+                                                                    bars: vec![c_candle],
+                                                                    provider_kind: self
+                                                                        .provider_kind,
+                                                                };
+                                                                if let Err(e) = self
+                                                                    .bus
+                                                                    .publish_bar_batch(bar_batch)
+                                                                    .await
+                                                                {
+                                                                    error!(target: "projectx.ws", "failed to publish BarBatch: {:?}", e);
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
                                         }
                                         if published == 0 {
                                             info!(target: "projectx.ws", "GatewayTrade: parsed but no valid ticks for {}", instrument);
@@ -1632,6 +1686,54 @@ impl PxWebSocketClient {
         }
         self.invoke_market(
             "UnsubscribeContractQuotes",
+            vec![Value::String(contract_id.to_string())],
+        )
+        .await
+    }
+
+    /// Subscribe to market data by contract ID (trades)
+    pub async fn subscribe_contract_candles(&self, contract_id: &str) -> anyhow::Result<()> {
+        {
+            let dotted = crate::websocket::client::parse_px_instrument(contract_id);
+            let instrument = Instrument::try_parse_dotted(&dotted)?;
+            if !self.main_consolidators.contains_key(&instrument) {
+                self.subscribe_contract_ticks(contract_id).await?;
+                let root = extract_root(&instrument);
+                self.main_consolidators.insert(
+                    instrument.clone(),
+                    TicksToCandlesConsolidator::new(
+                        Resolution::Seconds(1),
+                        root.clone(),
+                        None,
+                        instrument.clone(),
+                    ),
+                );
+                let subs = vec![
+                CandlesToCandlesConsolidator::new(
+                    Resolution::Minutes(1),
+                    root.clone(),
+                    None,
+                    instrument.clone(),
+                ),
+                CandlesToCandlesConsolidator::new(
+                    Resolution::Hours(1),
+                    root.clone(),
+                    None,
+                    instrument.clone(),
+                ),
+                CandlesToCandlesConsolidator::new(
+                    Resolution::Daily,
+                    root,
+                    Some(hours_for_exchange(Exchange::CME)),
+                    instrument.clone(),
+                )];
+                self.sub_consolidators.insert(instrument, subs);
+            } else {
+                return Ok(());
+            }
+        }
+        self.invoke_market(
+            "SubscribeContractTrades",
             vec![Value::String(contract_id.to_string())],
         )
         .await
