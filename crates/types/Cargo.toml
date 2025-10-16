@@ -24,7 +24,6 @@ dashmap = { workspace = true }
 ahash = { workspace = true }
 lazy_static = {workspace = true}
 uuid = { version = "1.18.1", features = ["v4"] }
-[features]
-default = []
+
 
 [dev-dependencies]

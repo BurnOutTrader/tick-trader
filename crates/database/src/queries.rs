@@ -621,7 +621,7 @@ pub async fn get_range(
                     resolution: Resolution::Seconds(1),
                 })
                 .collect();
-            let batch = tt_types::wire::BarBatch {
+            let batch = tt_types::wire::BarsBatch {
                 topic,
                 seq: 0,
                 bars,
@@ -661,7 +661,7 @@ pub async fn get_range(
                     resolution: Resolution::Minutes(1),
                 })
                 .collect();
-            let batch = tt_types::wire::BarBatch {
+            let batch = tt_types::wire::BarsBatch {
                 topic,
                 seq: 0,
                 bars,
@@ -720,7 +720,7 @@ pub async fn get_range(
                     },
                 })
                 .collect();
-            let batch = tt_types::wire::BarBatch {
+            let batch = tt_types::wire::BarsBatch {
                 topic,
                 seq: 0,
                 bars,
@@ -760,7 +760,7 @@ pub async fn get_range(
                     resolution: Resolution::Daily,
                 })
                 .collect();
-            let batch = tt_types::wire::BarBatch {
+            let batch = tt_types::wire::BarsBatch {
                 topic,
                 seq: 0,
                 bars,

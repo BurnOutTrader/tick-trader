@@ -1,5 +1,5 @@
 [package]
-name = "live_orders"
+name = "historical_data_test_strategy"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
@@ -11,13 +11,9 @@ tracing = {workspace = true}
 anyhow = {workspace = true}
 tracing-subscriber = {workspace = true}
 colored = {workspace = true}
-tt-types = { path = "../../../../types" }
-tt-bus = { path = "../../../../bus" }
-tt_engine = { package = "tt-engine", path = "../../../../engine" }
-tt_database = {package = "tt-database", path = "../../../../database"}
+tt-types = { path = "../../../types" }
+tt_database = { path = "../../../database", package = "tt-database" }
+tt-bus = { path = "../../../bus" }
+tt_engine = { package = "tt-engine", path = "../../../engine" }
 dotenvy = { workspace = true }
 rust_decimal = {workspace = true}
-
-
-[lints]
-workspace = true

@@ -1019,7 +1019,7 @@ impl Router {
         .await
     }
 
-    pub async fn publish_bar_batch(&self, mut batch: tt_types::wire::BarBatch) -> Result<()> {
+    pub async fn publish_bar_batch(&self, mut batch: tt_types::wire::BarsBatch) -> Result<()> {
         let topic = match batch.topic {
             Topic::Candles1s | Topic::Candles1m | Topic::Candles1h | Topic::Candles1d => {
                 batch.topic

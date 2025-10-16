@@ -128,7 +128,7 @@ SessionCalendar (default: HoursCalendar)
 
 > ✅ Prereqs: Ensure Postgres is available and the schema is initialized (ensure_schema is called in the demo).
 
-See: [see strategy examples](/crates/a_strategies/examples)
+See: [see strategy examples](/crates/a_strategies/historical_examples)
 
 ## ⚙️ Configuration tips
 

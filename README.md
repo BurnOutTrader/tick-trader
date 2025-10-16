@@ -46,7 +46,7 @@ The engine can place live orders and is intended strictly for testing and evalua
 - 🔽 Automatic data downloading and databasing + functions to retrieve historical data from the database for run time analysis.
 
 ### Strategies are straight forward
-[Example Strategy](crates/a_strategies/examples/live_accounts_examples/data_test_strategy/src/main.rs)
+[Example Strategy](crates/a_strategies/live_accounts_examples/data_test_strategy/src/main.rs)
 
 Just implement the strategy trait
 ```rust

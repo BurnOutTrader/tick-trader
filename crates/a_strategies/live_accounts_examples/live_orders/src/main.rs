@@ -1,4 +1,4 @@
-use rust_decimal::{Decimal};
+use rust_decimal::Decimal;
 use std::str::FromStr;
 use std::time::Duration;
 use tokio::time::sleep;
@@ -415,12 +415,12 @@ async fn main() -> anyhow::Result<()> {
     ensure_schema(&db).await?;
     // Backtest for a recent 30-day period
     /*   let end_date = Utc::now().date_naive();
-     let start_date = end_date - chrono::Duration::days(5);
+    let start_date = end_date - chrono::Duration::days(5);
 
-       // Configure and start backtest
-     let cfg = BacktestConfig::from_to(chrono::Duration::milliseconds(250), start_date, end_date);
-     let strategy = BacktestOrdersStrategy::default();
-     start_backtest(db, cfg, strategy, dec!(150_000)).await?;*/
+      // Configure and start backtest
+    let cfg = BacktestConfig::from_to(chrono::Duration::milliseconds(250), start_date, end_date);
+    let strategy = BacktestOrdersStrategy::default();
+    start_backtest(db, cfg, strategy, dec!(150_000)).await?;*/
 
     connect_live_bus().await?;
 

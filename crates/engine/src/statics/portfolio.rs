@@ -431,7 +431,7 @@ impl Portfolio {
         &self,
         instrument: &Instrument,
         price: Decimal,
-        _now: DateTime<Utc>,
+        now: DateTime<Utc>,
     ) {
         self.last_price.insert(instrument.clone(), price);
 
@@ -440,6 +440,7 @@ impl Portfolio {
             if let Some(new_open) = self.compute_open_pnl(instrument, pd.average_price, pd.net_qty)
             {
                 pd.open_pnl = new_open;
+                pd.time = now;
             }
             pd.side = if pd.net_qty.is_zero() {
                 PositionSide::Flat

@@ -25,7 +25,7 @@ impl Strategy for DataTestStrategy {
 
         // Non-blocking subscribe via handle command queue, you can do this at run time from anywhere to subscribe or unsubscribe a custom universe
         subscribe(
-            DataTopic::MBP10,
+            DataTopic::Candles1s,
             SymbolKey::new(
                 Instrument::from_str("MNQ.Z25").unwrap(),
                 ProviderKind::ProjectX(ProjectXTenant::Topstep),

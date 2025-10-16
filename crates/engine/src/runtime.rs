@@ -4,8 +4,10 @@ use crate::statics::consolidators::CONSOLIDATORS;
 use crate::statics::core::{LAST_ASK, LAST_BID, LAST_PRICE};
 use crate::statics::subscriptions::CMD_Q;
 use crate::traits::Strategy;
+use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use smallvec::SmallVec;
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Notify;
@@ -16,11 +18,19 @@ use tt_types::consolidators::ConsolidatorKey;
 use tt_types::data::core::Candle;
 use tt_types::data::core::{Bbo, Tick};
 use tt_types::data::mbp10::Mbp10;
+use tt_types::data::models::Resolution;
 use tt_types::keys::{AccountKey, SymbolKey, Topic};
 use tt_types::providers::ProviderKind;
 use tt_types::securities::symbols::Instrument;
-use tt_types::wire::{BarBatch, Request, Response, TickBatch};
+use tt_types::wire::{BarsBatch, Request, Response, TickBatch};
 use tt_types::wire::{Bytes, QuoteBatch};
+
+// Live warmup state for a candle subscription (per (topic,key))
+struct WarmupState {
+    awaiting_db: bool,
+    cached_ticks: VecDeque<Tick>,
+    last_hist_end: Option<DateTime<Utc>>, // last candle time_end seen during warmup
+}
 
 pub struct EngineRuntime {
     backtest_mode: bool,
@@ -80,8 +90,9 @@ impl EngineRuntime {
         info!("engine: invoking strategy.on_start");
         strategy.on_start();
         info!("engine: strategy.on_start returned");
-        // Flush any pending commands that on_start may have enqueued.
-        Self::drain_commands_for_task().await;
+        // Initialize live warmup state map (per (topic,key)) and flush any pending commands that on_start may have enqueued.
+        let warmups: Arc<DashMap<(Topic, SymbolKey), WarmupState>> = Arc::new(DashMap::new());
+        Self::drain_commands_for_task_with_orchestration(backtest_mode, warmups.clone()).await;
         // Auto-subscribe to account streams declared by the strategy, if any.
         // We lock briefly to fetch the list, then drop before awaiting network calls.
         let accounts_to_init: Vec<AccountKey> = strategy.accounts();
@@ -93,6 +104,7 @@ impl EngineRuntime {
             initialize_accounts(accounts_to_init).await?;
         }
         let slow_spin_ns = self.slow_spin_ns;
+        let warmups_for_task = warmups.clone();
         let handle_task = tokio::spawn(async move {
             // Create a time ticker to drive consolidators' on_time about 50ms after each whole second
             let mut ticker = {
@@ -112,7 +124,7 @@ impl EngineRuntime {
                 iv.set_missed_tick_behavior(MissedTickBehavior::Skip);
                 iv
             };
-
+            let mut warmup_complete = false;
             loop {
                 tokio::select! {
                         // Drive a time-based consolidation first if due
@@ -166,13 +178,36 @@ impl EngineRuntime {
                                 },
                                 Response::WarmupComplete{ .. } => {
                                    strategy.on_warmup_complete();
+                                    warmup_complete = true;
                                 },
                                 Response::TickBatch(TickBatch {
                                     ticks,
                                     provider_kind,
                                     ..
                                 }) => {
-                                    for t in ticks {
+                                    'tick_batch: for t in ticks {
+                                        // If any live warmup is active for this instrument/provider, cache the tick instead of processing now
+                                        if !warmup_complete {
+                                            let mut targets: Vec<(Topic, SymbolKey)> = Vec::new();
+                                            for entry in warmups_for_task.iter() {
+                                                let (tp, sk) = (entry.key().0, entry.key().1.clone());
+                                                if entry.value().awaiting_db
+                                                    && sk.provider == provider_kind
+                                                    && sk.instrument == t.instrument
+                                                {
+                                                    targets.push((tp, sk));
+                                                }
+                                            }
+                                            if !targets.is_empty() {
+                                                for (tp, sk) in targets {
+                                                    if let Some(mut e) = warmups_for_task.get_mut(&(tp, sk)) {
+                                                        e.value_mut().cached_ticks.push_back(t.clone());
+                                                    }
+                                                }
+                                                continue 'tick_batch;
+                                            }
+                                        }
+
                                         let symbol_key = SymbolKey::new(t.instrument.clone(), provider_kind);
                                         LAST_PRICE.insert(symbol_key, t.price);
                                         crate::statics::portfolio::apply_mark(provider_kind, &t.instrument, t.price, t.time);
@@ -207,14 +242,23 @@ impl EngineRuntime {
                                         }
                                     }
                                 }
-                                Response::BarBatch(BarBatch {
+                                Response::BarBatch(BarsBatch {
                                     bars,
                                     provider_kind,
+                                    topic,
                                     ..
                                 }) => {
                                     for b in bars {
-                                        // Use close as mark
                                         let symbol_key = SymbolKey::new(b.instrument.clone(), provider_kind);
+                                        if !warmup_complete {
+                                            // Track last historical end for warmup if matching key exists
+                                            if let Some(mut e) = warmups_for_task.get_mut(&(topic, symbol_key.clone())) {
+                                                let v = e.value_mut();
+                                                v.last_hist_end = Some(v.last_hist_end.map_or(b.time_end, |x| x.max(b.time_end)));
+                                            }
+                                        }
+                                        // Use close as mark
+
                                         LAST_PRICE.insert(symbol_key, b.close);
                                         crate::statics::portfolio::apply_mark(provider_kind, &b.instrument, b.close, b.time_end);
                                         strategy.on_bar(&b, provider_kind);
@@ -284,6 +328,20 @@ impl EngineRuntime {
                                     tick,
                                     provider_kind,
                                 } => {
+                                    // Cache tick if any warmup is active for this instrument/provider
+                                    let mut cached = false;
+                                    for entry in warmups_for_task.iter() {
+                                        let (tp, sk) = (entry.key().0, entry.key().1.clone());
+                                        if entry.value().awaiting_db
+                                            && sk.provider == provider_kind
+                                            && sk.instrument == tick.instrument
+                                        && let Some(mut e) = warmups_for_task.get_mut(&(tp, sk)) {
+                                            e.value_mut().cached_ticks.push_back(tick.clone());
+                                            cached = true;
+                                        }
+                                    }
+                                    if cached { continue; }
+
                                     let symbol_key = SymbolKey::new(tick.instrument.clone(), provider_kind);
                                     LAST_PRICE.insert(symbol_key, tick.price);
                                     crate::statics::portfolio::apply_mark(provider_kind, &tick.instrument, tick.price, tick.time);
@@ -440,10 +498,34 @@ impl EngineRuntime {
                                 | Response::InstrumentsMapResponse(_)
                                 | Response::VendorData(_)
                                 | Response::AccountInfoResponse(_) => {}
-                                Response::DbUpdateComplete { .. } => {}
+                                Response::DbUpdateComplete { provider, instrument, topic, success: _, .. } => {
+                                                                    // Complete warmup for this (topic,key): replay cached ticks newer than last_hist_end
+                                                                    let sk = SymbolKey::new(instrument.clone(), provider);
+                                                                    if let Some((_k, st)) = warmups_for_task.remove(&(topic, sk.clone())) {
+                                                                        let cutoff = st.last_hist_end;
+                                                                        for t in st.cached_ticks.into_iter() {
+                                                                            if let Some(cu) = cutoff && t.time <= cu { continue; }
+                                                                            let symbol_key = SymbolKey::new(t.instrument.clone(), provider);
+                                                                            LAST_PRICE.insert(symbol_key, t.price);
+                                                                            crate::statics::portfolio::apply_mark(provider, &t.instrument, t.price, t.time);
+                                                                            strategy.on_tick(&t, provider);
+                                                                            // Drive consolidators for replayed ticks (hybrid will synthesize candles)
+                                                                            let key = ConsolidatorKey::new(t.instrument.clone(), provider, Topic::Ticks);
+                                                                            if let Some(mut cons) = CONSOLIDATORS
+                                                                                .get_mut(&key)
+                                                                                && let Some(out) = cons.on_tick(&t)
+                                                                                && let tt_types::consolidators::ConsolidatedOut::Candle(ref c) = out
+                                                                            {
+                                                                                strategy.on_bar(c, provider);
+                                                                            }
+                                                                        }
+                                                                        // Announce warmup complete to the strategy
+                                                                        strategy.on_warmup_complete();
+                                                                    }
+                                                                }
                             }
                             // Flush any pending commands emitted by strategy callbacks.
-                            let drained = Self::drain_commands_for_task().await;
+                            let drained = Self::drain_commands_for_task_with_orchestration(backtest_mode, warmups_for_task.clone()).await;
                             // After processing a message in backtest mode, notify feeder so it can proceed.
                             if backtest_mode
                                 && let Some(notify) = &backtest_notify_for_task
@@ -466,13 +548,70 @@ impl EngineRuntime {
         Ok(())
     }
 
-    async fn drain_commands_for_task() -> usize {
-        use tt_types::wire::{SubscribeKey, UnsubscribeKey};
+    async fn drain_commands_for_task_with_orchestration(
+        backtest_mode: bool,
+        warmups: Arc<DashMap<(Topic, SymbolKey), WarmupState>>,
+    ) -> usize {
+        use tt_types::wire::{DbUpdateKeyLatest, SubscribeKey, UnsubscribeKey};
         let bus = bus();
         let mut count = 0usize;
         while let Some(cmd) = CMD_Q.pop() {
             match cmd {
                 Command::Subscribe { topic, key } => {
+                    // Live ProjectX warmup orchestration for candle subscriptions
+                    if !backtest_mode && let ProviderKind::ProjectX(_) = key.provider {
+                        let data_topic = DataTopic::from(topic);
+                        let dst_res: Option<Resolution> = match data_topic {
+                            DataTopic::Candles1s => Some(Resolution::Seconds(1)),
+                            DataTopic::Candles1m => Some(Resolution::Minutes(1)),
+                            DataTopic::Candles1h => Some(Resolution::Hours(1)),
+                            DataTopic::Candles1d => Some(Resolution::Daily),
+                            _ => None,
+                        };
+                        if let Some(res) = dst_res {
+                            // Avoid auto-hybrid for Daily (requires hours). Keep minimal intraday support.
+                            if !matches!(res, Resolution::Daily | Resolution::Weekly) {
+                                // Register a hybrid consolidator (candles+ticks)
+                                crate::statics::consolidators::add_hybrid_tick_or_candle(
+                                    data_topic,
+                                    key.clone(),
+                                    res,
+                                    key.instrument.to_string(),
+                                    None,
+                                );
+                                // Initialize warmup tracking for this candle subscription
+                                warmups.insert(
+                                    (topic, key.clone()),
+                                    WarmupState {
+                                        awaiting_db: true,
+                                        cached_ticks: VecDeque::new(),
+                                        last_hist_end: None,
+                                    },
+                                );
+                                // Start live ticks immediately to build a cache while DB updates
+                                let _ = bus
+                                    .handle_request(Request::SubscribeKey(SubscribeKey {
+                                        topic: Topic::Ticks,
+                                        key: key.clone(),
+                                        latest_only: false,
+                                        from_seq: 0,
+                                    }))
+                                    .await;
+                                // Best-effort: trigger server-side DB update for latest candles
+                                let _ = bus
+                                    .handle_request(Request::DbUpdateKeyLatest(
+                                        DbUpdateKeyLatest {
+                                            provider: key.provider,
+                                            instrument: key.instrument.clone(),
+                                            topic,
+                                            corr_id: 0,
+                                        },
+                                    ))
+                                    .await;
+                            }
+                        }
+                    }
+                    // Forward the original subscribe request
                     let _ = bus
                         .handle_request(Request::SubscribeKey(SubscribeKey {
                             topic,

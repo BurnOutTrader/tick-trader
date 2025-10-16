@@ -13,7 +13,7 @@ use tt_types::keys::{AccountKey, SymbolKey, Topic};
 use tt_types::providers::ProviderKind;
 use tt_types::securities::security::FuturesContract;
 use tt_types::securities::symbols::Instrument;
-use tt_types::wire::{AccountDeltaBatch, BarBatch, Request, Response};
+use tt_types::wire::{AccountDeltaBatch, BarsBatch, Request, Response};
 
 use crate::backtest::backtest_clock::BacktestClock;
 use crate::backtest::realism_models::project_x::calander::HoursCalendar;
@@ -229,11 +229,11 @@ impl BacktestFeeder {
 
         std::mem::drop(tokio::spawn(async move {
             let notify = backtest_notify;
-            async fn await_ack(notify: &Option<Arc<Notify>>) {
+            /*    async fn await_ack(notify: &Option<Arc<Notify>>) {
                 if let Some(n) = notify {
                     n.notified().await;
                 }
-            }
+            }*/
             // --- Simple fill engine state (model-driven order lifecycle) ---
             #[derive(Clone, Debug)]
             struct Lot {
@@ -418,7 +418,7 @@ impl BacktestFeeder {
                 bus: &ClientMessageBus,
                 tde: &tt_database::queries::TopicDataEnum,
                 provider: ProviderKind,
-                notify: &Option<Arc<Notify>>,
+                _notify: &Option<Arc<Notify>>,
             ) {
                 match tde {
                     tt_database::queries::TopicDataEnum::Tick(t) => {
@@ -426,34 +426,31 @@ impl BacktestFeeder {
                             tick: t.clone(),
                             provider_kind: provider,
                         });
-                        await_ack(notify).await;
                     }
                     tt_database::queries::TopicDataEnum::Bbo(b) => {
                         let _ = bus.broadcast(Response::Quote {
                             bbo: b.clone(),
                             provider_kind: provider,
                         });
-                        await_ack(notify).await;
                     }
                     tt_database::queries::TopicDataEnum::Mbp10(m) => {
                         let _ = bus.broadcast(Response::Mbp10 {
                             mbp10: m.clone(),
                             provider_kind: provider,
                         });
-                        await_ack(notify).await;
                     }
                     tt_database::queries::TopicDataEnum::Candle(c) => {
                         // Emit as a BarBatch (even for a single candle) to carry a topic for routing
-                        let batch = BarBatch {
+                        let batch = BarsBatch {
                             topic: topic_for_candle(c),
                             seq: 0,
                             bars: vec![c.clone()],
                             provider_kind: provider,
                         };
                         let _ = bus.broadcast(Response::BarBatch(batch));
-                        await_ack(notify).await;
                     }
                 }
+                // await_ack(&notify).await; //todo! notify is no longer needed for backtest sync
             }
 
             // Main loop: interleave handling of requests with emitting events in time order
@@ -557,7 +554,6 @@ impl BacktestFeeder {
                                         Response::InstrumentsMapResponse(resp),
                                         corr_id,
                                     );
-                                    await_ack(&notify).await;
                                 }
                                 Err(e) => {
                                     warn!("feeder: get_contracts_map error: {:?}", e);
@@ -570,7 +566,6 @@ impl BacktestFeeder {
                                         Response::InstrumentsMapResponse(resp),
                                         corr_id,
                                     );
-                                    await_ack(&notify).await;
                                 }
                             }
                         }
@@ -584,7 +579,6 @@ impl BacktestFeeder {
                                 instrument: instr.clone(),
                                 success: true,
                             });
-                            await_ack(&notify).await;
 
                             // Determine start time from DB extent (earliest available); fallback to epoch if none
                             let (earliest_opt, _latest_opt) =
@@ -653,7 +647,7 @@ impl BacktestFeeder {
                                 topic,
                                 instrument: instr.clone(),
                             });
-                            await_ack(&notify).await;
+
                             // Prime first window after start
                             ks.cursor = start;
                             ensure_window(&mut ks, &conn, &cfg).await;
@@ -667,7 +661,6 @@ impl BacktestFeeder {
                                 topic: ureq.topic,
                                 instrument: ureq.key.instrument.clone(),
                             });
-                            await_ack(&notify).await;
                         }
                         Request::BacktestAdvanceTo(bta) => {
                             // Update watermark and drain events up to this time
@@ -769,7 +762,6 @@ impl BacktestFeeder {
                                                     orders: vec![upd],
                                                 };
                                                 let _ = bus.broadcast(Response::OrdersBatch(ob));
-                                                await_ack(&notify).await;
                                                 continue;
                                             }
 
@@ -821,7 +813,6 @@ impl BacktestFeeder {
                                                     orders: vec![upd],
                                                 };
                                                 let _ = bus.broadcast(Response::OrdersBatch(ob));
-                                                await_ack(&notify).await;
                                                 continue;
                                             }
                                             let ack_base = if is_closed_or_halt
@@ -1497,7 +1488,6 @@ impl BacktestFeeder {
                                     orders: due,
                                 };
                                 let _ = bus.broadcast(Response::OrdersBatch(ob));
-                                await_ack(&notify).await;
                             }
 
                             // Risk: auto-liquidate positions within X minutes before session close (ProjectX policy)
@@ -1667,13 +1657,11 @@ impl BacktestFeeder {
                                         accounts: accounts_vec,
                                     };
                                     let _ = bus.broadcast(Response::AccountDeltaBatch(ab));
-                                    await_ack(&notify).await;
                                 }
                             }
                             // Emit closed trades for realized PnL this tick
                             if !closed_trades.is_empty() {
                                 let _ = bus.broadcast(Response::ClosedTrades(closed_trades));
-                                await_ack(&notify).await;
                             }
                             // Emit positions snapshots for touched positions this tick
                             if !touched_positions.is_empty() {
@@ -1702,7 +1690,6 @@ impl BacktestFeeder {
                                         positions: positions_vec,
                                     };
                                     let _ = bus.broadcast(Response::PositionsBatch(pb));
-                                    await_ack(&notify).await;
                                 }
                             }
                             if !finished.is_empty() {
@@ -1712,14 +1699,14 @@ impl BacktestFeeder {
                             }
                             // After draining up to watermark (and emitting due orders), notify runtime of logical time
                             let _ = bus.broadcast(Response::BacktestTimeUpdated { now });
-                            await_ack(&notify).await;
+
                             // If we have an end range and reached/passed it, emit BacktestCompleted once
                             if !completed_emitted
                                 && let Some(end) = cfg.range_end
                                 && now >= end
                             {
                                 let _ = bus.broadcast(Response::BacktestCompleted { end });
-                                await_ack(&notify).await;
+
                                 completed_emitted = true;
                             }
                         }
@@ -1809,7 +1796,7 @@ impl BacktestFeeder {
                                     orders: vec![upd],
                                 };
                                 let _ = bus.broadcast(Response::OrdersBatch(ob));
-                                await_ack(&notify).await;
+
                                 continue;
                             }
 
@@ -1853,7 +1840,7 @@ impl BacktestFeeder {
                                     orders: vec![upd],
                                 };
                                 let _ = bus.broadcast(Response::OrdersBatch(ob));
-                                await_ack(&notify).await;
+
                                 continue;
                             }
                             let ack_base = if is_closed_or_halt

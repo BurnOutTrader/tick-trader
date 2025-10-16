@@ -117,7 +117,7 @@ pub struct QuoteBatch {
 /// Batch of OHLC bars for a topic/sequence
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, PartialEq, Clone, Debug)]
 #[archive(check_bytes)]
-pub struct BarBatch {
+pub struct BarsBatch {
     /// Topic (e.g. Bars1m)
     pub topic: Topic,
     /// Sequence number (monotonic per topic)
@@ -536,7 +536,7 @@ pub enum Response {
     // Data (batches first)
     TickBatch(TickBatch),
     QuoteBatch(QuoteBatch),
-    BarBatch(BarBatch),
+    BarBatch(BarsBatch),
     MBP10Batch(MBP10Batch),
     VendorData(VendorData),
     OrdersBatch(OrdersBatch),

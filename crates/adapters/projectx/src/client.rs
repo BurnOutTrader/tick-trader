@@ -402,7 +402,16 @@ impl MarketDataProvider for PXClient {
     }
 
     fn supports(&self, topic: Topic) -> bool {
-        matches!(topic, Topic::Ticks | Topic::Quotes | Topic::MBP10)
+        matches!(
+            topic,
+            Topic::Ticks
+                | Topic::Quotes
+                | Topic::MBP10
+                | Topic::Candles1s
+                | Topic::Candles1m
+                | Topic::Candles1h
+                | Topic::Candles1d
+        )
     }
 
     async fn connect_to_market(
@@ -441,6 +450,11 @@ impl MarketDataProvider for PXClient {
                     .subscribe_contract_market_depth(instrument.as_str())
                     .await
             }
+            Topic::Candles1s | Topic::Candles1m | Topic::Candles1h | Topic::Candles1d => {
+                self.websocket
+                    .subscribe_contract_candles(instrument.as_str())
+                    .await
+            }
             _ => anyhow::bail!("Unsupported topic: {:?}", topic),
         }
     }
@@ -462,6 +476,12 @@ impl MarketDataProvider for PXClient {
                 self.websocket
                     .unsubscribe_contract_market_depth(instrument.as_str())
                     .await
+            }
+            Topic::Candles1s | Topic::Candles1m | Topic::Candles1h | Topic::Candles1d => {
+                todo!()
+                /*self.websocket
+                .unsubscribe_contract_candles(instrument.as_str())
+                .await*/
             }
             _ => anyhow::bail!("Unsupported topic: {:?}", topic),
         }

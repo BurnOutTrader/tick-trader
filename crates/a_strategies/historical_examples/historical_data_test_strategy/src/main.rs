@@ -1,0 +1,120 @@
+use colored::Colorize;
+use rust_decimal::dec;
+use std::str::FromStr;
+use std::time::Duration;
+use tokio::time::sleep;
+use tracing::info;
+use tracing::level_filters::LevelFilter;
+use tt_database::schema::ensure_schema;
+use tt_engine::backtest::orchestrator::{BacktestConfig, start_backtest};
+use tt_engine::models::DataTopic;
+use tt_engine::statics::subscriptions::subscribe;
+use tt_engine::traits::Strategy;
+use tt_types::accounts::account::AccountName;
+use tt_types::data::core::Utc;
+use tt_types::data::mbp10::Mbp10;
+use tt_types::keys::{AccountKey, SymbolKey};
+use tt_types::providers::{ProjectXTenant, ProviderKind};
+use tt_types::securities::symbols::Instrument;
+use tt_types::wire;
+
+#[derive(Default)]
+struct HistoricalDataTestStrategy {}
+
+impl Strategy for HistoricalDataTestStrategy {
+    fn on_start(&mut self) {
+        info!("strategy start");
+
+        // Non-blocking subscribe via handle command queue, you can do this at run time from anywhere to subscribe or unsubscribe a custom universe
+        subscribe(
+            DataTopic::Candles1s,
+            SymbolKey::new(
+                Instrument::from_str("MNQ.Z25").unwrap(),
+                ProviderKind::ProjectX(ProjectXTenant::Topstep),
+            ),
+        );
+    }
+
+    fn on_stop(&mut self) {
+        info!("strategy stop");
+    }
+
+    fn on_tick(&mut self, t: &tt_types::data::core::Tick, _provider_kind: ProviderKind) {
+        println!("{:?}", t)
+    }
+
+    fn on_quote(&mut self, q: &tt_types::data::core::Bbo, _provider_kind: ProviderKind) {
+        println!("{:?}", q);
+    }
+
+    fn on_bar(&mut self, c: &tt_types::data::core::Candle, _provider_kind: ProviderKind) {
+        let candle_msg = format!(
+            "C: {}, H:{}, L:{}, O:{}, C:{}, @{}",
+            c.instrument, c.high, c.low, c.open, c.close, c.time_end
+        );
+        if c.close > c.open {
+            println!("{}", candle_msg.as_str().bright_green());
+        } else if c.close < c.open {
+            println!("{}", candle_msg.as_str().bright_red());
+        } else {
+            println!("{:?}", candle_msg);
+        }
+    }
+
+    fn on_mbp10(&mut self, d: &Mbp10, _provider_kind: ProviderKind) {
+        println!(
+            "MBP10 evt: action={:?} side={:?} px={} sz={} flags={:?} ts_event={} ts_recv={}",
+            d.action, d.side, d.price, d.size, d.flags, d.ts_event, d.ts_recv
+        );
+    }
+
+    fn on_orders_batch(&mut self, b: &wire::OrdersBatch) {
+        for order in b.orders.iter() {
+            println!("{:?}", order)
+        }
+    }
+
+    fn on_subscribe(&mut self, instrument: Instrument, data_topic: DataTopic, success: bool) {
+        println!(
+            "Subscribed to {} on topic {:?}: Success: {}",
+            instrument, data_topic, success
+        );
+    }
+
+    fn on_unsubscribe(&mut self, _instrument: Instrument, data_topic: DataTopic) {
+        println!("{:?}", data_topic);
+    }
+
+    fn accounts(&self) -> Vec<AccountKey> {
+        let target_account_name = "PRAC-V2-1";
+        let account = AccountKey::new(
+            ProviderKind::ProjectX(ProjectXTenant::Topstep),
+            AccountName::from_str(target_account_name).unwrap(),
+        );
+        vec![account]
+    }
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt()
+        .with_max_level(LevelFilter::INFO)
+        .init();
+
+    // Create DB pool from env (Postgres) and ensure schema
+    let db = tt_database::init::init_db()?;
+    ensure_schema(&db).await?;
+
+    // Backtest for a recent 30-day period
+    let end_date = Utc::now().date_naive();
+    let start_date = end_date - chrono::Duration::days(30);
+
+    // Configure and start backtest
+    let cfg = BacktestConfig::from_to(chrono::Duration::milliseconds(250), start_date, end_date);
+    let strategy = HistoricalDataTestStrategy::default();
+    start_backtest(db, cfg, strategy, dec!(150_000)).await?;
+
+    sleep(Duration::from_secs(60)).await;
+
+    Ok(())
+}

@@ -362,7 +362,7 @@ impl Strategy for BacktestOrdersStrategy {
             }
             if let Some(portfolio) = PORTFOLIOS.get(&self.account) {
                 let ss = portfolio.positions_snapshot(time_now());
-                println!("{:?}", portfolio.account_delta());
+                println!("{:?}", portfolio.accounts_snapshot(time_now()));
                 for p in ss.positions {
                     let s = p.to_clean_string();
                     println!("{}", s.cyan());

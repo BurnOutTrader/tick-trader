@@ -552,7 +552,7 @@ impl BboToCandlesConsolidator {
 pub struct CandlesToCandlesConsolidator {
     dst: Resolution,
     out_symbol: String,
-    hours: Option<Arc<MarketHours>>,
+    hours: Option<MarketHours>,
     instrument: Instrument,
     // state
     b_start: Option<DateTime<Utc>>,
@@ -571,7 +571,7 @@ impl CandlesToCandlesConsolidator {
     pub fn new(
         dst: Resolution,
         out_symbol: String,
-        hours: Option<Arc<MarketHours>>,
+        hours: Option<MarketHours>,
         instrument: Instrument,
     ) -> Self {
         Self {

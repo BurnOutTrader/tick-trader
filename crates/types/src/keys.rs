@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::sync::RwLock;
 
+use crate::data::models::Resolution;
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -98,6 +99,25 @@ impl Topic {
                 | Topic::Candles1h
                 | Topic::Candles1d
         )
+    }
+    pub fn to_resolution(&self) -> Option<Resolution> {
+        match self {
+            Self::Candles1s => Some(Resolution::Seconds(1)),
+            Self::Candles1m => Some(Resolution::Minutes(1)),
+            Self::Candles1h => Some(Resolution::Hours(1)),
+            Self::Candles1d => Some(Resolution::Daily),
+            _ => None,
+        }
+    }
+
+    pub fn from_resolution(resolution: Resolution) -> Option<Topic> {
+        match resolution {
+            Resolution::Seconds(1) => Some(Topic::Candles1s),
+            Resolution::Minutes(1) => Some(Topic::Candles1m),
+            Resolution::Hours(1) => Some(Topic::Candles1h),
+            Resolution::Daily => Some(Topic::Candles1d),
+            _ => None,
+        }
     }
 }
 
