@@ -981,7 +981,8 @@ impl HybridInner {
         // If candle is coarser or incomparable, ignore; only accept strictly finer inputs
         if let (Some(src_k), Some(dst_k)) =
             (resolution_key(&bar.resolution), resolution_key(&self.dst))
-        && src_k >= dst_k {
+            && src_k >= dst_k
+        {
             return None;
         }
 
