@@ -6,9 +6,10 @@ use tt_types::data::models::Resolution;
 use tt_types::keys::{SymbolKey, Topic};
 use tt_types::securities::hours::market_hours::MarketHours;
 
+//todo[consolidators] consolidators need to align times with the resolution of the input data, so that bars have an closer expected close time.
 pub(crate) static CONSOLIDATORS: LazyLock<DashMap<ConsolidatorKey, Box<dyn Consolidator>>> =
     LazyLock::new(DashMap::new);
-
+//todo
 // === REGISTRATION ===
 /// Register a consolidator to be driven by the engine for the given data stream key.
 /// The consolidator will be invoked whenever data for (topic,key) arrives.
@@ -32,10 +33,9 @@ pub fn add_hybrid_tick_or_candle(
     candle_source_topic: DataTopic,
     for_key: SymbolKey,
     dst: Resolution,
-    out_symbol: String,
     hours: Option<Arc<MarketHours>>,
 ) {
-    let cons = HybridTickOrCandleToCandles::new(dst, out_symbol, hours, for_key.instrument.clone());
+    let cons = HybridTickOrCandleToCandles::new(dst, hours, for_key.instrument.clone());
     let cons2 = cons.clone();
     let tick_key = ConsolidatorKey::new(for_key.instrument.clone(), for_key.provider, Topic::Ticks);
     let candle_topic = candle_source_topic.to_topic_or_err().unwrap();

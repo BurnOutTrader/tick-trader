@@ -157,7 +157,7 @@ impl EngineRuntime {
                                     // Sync global backtest clock facade so all time reads use this logical time
                                     crate::statics::clock::backtest_advance_to(now);
                                     // 1) Drive time-based consolidators using orchestrator-provided logical time
-                                    if !CONSOLIDATORS.is_empty() {
+                                    if !CONSOLIDATORS.is_empty() { //todo, we cant update time if we also produced a bar on the same period,  -it will fuck up sync?
                                         let mut outs: SmallVec<[(ProviderKind, Candle); 16]> = SmallVec::new();
                                         for mut entry in CONSOLIDATORS.iter_mut() {
                                             let provider = entry.key().provider;
@@ -576,7 +576,6 @@ impl EngineRuntime {
                                     data_topic,
                                     key.clone(),
                                     res,
-                                    key.instrument.to_string(),
                                     None,
                                 );
                                 // Initialize warmup tracking for this candle subscription

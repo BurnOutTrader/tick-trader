@@ -1711,19 +1711,16 @@ impl PxWebSocketClient {
                 let subs = vec![
                 CandlesToCandlesConsolidator::new(
                     Resolution::Minutes(1),
-                    root.clone(),
                     None,
                     instrument.clone(),
                 ),
                 CandlesToCandlesConsolidator::new(
                     Resolution::Hours(1),
-                    root.clone(),
                     None,
                     instrument.clone(),
                 ),
                 CandlesToCandlesConsolidator::new(
                     Resolution::Daily,
-                    root,
                     Some(hours_for_exchange(Exchange::CME)),
                     instrument.clone(),
                 )];

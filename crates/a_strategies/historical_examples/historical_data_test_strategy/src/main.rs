@@ -8,13 +8,17 @@ use tracing::level_filters::LevelFilter;
 use tt_database::schema::ensure_schema;
 use tt_engine::backtest::orchestrator::{BacktestConfig, start_backtest};
 use tt_engine::models::DataTopic;
+use tt_engine::statics::consolidators::add_consolidator;
 use tt_engine::statics::subscriptions::subscribe;
 use tt_engine::traits::Strategy;
 use tt_types::accounts::account::AccountName;
+use tt_types::consolidators::CandlesToCandlesConsolidator;
 use tt_types::data::core::Utc;
 use tt_types::data::mbp10::Mbp10;
+use tt_types::data::models::Resolution;
 use tt_types::keys::{AccountKey, SymbolKey};
 use tt_types::providers::{ProjectXTenant, ProviderKind};
+use tt_types::securities::futures_helpers::extract_root;
 use tt_types::securities::symbols::Instrument;
 use tt_types::wire;
 
@@ -24,15 +28,18 @@ struct HistoricalDataTestStrategy {}
 impl Strategy for HistoricalDataTestStrategy {
     fn on_start(&mut self) {
         info!("strategy start");
-
+        let inst = Instrument::from_str("MNQ.Z25").unwrap();
+        let key = SymbolKey::new(inst.clone(), ProviderKind::ProjectX(ProjectXTenant::Topstep));
         // Non-blocking subscribe via handle command queue, you can do this at run time from anywhere to subscribe or unsubscribe a custom universe
         subscribe(
             DataTopic::Candles1s,
             SymbolKey::new(
-                Instrument::from_str("MNQ.Z25").unwrap(),
+                inst.clone(),
                 ProviderKind::ProjectX(ProjectXTenant::Topstep),
             ),
         );
+        let consolidator = CandlesToCandlesConsolidator::new(Resolution::Minutes(15), None, inst);
+        add_consolidator(DataTopic::Candles1s, key, Box::new(consolidator));
     }
 
     fn on_stop(&mut self) {
@@ -49,15 +56,15 @@ impl Strategy for HistoricalDataTestStrategy {
 
     fn on_bar(&mut self, c: &tt_types::data::core::Candle, _provider_kind: ProviderKind) {
         let candle_msg = format!(
-            "C: {}, H:{}, L:{}, O:{}, C:{}, @{}",
-            c.instrument, c.high, c.low, c.open, c.close, c.time_end
+            "C: {}, {}, H:{}, L:{}, O:{}, C:{}, @{}",
+            c.instrument, c.resolution.as_key().unwrap(), c.high, c.low, c.open, c.close, c.time_end
         );
         if c.close > c.open {
             println!("{}", candle_msg.as_str().bright_green());
         } else if c.close < c.open {
             println!("{}", candle_msg.as_str().bright_red());
         } else {
-            println!("{:?}", candle_msg);
+            println!("{}", candle_msg);
         }
     }
 

@@ -218,7 +218,6 @@ fn candles_to_m5_from_m1() {
     let symbol = "MNQ.Z25";
     let mut cons = CandlesToCandlesConsolidator::new(
         Resolution::Minutes(5),
-        symbol.to_string(),
         None,
         Instrument::from_str(symbol).unwrap(),
     );
@@ -306,7 +305,6 @@ fn candles_to_m5_no_feedback_duplicate() {
 
     let mut cons = CandlesToCandlesConsolidator::new(
         Resolution::Minutes(5),
-        symbol.to_string(),
         None,
         Instrument::from_str(symbol).unwrap(),
     );
@@ -353,7 +351,6 @@ fn candles_to_m5_reject_equal_and_coarser() {
     let symbol = "MNQ.Z25";
     let mut cons = CandlesToCandlesConsolidator::new(
         Resolution::Minutes(5),
-        symbol.to_string(),
         None,
         Instrument::from_str(symbol).unwrap(),
     );

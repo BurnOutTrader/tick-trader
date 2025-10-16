@@ -7,6 +7,7 @@ use crate::securities::symbols::Instrument;
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use rust_decimal::{Decimal, dec};
 use std::sync::Arc;
+use crate::securities::futures_helpers::extract_root;
 
 // ===================== Helpers =====================
 #[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
@@ -570,13 +571,12 @@ pub struct CandlesToCandlesConsolidator {
 impl CandlesToCandlesConsolidator {
     pub fn new(
         dst: Resolution,
-        out_symbol: String,
         hours: Option<MarketHours>,
         instrument: Instrument,
     ) -> Self {
         Self {
             dst,
-            out_symbol,
+            out_symbol: extract_root(&instrument),
             hours,
             instrument,
             b_start: None,
@@ -791,13 +791,12 @@ struct HybridInner {
 impl HybridTickOrCandleToCandles {
     pub fn new(
         dst: Resolution,
-        out_symbol: String,
         hours: Option<Arc<MarketHours>>,
         instrument: Instrument,
     ) -> Self {
         let inner = HybridInner {
             dst,
-            out_symbol,
+            out_symbol: extract_root(&instrument),
             hours,
             instrument,
             o: None,
