@@ -28,8 +28,8 @@ use tt_engine::statics::portfolio::PORTFOLIOS;
 use tt_engine::statics::subscriptions::subscribe;
 
 struct LiveOrdersStrategy {
-    sk: SymbolKey,
-    account: AccountKey,
+    symbol_key: SymbolKey,
+    account_key: AccountKey,
     last_bars: RollingWindow<Candle>,
     is_warmed_up: bool,
     bar_idx: u32,
@@ -46,30 +46,16 @@ struct Expect {
 }
 
 impl LiveOrdersStrategy {
-    fn new() -> Self {
-        let sk = SymbolKey::new(
-            Instrument::from_str("MNQ.Z25").unwrap(),
-            ProviderKind::ProjectX(ProjectXTenant::Topstep),
-        );
-        let account = AccountKey::new(
-            ProviderKind::ProjectX(ProjectXTenant::Topstep),
-            AccountName::from_str("PRAC-V2-64413-98419885").unwrap(),
-        );
+    fn new(account_key: AccountKey, symbol_key: SymbolKey) -> Self {
         Self {
-            sk,
-            account,
+            symbol_key,
+            account_key,
             last_bars: RollingWindow::new(10),
             is_warmed_up: false,
             bar_idx: 0,
             expect: HashMap::new(),
             done: false,
         }
-    }
-}
-
-impl Default for LiveOrdersStrategy {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -90,7 +76,7 @@ impl Strategy for LiveOrdersStrategy {
     fn on_start(&mut self) {
         println!("backtest orders strategy start");
         // Subscribe to a modest data stream so marks update
-        subscribe(DataTopic::Ticks, self.sk.clone());
+        subscribe(DataTopic::Ticks, self.symbol_key.clone());
     }
 
     fn on_warmup_complete(&mut self) {
@@ -131,8 +117,8 @@ impl Strategy for LiveOrdersStrategy {
                 let tag = "MKT_BUY";
                 self.record_expect(tag, true);
                 let _ = place_order(
-                    self.account.clone(),
-                    self.sk.instrument.clone(),
+                    self.account_key.clone(),
+                    self.symbol_key.instrument.clone(),
                     side_buy,
                     1,
                     OrderType::Market,
@@ -148,8 +134,8 @@ impl Strategy for LiveOrdersStrategy {
                 let tag = "MKT_SELL";
                 self.record_expect(tag, true);
                 let _ = place_order(
-                    self.account.clone(),
-                    self.sk.instrument.clone(),
+                    self.account_key.clone(),
+                    self.symbol_key.instrument.clone(),
                     side_sell,
                     1,
                     OrderType::Market,
@@ -165,8 +151,8 @@ impl Strategy for LiveOrdersStrategy {
                 let tag = "LIM_BUY";
                 self.record_expect(tag, true);
                 let _ = place_order(
-                    self.account.clone(),
-                    self.sk.instrument.clone(),
+                    self.account_key.clone(),
+                    self.symbol_key.instrument.clone(),
                     side_buy,
                     1,
                     OrderType::Limit,
@@ -182,8 +168,8 @@ impl Strategy for LiveOrdersStrategy {
                 let tag = "LIM_SELL";
                 self.record_expect(tag, true);
                 let _ = place_order(
-                    self.account.clone(),
-                    self.sk.instrument.clone(),
+                    self.account_key.clone(),
+                    self.symbol_key.instrument.clone(),
                     side_sell,
                     1,
                     OrderType::Limit,
@@ -199,8 +185,8 @@ impl Strategy for LiveOrdersStrategy {
                 let tag = "STP_BUY";
                 self.record_expect(tag, true);
                 let _ = place_order(
-                    self.account.clone(),
-                    self.sk.instrument.clone(),
+                    self.account_key.clone(),
+                    self.symbol_key.instrument.clone(),
                     side_buy,
                     1,
                     OrderType::Stop,
@@ -216,8 +202,8 @@ impl Strategy for LiveOrdersStrategy {
                 let tag = "STP_SELL";
                 self.record_expect(tag, true);
                 let _ = place_order(
-                    self.account.clone(),
-                    self.sk.instrument.clone(),
+                    self.account_key.clone(),
+                    self.symbol_key.instrument.clone(),
                     side_sell,
                     1,
                     OrderType::Stop,
@@ -233,8 +219,8 @@ impl Strategy for LiveOrdersStrategy {
                 let tag = "STPLMT_BUY";
                 self.record_expect(tag, true);
                 let _ = place_order(
-                    self.account.clone(),
-                    self.sk.instrument.clone(),
+                    self.account_key.clone(),
+                    self.symbol_key.instrument.clone(),
                     side_buy,
                     1,
                     OrderType::StopLimit,
@@ -250,8 +236,8 @@ impl Strategy for LiveOrdersStrategy {
                 let tag = "STPLMT_SELL";
                 self.record_expect(tag, true);
                 let _ = place_order(
-                    self.account.clone(),
-                    self.sk.instrument.clone(),
+                    self.account_key.clone(),
+                    self.symbol_key.instrument.clone(),
                     side_sell,
                     1,
                     OrderType::StopLimit,
@@ -267,8 +253,8 @@ impl Strategy for LiveOrdersStrategy {
                 let tag = "JOIN_BID_BUY";
                 self.record_expect(tag, false);
                 let _ = place_order(
-                    self.account.clone(),
-                    self.sk.instrument.clone(),
+                    self.account_key.clone(),
+                    self.symbol_key.instrument.clone(),
                     side_buy,
                     1,
                     OrderType::JoinBid,
@@ -284,8 +270,8 @@ impl Strategy for LiveOrdersStrategy {
                 let tag = "JOIN_ASK_SELL";
                 self.record_expect(tag, false);
                 let _ = place_order(
-                    self.account.clone(),
-                    self.sk.instrument.clone(),
+                    self.account_key.clone(),
+                    self.symbol_key.instrument.clone(),
                     side_sell,
                     1,
                     OrderType::JoinAsk,
@@ -301,8 +287,8 @@ impl Strategy for LiveOrdersStrategy {
                 let tag = "TRAIL_BUY";
                 self.record_expect(tag, false);
                 let _ = place_order(
-                    self.account.clone(),
-                    self.sk.instrument.clone(),
+                    self.account_key.clone(),
+                    self.symbol_key.instrument.clone(),
                     side_buy,
                     1,
                     OrderType::TrailingStop,
@@ -318,8 +304,8 @@ impl Strategy for LiveOrdersStrategy {
                 let tag = "TRAIL_SELL";
                 self.record_expect(tag, false);
                 let _ = place_order(
-                    self.account.clone(),
-                    self.sk.instrument.clone(),
+                    self.account_key.clone(),
+                    self.symbol_key.instrument.clone(),
                     side_sell,
                     1,
                     OrderType::TrailingStop,
@@ -360,7 +346,7 @@ impl Strategy for LiveOrdersStrategy {
                     _ => {}
                 }
             }
-            if let Some(portfolio) = PORTFOLIOS.get(&self.account) {
+            if let Some(portfolio) = PORTFOLIOS.get(&self.account_key) {
                 let ss = portfolio.positions_snapshot(time_now());
                 println!("{:?}", portfolio.account_delta());
                 for p in ss.positions {
@@ -368,7 +354,7 @@ impl Strategy for LiveOrdersStrategy {
                     println!("{}", s.cyan());
                 }
             } else {
-                warn!("No portfolio found: {:?}", &self.account);
+                warn!("No portfolio found: {:?}", &self.account_key);
             }
         }
         // Check completion criteria only after all planned test orders have been sent.
@@ -397,7 +383,7 @@ impl Strategy for LiveOrdersStrategy {
     }
 
     fn accounts(&self) -> Vec<AccountKey> {
-        vec![self.account.clone()]
+        vec![self.account_key.clone()]
     }
 }
 
@@ -413,19 +399,20 @@ async fn main() -> anyhow::Result<()> {
     // Create DB pool from env (Postgres) and ensure schema
     let db = tt_database::init::init_db()?;
     ensure_schema(&db).await?;
-    // Backtest for a recent 30-day period
-    /*   let end_date = Utc::now().date_naive();
-    let start_date = end_date - chrono::Duration::days(5);
-
-      // Configure and start backtest
-    let cfg = BacktestConfig::from_to(chrono::Duration::milliseconds(250), start_date, end_date);
-    let strategy = BacktestOrdersStrategy::default();
-    start_backtest(db, cfg, strategy, dec!(150_000)).await?;*/
 
     connect_live_bus().await?;
 
+    let sk = SymbolKey::new(
+        Instrument::from_str("MNQ.Z25").unwrap(),
+        ProviderKind::ProjectX(ProjectXTenant::Topstep),
+    );
+    let account = AccountKey::new(
+        ProviderKind::ProjectX(ProjectXTenant::Topstep),
+        AccountName::from_str("PRAC-V2-64413-98419885").unwrap(),
+    );
+
     let mut engine = EngineRuntime::new(Some(100_000));
-    let strategy = LiveOrdersStrategy::default();
+    let strategy = LiveOrdersStrategy::new(account, sk);
     engine.start(strategy, false).await?;
 
     // Allow time for data and order lifecycle to flow

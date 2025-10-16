@@ -2,12 +2,12 @@ use crate::data::core::{Bbo, Candle, Tick, TickBar};
 use crate::data::models::{Resolution, TradeSide};
 use crate::keys::Topic;
 use crate::providers::ProviderKind;
+use crate::securities::futures_helpers::extract_root;
 use crate::securities::hours::market_hours::{MarketHours, next_session_after, session_bounds};
 use crate::securities::symbols::Instrument;
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use rust_decimal::{Decimal, dec};
 use std::sync::Arc;
-use crate::securities::futures_helpers::extract_root;
 
 // ===================== Helpers =====================
 #[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
@@ -569,11 +569,7 @@ pub struct CandlesToCandlesConsolidator {
 }
 
 impl CandlesToCandlesConsolidator {
-    pub fn new(
-        dst: Resolution,
-        hours: Option<MarketHours>,
-        instrument: Instrument,
-    ) -> Self {
+    pub fn new(dst: Resolution, hours: Option<MarketHours>, instrument: Instrument) -> Self {
         Self {
             dst,
             out_symbol: extract_root(&instrument),
@@ -789,11 +785,7 @@ struct HybridInner {
 }
 
 impl HybridTickOrCandleToCandles {
-    pub fn new(
-        dst: Resolution,
-        hours: Option<Arc<MarketHours>>,
-        instrument: Instrument,
-    ) -> Self {
+    pub fn new(dst: Resolution, hours: Option<Arc<MarketHours>>, instrument: Instrument) -> Self {
         let inner = HybridInner {
             dst,
             out_symbol: extract_root(&instrument),

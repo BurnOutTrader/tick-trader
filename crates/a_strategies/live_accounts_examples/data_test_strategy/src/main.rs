@@ -7,29 +7,47 @@ use tracing::level_filters::LevelFilter;
 use tt_engine::models::DataTopic;
 use tt_engine::runtime::EngineRuntime;
 use tt_engine::statics::bus::connect_live_bus;
+use tt_engine::statics::consolidators::add_consolidator;
 use tt_engine::statics::subscriptions::subscribe;
 use tt_engine::traits::Strategy;
 use tt_types::accounts::account::AccountName;
+use tt_types::consolidators::CandlesToCandlesConsolidator;
 use tt_types::data::mbp10::Mbp10;
+use tt_types::data::models::Resolution;
 use tt_types::keys::{AccountKey, SymbolKey};
 use tt_types::providers::{ProjectXTenant, ProviderKind};
 use tt_types::securities::symbols::Instrument;
 use tt_types::wire;
 
-#[derive(Default)]
-struct DataTestStrategy {}
+struct DataTestStrategy {
+    account_key: AccountKey,
+    symbol_key: SymbolKey,
+}
+
+impl DataTestStrategy {
+    pub fn new(account_key: AccountKey, symbol_key: SymbolKey) -> DataTestStrategy {
+        Self {
+            account_key,
+            symbol_key,
+        }
+    }
+}
 
 impl Strategy for DataTestStrategy {
     fn on_start(&mut self) {
         info!("strategy start");
 
         // Non-blocking subscribe via handle command queue, you can do this at run time from anywhere to subscribe or unsubscribe a custom universe
-        subscribe(
+        subscribe(DataTopic::Candles1s, self.symbol_key.clone());
+        let consolidator = CandlesToCandlesConsolidator::new(
+            Resolution::Minutes(15),
+            None,
+            self.symbol_key.instrument.clone(),
+        );
+        add_consolidator(
             DataTopic::Candles1s,
-            SymbolKey::new(
-                Instrument::from_str("MNQ.Z25").unwrap(),
-                ProviderKind::ProjectX(ProjectXTenant::Topstep),
-            ),
+            self.symbol_key.clone(),
+            Box::new(consolidator),
         );
     }
 
@@ -47,15 +65,21 @@ impl Strategy for DataTestStrategy {
 
     fn on_bar(&mut self, c: &tt_types::data::core::Candle, _provider_kind: ProviderKind) {
         let candle_msg = format!(
-            "C: {}, H:{}, L:{}, O:{}, C:{}, @{}",
-            c.instrument, c.high, c.low, c.open, c.close, c.time_end
+            "C: {}, {}, H:{}, L:{}, O:{}, C:{}, @{}",
+            c.instrument,
+            c.resolution.as_key().unwrap(),
+            c.high,
+            c.low,
+            c.open,
+            c.close,
+            c.time_end
         );
         if c.close > c.open {
             println!("{}", candle_msg.as_str().bright_green());
         } else if c.close < c.open {
             println!("{}", candle_msg.as_str().bright_red());
         } else {
-            println!("{:?}", candle_msg);
+            println!("{}", candle_msg);
         }
     }
 
@@ -84,12 +108,7 @@ impl Strategy for DataTestStrategy {
     }
 
     fn accounts(&self) -> Vec<AccountKey> {
-        let target_account_name = "PRAC-V2-1";
-        let account = AccountKey::new(
-            ProviderKind::ProjectX(ProjectXTenant::Topstep),
-            AccountName::from_str(target_account_name).unwrap(),
-        );
-        vec![account]
+        vec![self.account_key.clone()]
     }
 }
 
@@ -101,8 +120,17 @@ async fn main() -> anyhow::Result<()> {
 
     connect_live_bus().await?;
 
+    let sk = SymbolKey::new(
+        Instrument::from_str("MNQ.Z25").unwrap(),
+        ProviderKind::ProjectX(ProjectXTenant::Topstep),
+    );
+    let account = AccountKey::new(
+        ProviderKind::ProjectX(ProjectXTenant::Topstep),
+        AccountName::from_str("PRAC-V2-64413-98419885").unwrap(),
+    );
+
     let mut engine = EngineRuntime::new(Some(100_000));
-    let strategy = DataTestStrategy::default();
+    let strategy = DataTestStrategy::new(account, sk);
     engine.start(strategy, false).await?;
 
     sleep(Duration::from_secs(60)).await;

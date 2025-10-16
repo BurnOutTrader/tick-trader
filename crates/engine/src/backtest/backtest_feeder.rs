@@ -229,7 +229,7 @@ impl BacktestFeeder {
 
         std::mem::drop(tokio::spawn(async move {
             let notify = backtest_notify;
-                async fn await_ack(notify: &Option<Arc<Notify>>) {
+            async fn await_ack(notify: &Option<Arc<Notify>>) {
                 if let Some(n) = notify {
                     n.notified().await;
                 }
@@ -450,7 +450,7 @@ impl BacktestFeeder {
                         let _ = bus.broadcast(Response::BarBatch(batch));
                     }
                 }
-                //await_ack(&notify).await; //todo! notify is no longer needed for backtest sync
+                await_ack(notify).await; //todo! possibly notify is no longer needed for backtest sync
             }
 
             // Main loop: interleave handling of requests with emitting events in time order

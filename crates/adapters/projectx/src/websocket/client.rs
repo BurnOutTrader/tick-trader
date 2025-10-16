@@ -1709,21 +1709,22 @@ impl PxWebSocketClient {
                     ),
                 );
                 let subs = vec![
-                CandlesToCandlesConsolidator::new(
-                    Resolution::Minutes(1),
-                    None,
-                    instrument.clone(),
-                ),
-                CandlesToCandlesConsolidator::new(
-                    Resolution::Hours(1),
-                    None,
-                    instrument.clone(),
-                ),
-                CandlesToCandlesConsolidator::new(
-                    Resolution::Daily,
-                    Some(hours_for_exchange(Exchange::CME)),
-                    instrument.clone(),
-                )];
+                    CandlesToCandlesConsolidator::new(
+                        Resolution::Minutes(1),
+                        None,
+                        instrument.clone(),
+                    ),
+                    CandlesToCandlesConsolidator::new(
+                        Resolution::Hours(1),
+                        None,
+                        instrument.clone(),
+                    ),
+                    CandlesToCandlesConsolidator::new(
+                        Resolution::Daily,
+                        Some(hours_for_exchange(Exchange::CME)),
+                        instrument.clone(),
+                    ),
+                ];
                 self.sub_consolidators.insert(instrument, subs);
             } else {
                 return Ok(());

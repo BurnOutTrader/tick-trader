@@ -128,8 +128,8 @@ impl Strategy for BacktestOrdersStrategy {
         let side_sell = tt_types::accounts::events::Side::Sell;
         match self.bar_idx {
             1 => {
-                let tag = "MKT_BUY";
-                self.record_expect(tag, true);
+                const MKT_BUY: &str = "MKT_BUY";
+                self.record_expect(MKT_BUY, true);
                 let _ = place_order(
                     self.account.clone(),
                     self.sk.instrument.clone(),
@@ -139,14 +139,14 @@ impl Strategy for BacktestOrdersStrategy {
                     None,
                     None,
                     None,
-                    Some(tag.to_string()),
+                    Some(MKT_BUY.to_string()),
                     None,
                     None,
                 );
             }
             50 => {
-                let tag = "MKT_SELL";
-                self.record_expect(tag, true);
+                const MKT_SELL: &str = "MKT_SELL";
+                self.record_expect(MKT_SELL, true);
                 let _ = place_order(
                     self.account.clone(),
                     self.sk.instrument.clone(),
@@ -156,14 +156,14 @@ impl Strategy for BacktestOrdersStrategy {
                     None,
                     None,
                     None,
-                    Some(tag.to_string()),
+                    Some(MKT_SELL.to_string()),
                     None,
                     None,
                 );
             }
             100 => {
-                let tag = "LIM_BUY";
-                self.record_expect(tag, true);
+                const LIM_BUY: &str = "LIM_BUY";
+                self.record_expect(LIM_BUY, true);
                 let _ = place_order(
                     self.account.clone(),
                     self.sk.instrument.clone(),
@@ -173,14 +173,14 @@ impl Strategy for BacktestOrdersStrategy {
                     Some(last + Decimal::from(5)),
                     None,
                     None,
-                    Some(tag.to_string()),
+                    Some(LIM_BUY.to_string()),
                     None,
                     None,
                 );
             }
             200 => {
-                let tag = "LIM_SELL";
-                self.record_expect(tag, true);
+                const LIM_SELL: &str = "LIM_SELL";
+                self.record_expect(LIM_SELL, true);
                 let _ = place_order(
                     self.account.clone(),
                     self.sk.instrument.clone(),
@@ -190,14 +190,14 @@ impl Strategy for BacktestOrdersStrategy {
                     Some(last - Decimal::from(5)),
                     None,
                     None,
-                    Some(tag.to_string()),
+                    Some(LIM_SELL.to_string()),
                     None,
                     None,
                 );
             }
             300 => {
-                let tag = "STP_BUY";
-                self.record_expect(tag, true);
+                const STP_BUY: &str = "STP_BUY";
+                self.record_expect(STP_BUY, true);
                 let _ = place_order(
                     self.account.clone(),
                     self.sk.instrument.clone(),
@@ -207,14 +207,14 @@ impl Strategy for BacktestOrdersStrategy {
                     None,
                     Some(last),
                     None,
-                    Some(tag.to_string()),
+                    Some(STP_BUY.to_string()),
                     None,
                     None,
                 );
             }
             350 => {
-                let tag = "STP_SELL";
-                self.record_expect(tag, true);
+                const STP_SELL: &str = "STP_SELL";
+                self.record_expect(STP_SELL, true);
                 let _ = place_order(
                     self.account.clone(),
                     self.sk.instrument.clone(),
@@ -224,14 +224,14 @@ impl Strategy for BacktestOrdersStrategy {
                     None,
                     Some(last),
                     None,
-                    Some(tag.to_string()),
+                    Some(STP_SELL.to_string()),
                     None,
                     None,
                 );
             }
             400 => {
-                let tag = "STPLMT_BUY";
-                self.record_expect(tag, true);
+                const STPLMT_BUY: &str = "STPLMT_BUY";
+                self.record_expect(STPLMT_BUY, true);
                 let _ = place_order(
                     self.account.clone(),
                     self.sk.instrument.clone(),
@@ -241,14 +241,14 @@ impl Strategy for BacktestOrdersStrategy {
                     Some(last + Decimal::from(5)),
                     Some(last),
                     None,
-                    Some(tag.to_string()),
+                    Some(STPLMT_BUY.to_string()),
                     None,
                     None,
                 );
             }
             450 => {
-                let tag = "STPLMT_SELL";
-                self.record_expect(tag, true);
+                const STPLMT_SELL: &str = "STPLMT_SELL";
+                self.record_expect(STPLMT_SELL, true);
                 let _ = place_order(
                     self.account.clone(),
                     self.sk.instrument.clone(),
@@ -258,14 +258,14 @@ impl Strategy for BacktestOrdersStrategy {
                     Some(last - Decimal::from(5)),
                     Some(last),
                     None,
-                    Some(tag.to_string()),
+                    Some(STPLMT_SELL.to_string()),
                     None,
                     None,
                 );
             }
             500 => {
-                let tag = "JOIN_BID_BUY";
-                self.record_expect(tag, false);
+                const JOIN_BID_BUY: &str = "JOIN_BID_BUY";
+                self.record_expect(JOIN_BID_BUY, false);
                 let _ = place_order(
                     self.account.clone(),
                     self.sk.instrument.clone(),
@@ -275,14 +275,14 @@ impl Strategy for BacktestOrdersStrategy {
                     None,
                     None,
                     None,
-                    Some(tag.to_string()),
+                    Some(JOIN_BID_BUY.to_string()),
                     None,
                     None,
                 );
             }
             550 => {
-                let tag = "JOIN_ASK_SELL";
-                self.record_expect(tag, false);
+                const JOIN_ASK_SELL: &str = "JOIN_ASK_SELL";
+                self.record_expect(JOIN_ASK_SELL, false);
                 let _ = place_order(
                     self.account.clone(),
                     self.sk.instrument.clone(),
@@ -292,14 +292,14 @@ impl Strategy for BacktestOrdersStrategy {
                     None,
                     None,
                     None,
-                    Some(tag.to_string()),
+                    Some(JOIN_ASK_SELL.to_string()),
                     None,
                     None,
                 );
             }
             600 => {
-                let tag = "TRAIL_BUY";
-                self.record_expect(tag, false);
+                const TRAIL_BUY: &str = "TRAIL_BUY";
+                self.record_expect(TRAIL_BUY, false);
                 let _ = place_order(
                     self.account.clone(),
                     self.sk.instrument.clone(),
@@ -309,14 +309,14 @@ impl Strategy for BacktestOrdersStrategy {
                     None,
                     None,
                     Some(Decimal::from(1)),
-                    Some(tag.to_string()),
+                    Some(TRAIL_BUY.to_string()),
                     None,
                     None,
                 );
             }
             650 => {
-                let tag = "TRAIL_SELL";
-                self.record_expect(tag, false);
+                const TRAIL_SELL: &str = "TRAIL_SELL";
+                self.record_expect(TRAIL_SELL, false);
                 let _ = place_order(
                     self.account.clone(),
                     self.sk.instrument.clone(),
@@ -326,7 +326,7 @@ impl Strategy for BacktestOrdersStrategy {
                     None,
                     None,
                     Some(Decimal::from(1)),
-                    Some(tag.to_string()),
+                    Some(TRAIL_SELL.to_string()),
                     None,
                     None,
                 );

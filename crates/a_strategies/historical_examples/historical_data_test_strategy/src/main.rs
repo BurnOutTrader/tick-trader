@@ -17,29 +17,41 @@ use tt_types::data::core::Utc;
 use tt_types::data::mbp10::Mbp10;
 use tt_types::data::models::Resolution;
 use tt_types::keys::{AccountKey, SymbolKey};
+use tt_types::providers::ProviderKind::ProjectX;
 use tt_types::providers::{ProjectXTenant, ProviderKind};
-use tt_types::securities::futures_helpers::extract_root;
 use tt_types::securities::symbols::Instrument;
 use tt_types::wire;
 
-#[derive(Default)]
-struct HistoricalDataTestStrategy {}
+struct HistoricalDataTestStrategy {
+    account_key: AccountKey,
+    symbol_key: SymbolKey,
+}
+
+impl HistoricalDataTestStrategy {
+    pub fn new(account_key: AccountKey, symbol_key: SymbolKey) -> HistoricalDataTestStrategy {
+        Self {
+            account_key,
+            symbol_key,
+        }
+    }
+}
 
 impl Strategy for HistoricalDataTestStrategy {
     fn on_start(&mut self) {
         info!("strategy start");
-        let inst = Instrument::from_str("MNQ.Z25").unwrap();
-        let key = SymbolKey::new(inst.clone(), ProviderKind::ProjectX(ProjectXTenant::Topstep));
+
         // Non-blocking subscribe via handle command queue, you can do this at run time from anywhere to subscribe or unsubscribe a custom universe
-        subscribe(
-            DataTopic::Candles1s,
-            SymbolKey::new(
-                inst.clone(),
-                ProviderKind::ProjectX(ProjectXTenant::Topstep),
-            ),
+        subscribe(DataTopic::Candles1s, self.symbol_key.clone());
+        let consolidator = CandlesToCandlesConsolidator::new(
+            Resolution::Minutes(15),
+            None,
+            self.symbol_key.instrument.clone(),
         );
-        let consolidator = CandlesToCandlesConsolidator::new(Resolution::Minutes(15), None, inst);
-        add_consolidator(DataTopic::Candles1s, key, Box::new(consolidator));
+        add_consolidator(
+            DataTopic::Candles1s,
+            self.symbol_key.clone(),
+            Box::new(consolidator),
+        );
     }
 
     fn on_stop(&mut self) {
@@ -57,7 +69,13 @@ impl Strategy for HistoricalDataTestStrategy {
     fn on_bar(&mut self, c: &tt_types::data::core::Candle, _provider_kind: ProviderKind) {
         let candle_msg = format!(
             "C: {}, {}, H:{}, L:{}, O:{}, C:{}, @{}",
-            c.instrument, c.resolution.as_key().unwrap(), c.high, c.low, c.open, c.close, c.time_end
+            c.instrument,
+            c.resolution.as_key().unwrap(),
+            c.high,
+            c.low,
+            c.open,
+            c.close,
+            c.time_end
         );
         if c.close > c.open {
             println!("{}", candle_msg.as_str().bright_green());
@@ -93,12 +111,7 @@ impl Strategy for HistoricalDataTestStrategy {
     }
 
     fn accounts(&self) -> Vec<AccountKey> {
-        let target_account_name = "PRAC-V2-1";
-        let account = AccountKey::new(
-            ProviderKind::ProjectX(ProjectXTenant::Topstep),
-            AccountName::from_str(target_account_name).unwrap(),
-        );
-        vec![account]
+        vec![self.account_key.clone()]
     }
 }
 
@@ -116,9 +129,16 @@ async fn main() -> anyhow::Result<()> {
     let end_date = Utc::now().date_naive();
     let start_date = end_date - chrono::Duration::days(30);
 
+    let account_name = AccountName::new("TST-1234".to_string());
+    let inst = Instrument::from_str("MNQ.Z25")?;
+    let key = SymbolKey::new(
+        inst.clone(),
+        ProviderKind::ProjectX(ProjectXTenant::Topstep),
+    );
+    let account_key = AccountKey::new(ProjectX(ProjectXTenant::Topstep), account_name);
     // Configure and start backtest
     let cfg = BacktestConfig::from_to(chrono::Duration::milliseconds(250), start_date, end_date);
-    let strategy = HistoricalDataTestStrategy::default();
+    let strategy = HistoricalDataTestStrategy::new(account_key, key);
     start_backtest(db, cfg, strategy, dec!(150_000)).await?;
 
     sleep(Duration::from_secs(60)).await;

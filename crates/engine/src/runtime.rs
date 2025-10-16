@@ -598,14 +598,12 @@ impl EngineRuntime {
                                     .await;
                                 // Best-effort: trigger server-side DB update for latest candles
                                 let _ = bus
-                                    .handle_request(Request::DbUpdateKeyLatest(
-                                        DbUpdateKeyLatest {
-                                            provider: key.provider,
-                                            instrument: key.instrument.clone(),
-                                            topic,
-                                            corr_id: 0,
-                                        },
-                                    ))
+                                    .handle_request(Request::DbUpdateKeyLatest(DbUpdateKeyLatest {
+                                        provider: key.provider,
+                                        instrument: key.instrument.clone(),
+                                        topic,
+                                        corr_id: 0,
+                                    }))
                                     .await;
                             }
                         }
