@@ -98,7 +98,6 @@ impl UpstreamManager for ProviderManager {
             .ok_or_else(|| anyhow::anyhow!("execution provider missing"))?;
         let r = ex.place_order(spec.clone()).await;
         if !r.ok {
-            //todo: Not sure if this should be default behaviour. it depends if provider is sending back rejection for all rejects
             let update = OrderUpdate {
                 account_name: spec.account_key.account_name,
                 instrument: spec.instrument,
