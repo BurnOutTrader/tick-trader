@@ -167,6 +167,8 @@ pub struct OrderUpdate {
     pub tag: Option<String>,
 
     pub time: DateTime<Utc>,
+
+    pub msg: Option<String>,
 }
 impl OrderUpdate {
     pub fn to_clean_string(&self) -> String {

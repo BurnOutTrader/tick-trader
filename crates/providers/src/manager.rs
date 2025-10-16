@@ -1,16 +1,22 @@
 use crate::download_manager::DownloadManager;
 use crate::worker::ProviderWorker;
 use anyhow::Result;
+use chrono::Utc;
 use dashmap::DashMap;
 use std::sync::Arc;
+use tracing::error;
 use tt_bus::Router;
 use tt_bus::UpstreamManager;
+use tt_types::accounts::events::OrderUpdate;
+use tt_types::accounts::order::OrderState;
 use tt_types::history::{HistoricalRangeRequest, HistoryEvent};
+use tt_types::keys::Topic;
 use tt_types::providers::ProviderKind;
 use tt_types::securities::security::FuturesContract;
 use tt_types::server_side::traits::{
     ExecutionProvider, HistoricalDataProvider, MarketDataProvider, ProviderSessionSpec,
 };
+use tt_types::wire::OrdersBatch;
 
 /// Minimal ProviderManager that ensures a provider pair exists for a given ProviderKind.
 /// For this initial pass, it uses the ProjectX in-process adapter and returns dyn traits.
@@ -90,7 +96,34 @@ impl UpstreamManager for ProviderManager {
             .get(&kind)
             .map(|e| e.value().clone())
             .ok_or_else(|| anyhow::anyhow!("execution provider missing"))?;
-        let _ack = ex.place_order(spec).await;
+        let r = ex.place_order(spec.clone()).await;
+        if !r.ok {
+            //todo: Not sure if this should be default behaviour. it depends if provider is sending back rejection for all rejects
+            let update = OrderUpdate {
+                account_name: spec.account_key.account_name,
+                instrument: spec.instrument,
+                provider_kind: spec.account_key.provider,
+                provider_order_id: None,
+                order_id: spec.order_id,
+                state: OrderState::Rejected,
+                leaves: 0,
+                cum_qty: 0,
+                side: spec.side,
+                avg_fill_px: Default::default(),
+                tag: spec.custom_tag,
+                time: Utc::now(),
+                msg: r.message,
+            };
+            let batch = OrdersBatch {
+                topic: Topic::Orders,
+                seq: 0,
+                orders: vec![update],
+            };
+            if let Err(e) = self.bus.publish_orders_batch(batch).await {
+                error!(target: "manager", "failed to publish OrderUpdate: {:?}", e);
+            }
+        }
+
         Ok(())
     }
 

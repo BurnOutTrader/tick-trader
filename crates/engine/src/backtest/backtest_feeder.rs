@@ -29,9 +29,6 @@ use crate::statics::bus::BUS_CLIENT;
 use crate::statics::clock::time_now;
 use crate::statics::portfolio::{PORTFOLIOS, Portfolio};
 
-/// Windowed DB feeder that simulates a provider by emitting Responses over an in-process bus.
-/// It listens for SubscribeKey/UnsubscribeKey requests on a request channel you provide when
-/// constructing the bus via ClientMessageBus::new_with_transport(req_tx).
 #[derive(Clone)]
 pub enum MatchingPolicy {
     FIFO,
@@ -48,6 +45,9 @@ pub enum OrderAckDuringClosedPolicy {
     AckButDeferFills,
 }
 
+/// Windowed DB feeder that simulates a provider by emitting Responses over an in-process bus.
+/// It listens for SubscribeKey/UnsubscribeKey requests on a request channel you provide when
+/// constructing the bus via ClientMessageBus::new_with_transport(req_tx).
 #[derive(Clone)]
 pub struct BacktestFeederConfig {
     /// Optional liquidation window: flatten open positions within this duration before session close
@@ -704,10 +704,11 @@ impl BacktestFeeder {
                                                 ProviderOrderId(format!("bt-{}", engine_order_id));
 
                                             // Normalize quantity sign to platform standard and validate non-zero
-                                            let mut reject = false;
+                                            let mut reject_reason: Option<String> = None;
                                             let normalized_qty = spec.side.normalize_qty(spec.qty);
                                             if normalized_qty == 0 {
-                                                reject = true;
+                                                reject_reason =
+                                                    Some("quantity must be non-zero".to_string());
                                             } else {
                                                 spec.qty = normalized_qty;
                                             }
@@ -715,26 +716,32 @@ impl BacktestFeeder {
                                             match spec.order_type {
                                                 tt_types::wire::OrderType::Stop => {
                                                     if spec.stop_price.is_none() {
-                                                        reject = true;
+                                                        reject_reason =
+                                                            Some("stop price required".to_string());
                                                     }
                                                 }
                                                 tt_types::wire::OrderType::TrailingStop => {
                                                     // Trailing stops require a trail distance; initial stop_price is derived/ratcheted by the fill model
                                                     if spec.trail_price.is_none() {
-                                                        reject = true;
+                                                        reject_reason = Some(
+                                                            "trail distance required".to_string(),
+                                                        );
                                                     }
                                                 }
                                                 tt_types::wire::OrderType::StopLimit => {
                                                     if spec.stop_price.is_none()
                                                         || spec.limit_price.is_none()
                                                     {
-                                                        reject = true;
+                                                        reject_reason = Some(
+                                                            "stop and limit prices required"
+                                                                .to_string(),
+                                                        );
                                                     }
                                                 }
                                                 _ => {}
                                             }
 
-                                            if reject {
+                                            if let Some(reason) = reject_reason {
                                                 // Immediately emit a rejected order update with user's original tag
                                                 let upd = OrderUpdate {
                                                     account_name: spec
@@ -754,6 +761,7 @@ impl BacktestFeeder {
                                                     tag: user_tag.clone(),
                                                     time: base,
                                                     side: spec.side,
+                                                    msg: Some(reason),
                                                 };
                                                 let ob = tt_types::wire::OrdersBatch {
                                                     topic: Topic::Orders,
@@ -803,6 +811,9 @@ impl BacktestFeeder {
                                                     tag: user_tag.clone(),
                                                     time: base,
                                                     side: spec.side,
+                                                    msg: Some(
+                                                        "market closed or halted".to_string(),
+                                                    ),
                                                 };
                                                 let ob = tt_types::wire::OrdersBatch {
                                                     topic: Topic::Orders,
@@ -1049,6 +1060,7 @@ impl BacktestFeeder {
                                         tag: so.user_tag.clone(),
                                         time: so.ack_at,
                                         side: so.spec.side,
+                                        msg: None,
                                     });
                                     so.ack_emitted = true;
                                 }
@@ -1388,6 +1400,7 @@ impl BacktestFeeder {
                                             tag: so.user_tag.clone(),
                                             time: so.fill_at,
                                             side: so.spec.side,
+                                            msg: None,
                                         });
                                         // Update working quantity to the leaves and reschedule next attempt
                                         so.spec.qty = leaves;
@@ -1407,6 +1420,7 @@ impl BacktestFeeder {
                                             tag: so.user_tag.clone(),
                                             time: so.fill_at,
                                             side: so.spec.side,
+                                            msg: None,
                                         });
                                         so.done = true;
                                         finished.push(*oid);
@@ -1435,6 +1449,7 @@ impl BacktestFeeder {
                                         tag: so.user_tag.clone(),
                                         time: at,
                                         side: so.spec.side,
+                                        msg: None,
                                     });
                                     so.done = true;
                                     finished.push(*oid);
@@ -1745,21 +1760,27 @@ impl BacktestFeeder {
                                 spec.qty = normalized_qty;
                             }
 
+                            let mut msg = None;
                             match spec.order_type {
                                 tt_types::wire::OrderType::Stop => {
                                     if spec.stop_price.is_none() {
                                         reject = true;
+                                        msg = Some("Stop price is none".to_string())
                                     }
                                 }
                                 tt_types::wire::OrderType::TrailingStop => {
                                     // Trailing stops require a trail distance; initial stop_price is derived/ratcheted by the fill model
                                     if spec.trail_price.is_none() {
                                         reject = true;
+                                        msg = Some("Trail price is none".to_string())
                                     }
                                 }
                                 tt_types::wire::OrderType::StopLimit => {
                                     if spec.stop_price.is_none() || spec.limit_price.is_none() {
                                         reject = true;
+                                        msg = Some(
+                                            "Stop price is none or Limit price is none".to_string(),
+                                        )
                                     }
                                 }
                                 _ => {}
@@ -1780,6 +1801,7 @@ impl BacktestFeeder {
                                     tag: user_tag.clone(),
                                     time: base,
                                     side: spec.side,
+                                    msg,
                                 };
                                 let ob = tt_types::wire::OrdersBatch {
                                     topic: Topic::Orders,
@@ -1823,6 +1845,7 @@ impl BacktestFeeder {
                                     tag: user_tag.clone(),
                                     time: base,
                                     side: spec.side,
+                                    msg: Some("Is closed or halt".to_string()),
                                 };
                                 let ob = tt_types::wire::OrdersBatch {
                                     topic: Topic::Orders,

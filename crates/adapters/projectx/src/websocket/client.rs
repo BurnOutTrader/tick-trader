@@ -1281,6 +1281,7 @@ impl PxWebSocketClient {
                                                 tag: sanitized_user_tag,
                                                 time: ts_dt,
                                                 side,
+                                                msg: None,
                                             };
                                             batch.orders.push(ou);
                                         }

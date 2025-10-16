@@ -46,6 +46,7 @@ pub fn place_order(
         custom_tag: Some(tag),
         stop_loss,
         take_profit,
+        order_id: engine_uuid,
     };
     // Record mapping so we can cancel/replace with minimal info later
     ENGINE_ORDER_ACCOUNTS.insert(engine_uuid, account_key_clone);

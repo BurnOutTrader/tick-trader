@@ -362,6 +362,7 @@ pub struct PlaceOrder {
     pub stop_loss: Option<BracketWire>,
     /// Optional take profit bracket
     pub take_profit: Option<BracketWire>,
+    pub order_id: EngineUuid,
 }
 
 /// Cancel an existing order
