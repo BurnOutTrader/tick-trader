@@ -50,7 +50,10 @@ impl ClientMessageBus {
                 // Receiver was dropped (caller didn't await or timed out). Fallback to broadcast so the
                 // message is not lost and to avoid spurious errors in backtests.
                 if let Err(e) = self.broadcast(response) {
-                    error!("route_response: receiver dropped and broadcast failed: {:?}", e);
+                    error!(
+                        "route_response: receiver dropped and broadcast failed: {:?}",
+                        e
+                    );
                 }
             }
         } else {

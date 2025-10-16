@@ -127,11 +127,20 @@ pub async fn list_instruments(
             })
         })
         .await;
-    // Allow a more generous timeout to accommodate DB queries in backtests
-    match timeout(Duration::from_secs(15), rx).await {
-        Ok(Ok(WireResp::InstrumentsResponse(ir))) => Ok(ir.instruments),
-        Ok(Ok(_other)) => Ok(vec![]),
-        _ => Ok(vec![]),
+    // In backtest, the feeder will always route the correlated response; avoid timeouts to prevent dropping oneshots.
+    if crate::statics::clock::is_backtest() {
+        match rx.await {
+            Ok(WireResp::InstrumentsResponse(ir)) => Ok(ir.instruments),
+            Ok(_other) => Ok(vec![]),
+            Err(_canceled) => Ok(vec![]),
+        }
+    } else {
+        // Live mode: keep a bounded timeout to avoid hanging if unsupported by server
+        match timeout(Duration::from_secs(15), rx).await {
+            Ok(Ok(WireResp::InstrumentsResponse(ir))) => Ok(ir.instruments),
+            Ok(Ok(_other)) => Ok(vec![]),
+            _ => Ok(vec![]),
+        }
     }
 }
 
@@ -144,10 +153,18 @@ pub async fn get_instruments_map(provider: ProviderKind) -> anyhow::Result<Vec<F
             Request::InstrumentsMapRequest(InstrumentsMapRequest { provider, corr_id })
         })
         .await;
-    match timeout(Duration::from_secs(15), rx).await {
-        Ok(Ok(WireResp::InstrumentsMapResponse(imr))) => Ok(imr.contracts),
-        Ok(Ok(_other)) => Ok(vec![]),
-        _ => Ok(vec![]),
+    if crate::statics::clock::is_backtest() {
+        match rx.await {
+            Ok(WireResp::InstrumentsMapResponse(imr)) => Ok(imr.contracts),
+            Ok(_other) => Ok(vec![]),
+            Err(_canceled) => Ok(vec![]),
+        }
+    } else {
+        match timeout(Duration::from_secs(15), rx).await {
+            Ok(Ok(WireResp::InstrumentsMapResponse(imr))) => Ok(imr.contracts),
+            Ok(Ok(_other)) => Ok(vec![]),
+            _ => Ok(vec![]),
+        }
     }
 }
 
@@ -162,12 +179,22 @@ pub async fn get_account_info(
             Request::AccountInfoRequest(AccountInfoRequest { provider, corr_id })
         })
         .await;
-    match timeout(Duration::from_secs(15), rx).await {
-        Ok(Ok(WireResp::AccountInfoResponse(air))) => Ok(air),
-        Ok(Ok(_other)) => Err(anyhow::anyhow!(
-            "unexpected response for AccountInfoRequest"
-        )),
-        _ => Err(anyhow::anyhow!("timeout waiting for AccountInfoResponse")),
+    if crate::statics::clock::is_backtest() {
+        match rx.await {
+            Ok(WireResp::AccountInfoResponse(air)) => Ok(air),
+            Ok(_other) => Err(anyhow::anyhow!(
+                "unexpected response for AccountInfoRequest"
+            )),
+            Err(_canceled) => Err(anyhow::anyhow!("engine response channel closed")),
+        }
+    } else {
+        match timeout(Duration::from_secs(15), rx).await {
+            Ok(Ok(WireResp::AccountInfoResponse(air))) => Ok(air),
+            Ok(Ok(_other)) => Err(anyhow::anyhow!(
+                "unexpected response for AccountInfoRequest"
+            )),
+            _ => Err(anyhow::anyhow!("timeout waiting for AccountInfoResponse")),
+        }
     }
 }
 

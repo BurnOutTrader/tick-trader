@@ -59,3 +59,11 @@ pub fn time_ns() -> u64 {
         ClockMode::Backtest(clk) => clk.now_ns(),
     }
 }
+
+#[inline]
+pub fn is_backtest() -> bool {
+    matches!(
+        &*CLOCK_MODE.read().expect("poisoned clock mode"),
+        ClockMode::Backtest(_)
+    )
+}
