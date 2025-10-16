@@ -9,7 +9,7 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tokio = { workspace = true }
-tt-types = { path = "../../../types" }
-tt-bus = { path = "../../../bus" }
-tt_engine = { package = "tt-engine", path = "../../../engine" }
+tt-types = { path = "../../../../types" }
+tt-bus = { path = "../../../../bus" }
+tt_engine = { package = "tt-engine", path = "../../../../engine" }
 colored = {workspace = true}

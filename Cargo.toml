@@ -8,8 +8,8 @@ members = [
     "crates/providers",
     "crates/shm",
     "crates/database"
-,   "crates/a_strategies/examples/data_test_strategy"
-, "crates/a_strategies/examples/orders_test_strategy"]
+, "crates/a_strategies/examples/live_accounts_examples/data_test_strategy"
+, "crates/a_strategies/examples/orders_test_strategy", "crates/a_strategies/examples/live_accounts_examples/live_orders"]
 resolver = "2"
 
 [workspace.package]
