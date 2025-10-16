@@ -229,11 +229,11 @@ impl BacktestFeeder {
 
         std::mem::drop(tokio::spawn(async move {
             let notify = backtest_notify;
-            /*    async fn await_ack(notify: &Option<Arc<Notify>>) {
+                async fn await_ack(notify: &Option<Arc<Notify>>) {
                 if let Some(n) = notify {
                     n.notified().await;
                 }
-            }*/
+            }
             // --- Simple fill engine state (model-driven order lifecycle) ---
             #[derive(Clone, Debug)]
             struct Lot {
@@ -418,7 +418,7 @@ impl BacktestFeeder {
                 bus: &ClientMessageBus,
                 tde: &tt_database::queries::TopicDataEnum,
                 provider: ProviderKind,
-                _notify: &Option<Arc<Notify>>,
+                notify: &Option<Arc<Notify>>,
             ) {
                 match tde {
                     tt_database::queries::TopicDataEnum::Tick(t) => {
@@ -450,7 +450,7 @@ impl BacktestFeeder {
                         let _ = bus.broadcast(Response::BarBatch(batch));
                     }
                 }
-                // await_ack(&notify).await; //todo! notify is no longer needed for backtest sync
+                await_ack(&notify).await; //todo! notify is no longer needed for backtest sync
             }
 
             // Main loop: interleave handling of requests with emitting events in time order
