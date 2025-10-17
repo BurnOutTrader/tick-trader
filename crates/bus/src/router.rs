@@ -638,6 +638,10 @@ impl Router {
                                 for c in pairs {
                                     map.insert(c.instrument.clone(), c);
                                 }
+                                // Ensure schema exists before we try to persist contracts (idempotent)
+                                if let Err(e) = tt_database::schema::ensure_schema(&connection).await {
+                                    error!("Error ensuring schema before contract map ingest: {}", e);
+                                }
                                 if let Err(e) = tt_database::ingest::ingest_contracts_map(
                                     &connection,
                                     prov,

@@ -1843,6 +1843,14 @@ impl PxWebSocketClient {
         .await
     }
 
+    pub async fn unsubscribe_contract_candles(&self, contract_id: &str) -> anyhow::Result<()> {
+        let dotted = crate::websocket::client::parse_px_instrument(contract_id);
+        let instrument = Instrument::try_parse_dotted(&dotted)?;
+        let _ = self.main_consolidators.remove(&instrument);
+        let _ = self.sub_consolidators.remove(&instrument);
+        Ok(())
+    }
+
     /// Subscribe to market data by contract ID (bars)
     pub async fn subscribe_contract_bars(&self, contract_id: &str) -> anyhow::Result<()> {
         {

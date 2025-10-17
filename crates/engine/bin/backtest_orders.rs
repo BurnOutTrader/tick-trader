@@ -377,7 +377,10 @@ impl Strategy for BacktestOrdersStrategy {
                 .values()
                 .all(|e| e.acked && (!e.require_fill || e.filled))
         {
-            println!("All order-type checks passed: {:?}", self.expect);
+            for e in self.expect.values_mut() {
+                println!("{:?}", e);
+            }
+
             self.done = true;
             // Exit process cleanly; in CI this acts as a test pass
             std::process::exit(0);

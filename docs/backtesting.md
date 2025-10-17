@@ -21,6 +21,8 @@ This page summarizes the backtesting subsystem: key parameters, realism models, 
 
 ## 🚀 Quick start
 
+> Important: The project now uses half‑open candle intervals ([start, end)) and exact grid end times. Existing Postgres data written with the old “-1 ns” inclusive convention must be rebuilt. See the root README section “Breaking change: half‑open intervals (DB rebuild required)” for instructions.
+
 > 💡 Tip: See strategy examples at /crates/a_strategies/examples
 
 - Minimal programmatic start (pseudocode using helpers already in the repo):

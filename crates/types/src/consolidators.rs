@@ -160,12 +160,11 @@ impl TicksToTickBarsConsolidator {
             && let (Some(start), Some(oo), Some(hh), Some(ll), Some(cc)) =
                 (self.start_ts, self.o, self.h, self.l, self.c)
         {
-            let end_incl = tk.time - Duration::nanoseconds(1);
             let out = TickBar {
                 symbol: self.out_symbol.clone(),
                 instrument: self.instrument.clone(),
                 time_start: start,
-                time_end: end_incl,
+                time_end: tk.time, // half-open: [start, end)
                 open: oo,
                 high: hh,
                 low: ll,

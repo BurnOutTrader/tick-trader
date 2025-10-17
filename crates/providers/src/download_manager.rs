@@ -1,5 +1,4 @@
-use chrono::{DateTime, Duration, Utc};
-use chrono_tz::Tz;
+use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Notify;
@@ -15,9 +14,6 @@ use tt_types::engine_id::EngineUuid;
 use tt_types::history::{HistoricalRangeRequest, HistoryEvent};
 use tt_types::keys::Topic;
 use tt_types::providers::ProviderKind;
-use tt_types::securities::hours::market_hours::{
-    MarketHours, SessionKind, hours_for_exchange, next_session_open_after,
-};
 use tt_types::securities::symbols::Instrument;
 use tt_types::server_side::traits::HistoricalDataProvider;
 
@@ -221,7 +217,6 @@ async fn run_download(
 ) -> anyhow::Result<()> {
     // Ensure the schema exists before we start persisting fetched data. This is idempotent.
     tt_database::schema::ensure_schema(&connection).await?;
-    const CAL_TZ: Tz = chrono_tz::UTC;
     let resolution = match req.topic {
         Topic::Ticks => None,
         Topic::Quotes => None,
@@ -234,50 +229,29 @@ async fn run_download(
     };
 
     let provider_code = client.name();
-    let hours = hours_for_exchange(req.exchange);
 
     let earliest = client
         .earliest_available(req.instrument.clone(), req.topic)
         .await?;
     let now = Utc::now();
-    let wants_intraday = req.topic != Topic::Candles1d;
 
-    // Cursor := max(persisted_ts)+1ns, else provider earliest
-    let mut cursor: DateTime<Utc> =
-        match latest_data_time(&connection, req.provider_kind, &req.instrument, req.topic).await {
-            Ok(Some(ts)) => ts + Duration::nanoseconds(1),
-            Ok(None) => match earliest {
-                None => return Err(anyhow::anyhow!("no data available")),
-                Some(t) => t,
-            },
-            Err(e) => return Err(e),
-        };
+    // Simplified cursoring: start from latest persisted time if available; otherwise from provider's earliest.
+    let last_opt = latest_data_time(&connection, req.provider_kind, &req.instrument, req.topic).await?;
+    let mut cursor: DateTime<Utc> = if let Some(ts) = last_opt {
+        ts
+    } else {
+        earliest.ok_or_else(|| anyhow::anyhow!("no data available"))?
+    };
     let symbol = req.instrument.to_string();
     if cursor >= now {
         tracing::info!(%symbol, ?provider_code, %req.exchange, "up to date");
         return Ok(());
     }
 
-    // If we're on a fully-closed calendar day for intraday-ish kinds, jump to next open.
-    if req.topic != Topic::Candles1d
-        && hours.is_closed_all_day_at(cursor, CAL_TZ, SessionKind::Both)
-    {
-        let open = next_session_open_after(&hours, cursor);
-        if open > cursor {
-            cursor = open;
-        }
-    }
-
     while cursor < now {
         // Pick a batch window that fits the kind/resolution.
         let span = choose_span(resolution);
         let end = (cursor + span).min(now);
-
-        // For intraday-ish kinds, skip windows that are 100% closed.
-        if req.topic != Topic::Candles1d && window_is_all_closed(&hours, CAL_TZ, cursor, end) {
-            cursor = next_session_open_after(&hours, cursor);
-            continue;
-        }
 
         let req = HistoricalRangeRequest {
             provider_kind: req.provider_kind,
@@ -326,12 +300,30 @@ async fn run_download(
                         req.topic,
                         Topic::Candles1s | Topic::Candles1m | Topic::Candles1h | Topic::Candles1d
                     ) {
-                        // Advance by candle END to guarantee no gaps/overlaps between bars
-                        let ts = c.time_end;
-                        max_ts = Some(max_ts.map_or(ts, |m| m.max(ts)));
-                        if !c.is_closed(Utc::now()) {
+                        // Ensure resolution matches the topic (prevents 1s resume issues)
+                        if let Some(expected) = resolution {
+                            if c.resolution != expected {
+                                continue;
+                            }
+                        }
+                        // Skip duplicates at or before the cursor to avoid infinite loops
+                        if c.time_end <= cursor {
                             continue;
                         }
+                        // Accept candles that are "closed enough" for their resolution.
+                        // This avoids skipping a provider's partial boundary bar that repeats across windows.
+                        let accept = match resolution {
+                            Some(Resolution::Seconds(1)) => c.time_end <= (now - chrono::Duration::seconds(1)),
+                            Some(Resolution::Minutes(1)) => c.time_end <= (now - chrono::Duration::seconds(60)),
+                            Some(Resolution::Hours(1)) => c.time_end <= (now - chrono::Duration::seconds(3600)),
+                            Some(Resolution::Daily) => c.time_end <= (now - chrono::Duration::days(1)),
+                            _ => c.is_closed(now),
+                        };
+                        if !accept {
+                            continue;
+                        }
+                        let ts = c.time_end;
+                        max_ts = Some(max_ts.map_or(ts, |m| m.max(ts)));
                         candles.push(c);
                     }
                 }
@@ -392,14 +384,15 @@ async fn run_download(
             _ => {}
         }
 
-        // Advance cursor by what we *actually* got, otherwise by window end.
+        // Advance cursor by what we actually saw; if none (or no progress), move to window end.
         if let Some(ts) = max_ts {
-            cursor = ts + Duration::nanoseconds(1);
-        } else if wants_intraday {
-            let next_open = next_session_open_after(&hours, cursor);
-            cursor = next_open.max(end + Duration::nanoseconds(1));
+            if ts <= cursor {
+                cursor = end;
+            } else {
+                cursor = ts;
+            }
         } else {
-            cursor = end + Duration::seconds(1);
+            cursor = end;
         }
     }
     info!("Historical database update completed");
@@ -427,25 +420,3 @@ fn choose_span(res: Option<Resolution>) -> chrono::Duration {
     }
 }
 
-/// True if every calendar day intersecting [start,end) is fully closed.
-fn window_is_all_closed(
-    hours: &MarketHours,
-    cal_tz: chrono_tz::Tz,
-    start: chrono::DateTime<Utc>,
-    end: chrono::DateTime<Utc>,
-) -> bool {
-    if end <= start {
-        return true;
-    }
-    let mut d = start.with_timezone(&cal_tz).date_naive();
-    let last = (end - chrono::Duration::nanoseconds(1))
-        .with_timezone(&cal_tz)
-        .date_naive();
-    while d <= last {
-        if !hours.is_closed_all_day_in_calendar(d, cal_tz, SessionKind::Both) {
-            return false;
-        }
-        d = d.succ_opt().unwrap();
-    }
-    true
-}

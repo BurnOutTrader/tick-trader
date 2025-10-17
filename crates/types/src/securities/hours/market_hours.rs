@@ -201,26 +201,20 @@ impl MarketHours {
     pub fn is_open_extended(&self, t: DateTime<Utc>) -> bool {
         self.is_open_with(t, SessionKind::Extended)
     }
-    /// This is used to calculate the current bars closing time, based on its open time
-    /// Inclusive bar close given its UTC open and resolution.
+    /// Compute the bar end boundary based on its UTC open and resolution.
+    /// Half-open semantics: [open_time, end), where end is exactly on the resolution grid.
     pub fn bar_end(&self, open_time: DateTime<Utc>, res: Resolution) -> DateTime<Utc> {
         match res {
-            Resolution::Seconds(s) => {
-                open_time + chrono::Duration::seconds(s as i64) - chrono::Duration::nanoseconds(1)
-            }
-            Resolution::Minutes(m) => {
-                open_time + chrono::Duration::minutes(m as i64) - chrono::Duration::nanoseconds(1)
-            }
-            Resolution::Hours(h) => {
-                open_time + chrono::Duration::hours(h as i64) - chrono::Duration::nanoseconds(1)
-            }
+            Resolution::Seconds(s) => open_time + chrono::Duration::seconds(s as i64),
+            Resolution::Minutes(m) => open_time + chrono::Duration::minutes(m as i64),
+            Resolution::Hours(h) => open_time + chrono::Duration::hours(h as i64),
             Resolution::Daily => {
-                // End at that session’s close (already inclusive in your model)
+                // End at that session’s exact close (end-exclusive already)
                 let (_open, close) = session_bounds(self, open_time);
                 close
             }
             Resolution::Weekly => {
-                // Prefer a proper “week bounds” helper; placeholder shown:
+                // Use week bounds helper; return exact week close boundary
                 let (_wopen, wclose) = week_session_bounds(self, open_time);
                 wclose
             }
@@ -304,17 +298,15 @@ impl MarketHours {
     }
 }
 
-/// Compute the inclusive candle end timestamp for a given `time_open`, `resolution` and `exchange`.
-/// The result is **one nanosecond before** the next bar's open (i.e., end-exclusive boundary minus 1ns),
-/// so adjacent bars do not collide.
+/// Compute the candle end boundary for a given `time_open`, `resolution` and `exchange`.
+/// Half-open semantics: [time_open, time_end), where `time_end` is exactly at the next grid boundary.
 ///
 /// Rules:
-/// - Intraday (Seconds/Minutes/Hours): use the exchange's trading hours to find the next bar boundary,
-///   then subtract 1ns.
-/// - Daily: if the exchange has a distinct daily close (`has_daily_close = true`), end at the *session close* - 1ns;
-///   otherwise, end at the next local midnight - 1ns (in the exchange's timezone).
-/// - Weekly: if the exchange has a distinct weekend close (`has_weekend_close = true`), end at the next
-///   Monday 00:00 local - 1ns; otherwise, end at the next Sunday 17:00 local - 1ns (common futures reopen).
+/// - Intraday (Seconds/Minutes/Hours): advance to the next aligned boundary.
+/// - Daily: if the exchange has a distinct daily close (`has_daily_close = true`), end at the exact session close;
+///   otherwise, end at the next local midnight (exchange timezone) exactly.
+/// - Weekly: if the exchange has a distinct weekend close (`has_weekend_close = true`), end at Monday 00:00 local exactly;
+///   otherwise, end at Sunday 17:00 local exactly (common futures reopen).
 pub fn candle_end(
     time_open: DateTime<Utc>,
     resolution: Resolution,
@@ -322,17 +314,14 @@ pub fn candle_end(
 ) -> Option<DateTime<Utc>> {
     let hours = hours_for_exchange(exchange);
 
-    // helper: 1ns subtraction (avoid underflow)
-    let minus_1ns = |t: DateTime<Utc>| t.checked_sub_signed(Duration::nanoseconds(1)).unwrap_or(t);
-
     match resolution {
-        Resolution::Seconds(1) => Some(time_open + Duration::seconds(1) - Duration::nanoseconds(1)),
-        Resolution::Minutes(1) => Some(time_open + Duration::minutes(1) - Duration::nanoseconds(1)),
-        Resolution::Hours(1) => Some(time_open + Duration::hours(1) - Duration::nanoseconds(1)),
+        Resolution::Seconds(1) => Some(time_open + Duration::seconds(1)),
+        Resolution::Minutes(1) => Some(time_open + Duration::minutes(1)),
+        Resolution::Hours(1) => Some(time_open + Duration::hours(1)),
         Resolution::Daily => {
             if hours.has_daily_close {
                 let (_open, close) = session_bounds(&hours, time_open);
-                Some(minus_1ns(close))
+                Some(close)
             } else {
                 // No explicit daily close → use next local midnight in the exchange TZ
                 let local = time_open.with_timezone(&hours.tz);
@@ -343,7 +332,7 @@ pub fn candle_end(
                     .earliest()
                     .unwrap()
                     .with_timezone(&Utc);
-                Some(minus_1ns(next_midnight_local))
+                Some(next_midnight_local)
             }
         }
         Resolution::Weekly => {
@@ -365,7 +354,7 @@ pub fn candle_end(
                 .with_timezone(&Utc);
 
             if hours.has_weekend_close {
-                Some(minus_1ns(next_monday_00_local))
+                Some(next_monday_00_local)
             } else {
                 // Continuous products without a true weekend close:
                 // Use “Sunday night” as the weekly boundary (commonly 17:00 local on many futures venues).
@@ -379,7 +368,7 @@ pub fn candle_end(
                     .earliest()
                     .unwrap()
                     .with_timezone(&Utc);
-                Some(minus_1ns(sunday_17_local))
+                Some(sunday_17_local)
             }
         }
         _ => None,
@@ -1176,22 +1165,22 @@ pub mod mh_tests {
     #[test]
     fn test_candle_end_minutes_hours_daily_weekly() {
         let exch = Exchange::CME;
-        // 1-minute: starting at 13:29:00 UTC, end should be 13:29:59.999999999 UTC
+        // 1-minute: starting at 13:29:00 UTC, end should be exactly 13:30:00 UTC (half-open)
         let t = utc(2023, 6, 5, 13, 29, 0);
         let end1 = candle_end(t, Resolution::Minutes(1), exch).unwrap();
-        assert_eq!(end1, utc(2023, 6, 5, 13, 30, 0) - Duration::nanoseconds(1));
+        assert_eq!(end1, utc(2023, 6, 5, 13, 30, 0));
 
-        // 1-hour: 14:00 UTC => next at 15:00 UTC minus 1ns
+        // 1-hour: 14:00 UTC => next at 15:00 UTC exactly
         let t2 = utc(2023, 6, 5, 14, 0, 0);
         let endh = candle_end(t2, Resolution::Hours(1), exch).unwrap();
-        assert_eq!(endh, utc(2023, 6, 5, 15, 0, 0) - Duration::nanoseconds(1));
+        assert_eq!(endh, utc(2023, 6, 5, 15, 0, 0));
 
-        // Daily: any time during Monday session should end at session close 20:15 UTC - 1ns
+        // Daily: any time during Monday session should end at session close 20:15 UTC exactly
         let td = utc(2023, 6, 5, 18, 0, 0);
         let endd = candle_end(td, Resolution::Daily, exch).unwrap();
-        assert_eq!(endd, utc(2023, 6, 5, 20, 15, 0) - Duration::nanoseconds(1));
+        assert_eq!(endd, utc(2023, 6, 5, 20, 15, 0));
 
-        // Weekly: pick Wed 2023-06-07; next Monday 00:00 Central is 2023-06-12 05:00 UTC (CDT), minus 1ns
+        // Weekly: pick Wed 2023-06-07; next Monday 00:00 Central is 2023-06-12 05:00 UTC (CDT), exactly
         let tw = utc(2023, 6, 7, 12, 0, 0);
         let expected_mon_ct = Central
             .with_ymd_and_hms(2023, 6, 12, 0, 0, 0)
@@ -1199,7 +1188,7 @@ pub mod mh_tests {
             .unwrap()
             .with_timezone(&Utc);
         let endw = candle_end(tw, Resolution::Weekly, exch).unwrap();
-        assert_eq!(endw, expected_mon_ct - Duration::nanoseconds(1));
+        assert_eq!(endw, expected_mon_ct);
     }
 
     #[test]

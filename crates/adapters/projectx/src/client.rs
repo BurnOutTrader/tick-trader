@@ -5,13 +5,14 @@ use crate::http::models::{ContractSearchResponse, RetrieveBarsReq, RetrieveBarsR
 use crate::websocket::client::{PxWebSocketClient, px_format_from_instrument};
 use ahash::AHashMap;
 use async_trait::async_trait;
-use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
+use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, Utc};
 use dashmap::DashMap;
 use log::info;
 use rust_decimal::Decimal;
 use rust_decimal::prelude::FromPrimitive;
 use std::str::FromStr;
 use std::sync::Arc;
+use anyhow::anyhow;
 use tokio::sync::RwLock;
 use tracing::error;
 use tt_bus::Router;
@@ -478,10 +479,9 @@ impl MarketDataProvider for PXClient {
                     .await
             }
             Topic::Candles1s | Topic::Candles1m | Topic::Candles1h | Topic::Candles1d => {
-                todo!()
-                /*self.websocket
+                self.websocket
                 .unsubscribe_contract_candles(instrument.as_str())
-                .await*/
+                .await
             }
             _ => anyhow::bail!("Unsupported topic: {:?}", topic),
         }
@@ -838,7 +838,7 @@ impl HistoricalDataProvider for PXClient {
     async fn earliest_available(
         &self,
         instrument: Instrument,
-        _topic: Topic,
+        topic: Topic,
     ) -> anyhow::Result<Option<DateTime<Utc>>> {
         self.manual_update_instruments(false).await?;
         // Look for the matching instrument in the DashMap without taking async locks.
@@ -848,9 +848,14 @@ impl HistoricalDataProvider for PXClient {
             .find(|r| r.value().instrument == instrument)
             .map(|r| r.value().activation_date)
         {
-            let dt = NaiveDateTime::from(c);
-            let utc_time = DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc);
-            return Ok(Some(utc_time));
+            let dt = match topic {
+                Topic::Candles1s => Utc::now() - Duration::weeks(2),
+                Topic::Candles1m => Utc::now() - Duration::weeks(12),
+                Topic::Candles1h => Utc::now() - Duration::days(365),
+                Topic::Candles1d => Utc::now() - Duration::days(365),
+                _ => return Err(anyhow!("Unsupported topic for historical data".to_string()))
+            };
+            return Ok(Some(dt));
         }
         match NaiveDate::from_ymd_opt(2023, 1, 1) {
             Some(date) => {

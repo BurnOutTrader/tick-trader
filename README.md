@@ -246,6 +246,31 @@ cd pg
 docker compose down
 ```
 
+## ⚠️ Breaking change: half‑open intervals (DB rebuild required)
+
+As of 2025-10-17, bars, queries, and pagination have been standardized to half‑open time windows: [start, end). Bar time_end values are now exact grid boundaries (no legacy “-1 ns”). Database queries uniformly use >= start AND < end.
+
+What this means for you
+- Existing databases populated with the old inclusive “end - 1 ns” convention are incompatible. You must rebuild or migrate your DB.
+- Fresh setups following the updated code require no extra steps; the schema will be created automatically.
+
+Recommended: rebuild the local Docker Postgres volume
+- Stop and remove the DB: 
+  - cd pg
+  - docker compose down
+  - rm -rf ./data  # removes the persisted volume directory
+- Start fresh:
+  - docker compose up -d
+  - Wait for “database system is ready to accept connections”. Init scripts under pg/init will provision roles and the tick_trader database.
+- Re-ingest history using your provider(s) as usual; the server/providers call ensure_schema() and then persist with the new half‑open semantics.
+
+Alternative: manual migration (advanced)
+- If you keep existing rows, audit and update bars.time_end to exact grid boundaries and ensure time_end % resolution == 0 at UTC boundaries. Remove any “-1 ns” adjustments in cursors and consumers.
+- Update any external consumers to use >= start AND < end filters and resume tokens that are exact (bar time_end for candles, ts_ns for ticks/quotes).
+
+Troubleshooting
+- If queries at boundaries return duplicates or gaps, verify your DB was rebuilt/migrated as above and that your client requests use exact, aligned boundaries.
+
 ## 📚 Documentation index
 
 - Architecture overview: [docs/architecture.md](docs/architecture.md)

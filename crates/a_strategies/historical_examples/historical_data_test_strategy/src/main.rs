@@ -26,6 +26,7 @@ struct HistoricalDataTestStrategy {
     account_key: AccountKey,
     symbol_key: SymbolKey,
     data_topic: DataTopic,
+    is_warmed_up: bool,
 }
 
 impl HistoricalDataTestStrategy {
@@ -38,6 +39,7 @@ impl HistoricalDataTestStrategy {
             account_key,
             symbol_key,
             data_topic,
+            is_warmed_up: false,
         }
     }
 }
@@ -58,6 +60,11 @@ impl Strategy for HistoricalDataTestStrategy {
             self.symbol_key.clone(),
             Box::new(consolidator),
         );
+    }
+
+    fn on_warmup_complete(&mut self) {
+        self.is_warmed_up = true;
+        println!("warmup complete");
     }
 
     fn on_stop(&mut self) {

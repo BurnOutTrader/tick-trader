@@ -14,6 +14,20 @@ use tt_types::securities::symbols::Instrument;
 use crate::init::Connection;
 use crate::schema::get_or_create_instrument_id;
 
+/// Canonical DB key for resolution, must match ingest.
+fn resolution_key(res: &Resolution) -> &'static str {
+    match res {
+        Resolution::Seconds(1) => "sec1",
+        Resolution::Minutes(1) => "min1",
+        Resolution::Hours(1) => "hr1",
+        Resolution::Daily => "day1",
+        Resolution::Hours(n) if *n == 2 => "hr2",
+        Resolution::Hours(n) if *n == 4 => "hr4",
+        Resolution::Hours(n) if *n == 12 => "hr12",
+        _ => "min1",
+    }
+}
+
 /// Return the latest timestamp available for a (provider, instrument, topic) tuple.
 /// - Candles1m → latest_bar_1m hot table
 /// - Ticks → max ts from tick
@@ -30,10 +44,11 @@ pub async fn latest_data_time(
         Topic::Candles1s => {
             let prov = crate::paths::provider_kind_to_db_string(provider);
             let row = sqlx::query(
-                "SELECT MAX(time_end) AS time_end FROM bars WHERE provider=$1 AND symbol_id=$2 AND resolution = $3",
+                "SELECT MAX(time_end) AS time_end FROM bars WHERE provider=$1 AND symbol_id=$2 AND resolution IN ($3, $4)",
             )
             .bind(prov)
             .bind(inst_id)
+            .bind(resolution_key(&Resolution::Seconds(1)))
             .bind(Resolution::Seconds(1).to_string())
             .fetch_optional(conn)
             .await?;
@@ -153,7 +168,7 @@ pub async fn get_extent(
             )
             .bind(&prov)
             .bind(inst_id)
-            .bind(tt_types::data::models::Resolution::Seconds(1).to_string())
+            .bind(resolution_key(&Resolution::Seconds(1)))
             .fetch_one(conn)
             .await?;
             (
@@ -289,7 +304,7 @@ pub async fn get_time_indexed(
             )
             .bind(&prov)
             .bind(inst_id)
-            .bind(Resolution::Seconds(1).to_string())
+            .bind(resolution_key(&Resolution::Seconds(1)))
             .bind(start)
             .bind(end)
             .fetch_all(conn)
@@ -598,7 +613,7 @@ pub async fn get_range(
             )
             .bind(&prov)
             .bind(inst_id)
-            .bind(Resolution::Seconds(1).to_string())
+            .bind(resolution_key(&Resolution::Seconds(1)))
             .bind(start)
             .bind(end)
             .bind(lim)
@@ -674,7 +689,7 @@ pub async fn get_range(
         }
         Topic::Candles1h => {
             let rows = sqlx::query(
-                "SELECT time_start, time_end, open, high, low, close, volume, ask_volume, bid_volume, resolution FROM bars_1m WHERE provider=$1 AND symbol_id=$2 AND resolution LIKE 'Hours(%' AND time_end >= $3 AND time_end < $4 ORDER BY time_end ASC LIMIT $5"
+                "SELECT time_start, time_end, open, high, low, close, volume, ask_volume, bid_volume, resolution FROM bars WHERE provider=$1 AND symbol_id=$2 AND resolution LIKE 'Hours(%' AND time_end >= $3 AND time_end < $4 ORDER BY time_end ASC LIMIT $5"
             )
             .bind(&prov)
             .bind(inst_id)

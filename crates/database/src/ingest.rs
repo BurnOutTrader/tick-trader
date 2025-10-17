@@ -2,7 +2,7 @@ use ahash::AHashMap;
 use anyhow::Result;
 use rust_decimal::prelude::ToPrimitive;
 use sqlx::{QueryBuilder, Row};
-use tt_types::data::models::TradeSide;
+use tt_types::data::models::{Resolution, TradeSide};
 use tt_types::providers::ProviderKind;
 use tt_types::securities::symbols::Instrument;
 
@@ -12,6 +12,18 @@ use tt_types::data::core::{Bbo, Candle, Tick};
 use tt_types::data::mbp10::Mbp10;
 use tt_types::keys::Topic;
 use tt_types::securities::security::FuturesContract;
+
+/// Canonical DB key for resolution to avoid string drift between insert and query.
+fn resolution_key(res: &Resolution) -> &'static str {
+    match res {
+        Resolution::Seconds(1) => "sec1",
+        Resolution::Minutes(1) => "min1",
+        Resolution::Hours(1) => "hr1",
+        Resolution::Daily => "day1",
+        // You can expand as needed
+        _ => panic!("Unsupported "), // safe fallback
+    }
+}
 
 /// Insert a batch of ticks with de-duplication by (provider, symbol_id, ts_ns, key_tie).
 pub async fn ingest_ticks(
@@ -149,6 +161,11 @@ pub async fn ingest_candles(
         "INSERT INTO bars (provider, symbol_id, time_start, time_end, open, high, low, close, volume, ask_volume, bid_volume, resolution) ",
     );
     qb.push_values(rows.iter(), |mut b, r| {
+        let res_str: String = if matches!(r.resolution, Resolution::Seconds(1)) {
+            resolution_key(&r.resolution).to_string()
+        } else {
+            r.resolution.to_string()
+        };
         b.push_bind(&provider_code)
             .push_bind(inst_id)
             .push_bind(r.time_start)
@@ -160,7 +177,7 @@ pub async fn ingest_candles(
             .push_bind(r.volume)
             .push_bind(r.ask_volume)
             .push_bind(r.bid_volume)
-            .push_bind(r.resolution.to_string());
+            .push_bind(res_str);
     });
     qb.push(" ON CONFLICT (provider, symbol_id, time_end, resolution) DO NOTHING ");
     let res = qb.build().execute(conn).await?;
@@ -212,7 +229,7 @@ pub async fn ingest_candles(
             last_1m.volume,
             last_1m.ask_volume,
             last_1m.bid_volume,
-            &last_1m.resolution.to_string(),
+            resolution_key(&last_1m.resolution),
         )
         .await?;
     }

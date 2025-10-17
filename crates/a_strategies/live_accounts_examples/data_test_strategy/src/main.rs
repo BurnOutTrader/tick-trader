@@ -22,6 +22,7 @@ struct DataTestStrategy {
     account_key: AccountKey,
     symbol_key: SymbolKey,
     data_topic: DataTopic,
+    is_warmed_up: bool,
 }
 
 impl DataTestStrategy {
@@ -34,23 +35,28 @@ impl DataTestStrategy {
             account_key,
             symbol_key,
             data_topic,
+            is_warmed_up: false,
         }
     }
 }
 
 impl Strategy for DataTestStrategy {
     fn on_start(&mut self) {
-        info!("strategy start");
-
+        info!("strategy start: warming up");
         // Non-blocking subscribe via handle command queue, you can do this at run time from anywhere to subscribe or unsubscribe a custom universe
         subscribe(self.data_topic, self.symbol_key.clone());
-        subscribe(DataTopic::Ticks, self.symbol_key.clone());
+        subscribe(DataTopic::Candles1h, self.symbol_key.clone());
         add_hybrid_tick_or_candle(
             self.data_topic,
             self.symbol_key.clone(),
-            Resolution::Minutes(15),
+            Resolution::Seconds(1),
             None,
         );
+    }
+
+    fn on_warmup_complete(&mut self) {
+        self.is_warmed_up = true;
+        println!("warmup complete");
     }
 
     fn on_stop(&mut self) {
@@ -130,7 +136,8 @@ async fn main() -> anyhow::Result<()> {
         ProviderKind::ProjectX(ProjectXTenant::Topstep),
         AccountName::from_str("PRAC-V2-64413-98419885").unwrap(),
     );
-    let data_topic = DataTopic::Candles1s;
+    let data_topic = DataTopic::Candles1h;
+
 
     let mut engine = EngineRuntime::new(Some(100_000));
     let strategy = DataTestStrategy::new(account, sk, data_topic);
