@@ -21,6 +21,7 @@
 
 The engine can place live orders and is intended strictly for testing and evaluation. Do not use in production.
 
+- Data feeds currently out of sync.
 - Strategy Engine switched to a static layout, both live and backtest require testing, possibly features are now broken.
 - After some small updates, the next objective is to refactor down the backtest feeder.
 - Surface EngineHandle helpers via top‑level exports
