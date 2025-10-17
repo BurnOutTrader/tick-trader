@@ -28,7 +28,8 @@ impl ConsolidatorKey {
 }
 
 fn end_inclusive(end: DateTime<Utc>) -> DateTime<Utc> {
-    end - Duration::nanoseconds(1)
+    // Exclusive-end semantics: return the exclusive end without adjustment
+    end
 }
 
 #[allow(unused)]
@@ -588,6 +589,36 @@ impl CandlesToCandlesConsolidator {
         }
     }
 
+    pub fn update_time(&mut self, t_now: DateTime<Utc>) -> Option<Candle> {
+        if let Some(w) = self.win.as_ref() {
+            let (start, end) = match w {
+                Win::Fixed { start, end, .. } => (*start, *end),
+                Win::Session { open, close } => (*open, *close),
+            };
+            if t_now >= end {
+                let flushed = self.flush(start, end);
+                // advance until t_now fits next window
+                let mut next_w = self.win.take().unwrap();
+                loop {
+                    let next = self.advance(t_now, &next_w);
+                    let end_next = match &next {
+                        Win::Fixed { end, .. } => *end,
+                        Win::Session { close, .. } => *close,
+                    };
+                    if t_now < end_next {
+                        next_w = next;
+                        break;
+                    } else {
+                        next_w = next;
+                    }
+                }
+                self.win = Some(next_w);
+                return flushed;
+            }
+        }
+        None
+    }
+
     fn init_win(&self, t: DateTime<Utc>) -> Win {
         match self.dst {
             Resolution::Daily | Resolution::Weekly => {
@@ -755,6 +786,9 @@ impl Consolidator for BboToCandlesConsolidator {
 impl Consolidator for CandlesToCandlesConsolidator {
     fn on_candle(&mut self, c: &Candle) -> Option<ConsolidatedOut> {
         self.update_candle(c).map(ConsolidatedOut::Candle)
+    }
+    fn on_time(&mut self, t: DateTime<Utc>) -> Option<ConsolidatedOut> {
+        self.update_time(t).map(ConsolidatedOut::Candle)
     }
 }
 
@@ -955,9 +989,14 @@ impl HybridInner {
     fn update_candle(&mut self, bar: &Candle) -> Option<Candle> {
         // Equal resolution: forward the bar as-is and advance our window past it
         if bar.resolution == self.dst {
-            // Initialize to bar's window if needed, then jump to next
+            // Initialize to bar's window if needed, then jump to the next window after this bar
             let w = self.init_win(bar.time_start);
-            let next = self.advance(bar.time_end, &w);
+            // Use the exclusive end of the window to ensure we advance
+            let end_exclusive = match &w {
+                Win::Fixed { end, .. } => *end,
+                Win::Session { close, .. } => *close,
+            };
+            let next = self.advance(end_exclusive, &w);
             self.win = Some(next);
             // Reset any partial state to avoid double-flush later
             self.o = None;
@@ -1087,7 +1126,7 @@ mod tests {
                 let start = Utc.with_ymd_and_hms(2025, 1, 1, 12, 0, 0).single().unwrap();
                 let end_exclusive = Utc.with_ymd_and_hms(2025, 1, 1, 12, 0, 1).single().unwrap();
                 assert_eq!(c.time_start, start);
-                assert_eq!(c.time_end, end_exclusive - chrono::Duration::nanoseconds(1));
+                assert_eq!(c.time_end, end_exclusive);
                 assert_eq!(c.open, Decimal::from(100));
                 assert_eq!(c.high, Decimal::from(105));
                 assert_eq!(c.low, Decimal::from(100));
@@ -1120,7 +1159,7 @@ mod tests {
                 let start = Utc.with_ymd_and_hms(2025, 1, 1, 12, 0, 0).single().unwrap();
                 let end_exclusive = Utc.with_ymd_and_hms(2025, 1, 1, 12, 0, 1).single().unwrap();
                 assert_eq!(c.time_start, start);
-                assert_eq!(c.time_end, end_exclusive - chrono::Duration::nanoseconds(1));
+                assert_eq!(c.time_end, end_exclusive);
                 assert_eq!(c.open, Decimal::from(200));
                 assert_eq!(c.high, Decimal::from(200));
                 assert_eq!(c.low, Decimal::from(200));
@@ -1131,3 +1170,4 @@ mod tests {
         }
     }
 }
+

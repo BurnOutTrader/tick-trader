@@ -67,7 +67,7 @@ fn candle(
         symbol: sym.to_string(),
         instrument: Instrument::from_str(sym).unwrap(),
         time_start: start,
-        time_end: start + Duration::seconds(secs) - Duration::nanoseconds(1),
+        time_end: start + Duration::seconds(secs),
         open: d(o),
         high: d(h),
         low: d(l),
@@ -95,7 +95,7 @@ fn candle_with_res(
         symbol: sym.to_string(),
         instrument: Instrument::from_str(sym).unwrap(),
         time_start: start,
-        time_end: start + Duration::seconds(secs) - Duration::nanoseconds(1),
+        time_end: start + Duration::seconds(secs),
         open: d(o),
         high: d(h),
         low: d(l),
@@ -158,10 +158,10 @@ fn ticks_to_m1_single_bar() {
     assert_eq!(bar.ask_volume, d(1 + 3));
     assert_eq!(bar.bid_volume, d(2));
 
-    // window check: the end is inclusive end-1ns
+    // window check: end is exclusive at the 1-minute boundary
     let expected_start = chrono::DateTime::<Utc>::from_timestamp(base / 1_000_000_000, 0).unwrap();
     assert_eq!(bar.time_start, expected_start);
-    let expected_end = expected_start + Duration::minutes(1) - Duration::nanoseconds(1);
+    let expected_end = expected_start + Duration::minutes(1);
     assert_eq!(bar.time_end, expected_end);
 }
 
@@ -257,7 +257,7 @@ fn candles_to_m5_from_m1() {
     assert_eq!(out.volume, d(50));
 
     assert_eq!(out.time_start, start);
-    let expected_end = start + Duration::minutes(5) - Duration::nanoseconds(1);
+    let expected_end = start + Duration::minutes(5);
     assert_eq!(out.time_end, expected_end);
 }
 

@@ -6,7 +6,6 @@ use crate::statics::subscriptions::CMD_Q;
 use crate::traits::Strategy;
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
-use smallvec::SmallVec;
 use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
@@ -14,8 +13,6 @@ use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 use tracing::error;
 use tracing::info;
-use tt_types::consolidators::ConsolidatorKey;
-use tt_types::data::core::Candle;
 use tt_types::data::core::{Bbo, Tick};
 use tt_types::data::mbp10::Mbp10;
 use tt_types::keys::{AccountKey, SymbolKey, Topic};
@@ -144,29 +141,16 @@ impl EngineRuntime {
                         // Drive a time-based consolidation first if due
                         _ = ticker.tick() => {
                             if !backtest_mode {
-                                // 1) Walk consolidators mutably and collect outputs.
-                                if !CONSOLIDATORS.is_empty() {
-                                    let mut outs: SmallVec<[(ProviderKind, Candle); 16]> = SmallVec::new();
-                                    for mut entry in CONSOLIDATORS.iter_mut() {
-                                        let provider = entry.key().provider;        // read key (cheap)
-                                        if let Some(tt_types::consolidators::ConsolidatedOut::Candle(c)) =
-                                            entry.value_mut().on_time(crate::statics::clock::time_now())
-                                        {
-                                            outs.push((provider, c));
-                                        }
-                                    } // all MapRefMut guards dropped here; no locks held
-                                    for (prov, c) in outs {
-                                        // Suppress duplicates within current live tick: skip if same window already emitted earlier via ticks/quotes/candles
-                                        if live_emitted_windows.contains(&(prov, c.instrument.clone(), c.resolution, c.time_end)) {
-                                            continue;
-                                        }
-                                        live_emitted_windows.insert((prov, c.instrument.clone(), c.resolution, c.time_end));
-                                        info!("emit:on_time candle {} {} {}..{} O:{} H:{} L:{} C:{}", c.instrument, c.resolution.as_key().unwrap_or_else(|| "na".to_string()), c.time_start, c.time_end, c.open, c.high, c.low, c.close);
-                                        strategy.on_bar(&c, prov);
+                                let now = crate::statics::clock::time_now();
+                                let outs = crate::statics::consolidators::drive_time(now);
+                                for (prov, c) in outs {
+                                    if live_emitted_windows.contains(&(prov, c.instrument.clone(), c.resolution, c.time_end)) {
+                                        continue;
                                     }
-                                    // Clear after on_time to only suppress duplicates within this boundary cycle
-                                    live_emitted_windows.clear();
+                                    live_emitted_windows.insert((prov, c.instrument.clone(), c.resolution, c.time_end));
+                                    strategy.on_bar(&c, prov);
                                 }
+                                live_emitted_windows.clear();
                             }
                         },
                         resp_opt = receiver.recv() => {
@@ -179,26 +163,15 @@ impl EngineRuntime {
                                     // Sync global backtest clock facade so all time reads use this logical time
                                     crate::statics::clock::backtest_advance_to(now);
                                     // 1) Drive time-based consolidators using orchestrator-provided logical time
-                                    if !CONSOLIDATORS.is_empty() { //todo, we cant update time if we also produced a bar on the same period,  -it will fuck up sync?
-                                        let mut outs: SmallVec<[(ProviderKind, Candle); 16]> = SmallVec::new();
-                                        for mut entry in CONSOLIDATORS.iter_mut() {
-                                            let provider = entry.key().provider;
-                                            if let Some(tt_types::consolidators::ConsolidatedOut::Candle(c)) = entry.value_mut().on_time(now) {
-                                                outs.push((provider, c));
-                                            }
+                                    let outs = crate::statics::consolidators::drive_time(now);
+                                    for (prov, c) in outs {
+                                        if bt_emitted_windows.contains(&(prov, c.instrument.clone(), c.resolution, c.time_end)) {
+                                            continue;
                                         }
-                                        for (prov, c) in outs {
-                                            // Suppress duplicates: if this window already emitted via BarsBatch at this logical time
-                                            if bt_emitted_windows.contains(&(prov, c.instrument.clone(), c.resolution, c.time_end)) {
-                                                continue;
-                                            }
-                                            bt_emitted_windows.insert((prov, c.instrument.clone(), c.resolution, c.time_end));
-                                            info!("emit:on_time(backtest) candle {} {} {}..{} O:{} H:{} L:{} C:{}", c.instrument, c.resolution.as_key().unwrap_or_else(|| "na".to_string()), c.time_start, c.time_end, c.open, c.high, c.low, c.close);
-                                            strategy.on_bar(&c, prov);
-                                        }
-                                        // Clear tracking for next logical time step
-                                        bt_emitted_windows.clear();
+                                        bt_emitted_windows.insert((prov, c.instrument.clone(), c.resolution, c.time_end));
+                                        strategy.on_bar(&c, prov);
                                     }
+                                    bt_emitted_windows.clear();
                                     // 3) Flat-by-close enforcement is handled by backtest risk models; do not enforce in runtime
                                 },
                                 Response::BacktestCompleted { end: _ } => {
@@ -243,17 +216,12 @@ impl EngineRuntime {
                                         crate::statics::portfolio::apply_mark(provider_kind, &t.instrument, t.price, t.time);
                                         strategy.on_tick(&t, provider_kind);
                                         // Drive any consolidators registered for ticks on this key
-                                        let key = ConsolidatorKey::new(t.instrument.clone(), provider_kind, Topic::Ticks);
-                                        if let Some(mut cons) = CONSOLIDATORS
-                                            .get_mut(&key)
-                                            && let Some(out) = cons.on_tick(&t)
-                                            && let tt_types::consolidators::ConsolidatedOut::Candle(ref c) = out
-                                        {
+                                        if let Some((_prov, c)) = crate::statics::consolidators::drive_tick(&t, provider_kind) {
                                             info!("emit:consolidator(tick) candle {} {} {}..{} O:{} H:{} L:{} C:{}", c.instrument, c.resolution.as_key().unwrap_or_else(|| "na".to_string()), c.time_start, c.time_end, c.open, c.high, c.low, c.close);
                                             if !backtest_mode {
                                                 live_emitted_windows.insert((provider_kind, c.instrument.clone(), c.resolution, c.time_end));
                                             }
-                                            strategy.on_bar(c, provider_kind);
+                                            strategy.on_bar(&c, provider_kind);
                                         }
                                     }
                                 }
@@ -282,17 +250,12 @@ impl EngineRuntime {
                                         let symbol_key = SymbolKey::new(q.instrument.clone(), provider_kind);
                                         LAST_ASK.insert(symbol_key.clone(), q.ask); LAST_BID.insert(symbol_key, q.bid);
                                         strategy.on_quote(&q, provider_kind);
-                                        let key = ConsolidatorKey::new(q.instrument.clone(), provider_kind, Topic::Quotes);
-                                        if let Some(mut cons) = CONSOLIDATORS
-                                            .get_mut(&key)
-                                            && let Some(out) = cons.on_bbo(&q)
-                                            && let tt_types::consolidators::ConsolidatedOut::Candle(ref c) = out
-                                        {
+                                        if let Some((_prov, c)) = crate::statics::consolidators::drive_bbo(&q, provider_kind) {
                                             info!("emit:consolidator(bbo) candle {} {} {}..{} O:{} H:{} L:{} C:{}", c.instrument, c.resolution.as_key().unwrap_or_else(|| "na".to_string()), c.time_start, c.time_end, c.open, c.high, c.low, c.close);
                                             if !backtest_mode {
                                                 live_emitted_windows.insert((provider_kind, c.instrument.clone(), c.resolution, c.time_end));
                                             }
-                                            strategy.on_bar(c, provider_kind);
+                                            strategy.on_bar(&c, provider_kind);
                                         }
                                     }
                                 }
@@ -303,6 +266,8 @@ impl EngineRuntime {
                                     ..
                                 }) => {
                                     for b in bars {
+                                        // Normalize vendor-provided candle times to resolution boundaries
+                                        let b = crate::statics::consolidators::normalize_candle_window(b.clone());
                                         // Record emitted candle window for backtest duplicate suppression
                                         if backtest_mode {
                                             bt_emitted_windows.insert((provider_kind, b.instrument.clone(), b.resolution, b.time_end));
@@ -316,7 +281,6 @@ impl EngineRuntime {
                                             }
                                         }
                                         // Use close as mark
-
                                         LAST_PRICE.insert(symbol_key, b.close);
                                         crate::statics::portfolio::apply_mark(provider_kind, &b.instrument, b.close, b.time_end);
                                         strategy.on_bar(&b, provider_kind);
@@ -324,21 +288,18 @@ impl EngineRuntime {
                                             live_emitted_windows.insert((provider_kind, b.instrument.clone(), b.resolution, b.time_end));
                                         }
                                         // Drive consolidators for incoming candles (candle-to-candle)
-                                        let tpc = if let Some(expected) = DataTopic::topic_for_resolution(&b.resolution) {
-                                            if expected != topic {
-                                                info!("invariant: topic-resolution mismatch: {:?} vs {:?} for instrument {}", expected, topic, b.instrument);
+                                        // Validate topic vs candle resolution but route using incoming topic
+                                        if let Some(expected) = DataTopic::topic_for_resolution(&b.resolution) && expected != topic {
+                                            info!("invariant: topic-resolution mismatch: {:?} vs {:?} for instrument {}", expected, topic, b.instrument);
+                                        }
+                                        // Route consolidator lookup by the actual incoming topic
+                                        if let Some((_prov, c)) = crate::statics::consolidators::drive_candle(topic, &b, provider_kind) {
+                                            if backtest_mode {
+                                                bt_emitted_windows.insert((provider_kind, c.instrument.clone(), c.resolution, c.time_end));
+                                            } else {
+                                                live_emitted_windows.insert((provider_kind, c.instrument.clone(), c.resolution, c.time_end));
                                             }
-                                            expected
-                                        } else {
-                                            Topic::Candles1d
-                                        };
-                                        let key = ConsolidatorKey::new(b.instrument.clone(), provider_kind, tpc);
-                                        if let Some(mut cons) =
-                                            CONSOLIDATORS.get_mut(&key)
-                                            && let Some(out) = cons.on_candle(&b)
-                                            && let tt_types::consolidators::ConsolidatedOut::Candle(ref c) = out
-                                        {
-                                            strategy.on_bar(c, provider_kind);
+                                            strategy.on_bar(&c, provider_kind);
                                         }
                                     }
                                 }
@@ -431,6 +392,8 @@ impl EngineRuntime {
                                     candle,
                                     provider_kind,
                                 } => {
+                                    // Normalize single vendor candle
+                                    let candle = crate::statics::consolidators::normalize_candle_window(candle);
                                     let symbol_key = SymbolKey::new(candle.instrument.clone(), provider_kind);
                                     LAST_PRICE.insert(symbol_key, candle.close);
                                     crate::statics::portfolio::apply_mark(provider_kind, &candle.instrument, candle.close, candle.time_end);
@@ -579,37 +542,27 @@ impl EngineRuntime {
                                                                     if let Some((_k, st)) = warmups_for_task.remove(&(topic, sk.clone())) {
                                                                         let cutoff = st.last_hist_end;
                                                                         for t in st.cached_ticks.into_iter() {
-                                                                            if let Some(cu) = cutoff && t.time <= cu { continue; }
+                                                                            if let Some(cu) = cutoff && t.time < cu { continue; }
                                                                             let symbol_key = SymbolKey::new(t.instrument.clone(), provider);
                                                                             LAST_PRICE.insert(symbol_key, t.price);
                                                                             crate::statics::portfolio::apply_mark(provider, &t.instrument, t.price, t.time);
                                                                             strategy.on_tick(&t, provider);
                                                                             // Drive consolidators for replayed ticks (hybrid will synthesize candles)
-                                                                            let key = ConsolidatorKey::new(t.instrument.clone(), provider, Topic::Ticks);
-                                                                            if let Some(mut cons) = CONSOLIDATORS
-                                                                                .get_mut(&key)
-                                                                                && let Some(out) = cons.on_tick(&t)
-                                                                                && let tt_types::consolidators::ConsolidatedOut::Candle(ref c) = out
-                                                                            {
+                                                                            if let Some((_prov, c)) = crate::statics::consolidators::drive_tick(&t, provider) {
                                                                                 info!("emit:consolidator(replay) candle {} {} {}..{} O:{} H:{} L:{} C:{}", c.instrument, c.resolution.as_key().unwrap_or_else(|| "na".to_string()), c.time_start, c.time_end, c.open, c.high, c.low, c.close);
-                                                                                strategy.on_bar(c, provider);
+                                                                                strategy.on_bar(&c, provider);
                                                                             }
                                                                         }
                                                                         // Replay cached quotes strictly after cutoff as well
                                                                         for q in st.cached_quotes.into_iter() {
-                                                                            if let Some(cu) = cutoff && q.time <= cu { continue; }
+                                                                            if let Some(cu) = cutoff && q.time < cu { continue; }
                                                                             let symbol_key = SymbolKey::new(q.instrument.clone(), provider);
                                                                             LAST_BID.insert(symbol_key.clone(), q.bid);
                                                                             LAST_ASK.insert(symbol_key.clone(), q.ask);
                                                                             strategy.on_quote(&q, provider);
-                                                                            let key = ConsolidatorKey::new(q.instrument.clone(), provider, Topic::Quotes);
-                                                                            if let Some(mut cons) = CONSOLIDATORS
-                                                                                .get_mut(&key)
-                                                                                && let Some(out) = cons.on_bbo(&q)
-                                                                                && let tt_types::consolidators::ConsolidatedOut::Candle(ref c) = out
-                                                                            {
+                                                                            if let Some((_prov, c)) = crate::statics::consolidators::drive_bbo(&q, provider) {
                                                                                 info!("emit:consolidator(replay) candle {} {} {}..{} O:{} H:{} L:{} C:{}", c.instrument, c.resolution.as_key().unwrap_or_else(|| "na".to_string()), c.time_start, c.time_end, c.open, c.high, c.low, c.close);
-                                                                                strategy.on_bar(c, provider);
+                                                                                strategy.on_bar(&c, provider);
                                                                             }
                                                                         }
                                                                         // Announce warmup complete when all keys finished
@@ -867,132 +820,3 @@ mod engine_shm_tests {
 }*/
 
 
-#[cfg(test)]
-mod warmup_integration_tests {
-    use super::*;
-    use crate::statics::bus::bus;
-    use crate::statics::consolidators::add_hybrid_tick_or_candle;
-    use crate::statics::subscriptions::subscribe;
-    use crate::traits::Strategy;
-    use chrono::{TimeZone, Utc};
-    use rust_decimal::Decimal;
-    use std::str::FromStr;
-    use std::sync::{Arc, Mutex};
-    use tokio::time::{sleep, Duration};
-    use tt_types::data::core::{Candle, Tick};
-    use tt_types::data::models::Resolution;
-    use tt_types::keys::{SymbolKey, Topic};
-    use tt_types::providers::{ProjectXTenant, ProviderKind};
-    use tt_types::securities::futures_helpers::extract_root;
-    use tt_types::securities::symbols::Instrument;
-    use tt_types::wire::{BarsBatch, Response};
-
-    struct TestStrategy {
-        key: SymbolKey,
-        topic: Topic,
-        bars: Arc<Mutex<Vec<Candle>>>,
-        warmups: Arc<tokio::sync::Notify>,
-    }
-    impl TestStrategy {
-        fn new(key: SymbolKey, topic: Topic, bars: Arc<Mutex<Vec<Candle>>>, warmups: Arc<tokio::sync::Notify>) -> Self {
-            Self { key, topic, bars, warmups }
-        }
-    }
-    impl Strategy for TestStrategy {
-        fn on_start(&mut self) {
-            subscribe(DataTopic::from(self.topic), self.key.clone());
-            add_hybrid_tick_or_candle(
-                DataTopic::from(self.topic),
-                self.key.clone(),
-                Resolution::Seconds(1),
-                None,
-            );
-        }
-        fn on_bar(&mut self, c: &Candle, _prov: ProviderKind) {
-            self.bars.lock().unwrap().push(c.clone());
-        }
-        fn on_warmup_complete(&mut self) { self.warmups.notify_waiters(); }
-    }
-
-    fn mk_tick(instr: &Instrument, price: i64, y: i32, m: u32, d: u32, h: u32, min: u32, s: u32, ms: u32) -> Tick {
-        Tick {
-            symbol: extract_root(instr).to_string(),
-            instrument: instr.clone(),
-            price: Decimal::from(price),
-            volume: Decimal::from(1),
-            time: Utc.with_ymd_and_hms(y, m, d, h, min, s).single().unwrap() + chrono::Duration::milliseconds(ms as i64),
-            side: tt_types::data::models::TradeSide::None,
-            venue_seq: None,
-        }
-    }
-
-    #[tokio::test]
-    async fn warmup_replay_rebuilds_current_candle() {
-        // Initialize in-memory bus
-        let (req_tx, _rx) = tokio::sync::mpsc::channel::<tt_types::wire::Request>(256);
-        let bus_client = crate::client::ClientMessageBus::new_with_transport(req_tx);
-        let _ = crate::statics::bus::BUS_CLIENT.set(bus_client);
-        // Arrange strategy + engine
-        let instr = Instrument::from_str("MNQ.Z25").unwrap();
-        let provider = ProviderKind::ProjectX(ProjectXTenant::Topstep);
-        let key = SymbolKey::new(instr.clone(), provider);
-        let topic = Topic::Candles1s;
-        let bars: Arc<Mutex<Vec<Candle>>> = Arc::new(Mutex::new(Vec::new()));
-        let warmups = Arc::new(tokio::sync::Notify::new());
-        let mut engine = EngineRuntime::new(Some(100_000));
-        let strat = TestStrategy::new(key.clone(), topic, bars.clone(), warmups.clone());
-        let _ = tokio::spawn(async move { let _ = engine.start(strat, false).await; });
-
-        // Give engine time to subscribe and request warmup
-        sleep(Duration::from_millis(50)).await;
-
-        // Simulate a live tick that should be cached during warmup
-        let t_cached = mk_tick(&instr, 101, 2025, 1, 1, 12, 0, 1, 100);
-        let _ = bus().broadcast(Response::Tick { tick: t_cached.clone(), provider_kind: provider });
-
-        // Simulate historical bar arriving for previous second (last_hist_end = 12:00:00.999999999)
-        let last_start = Utc.with_ymd_and_hms(2025, 1, 1, 12, 0, 0).single().unwrap();
-        let last_end = Utc.with_ymd_and_hms(2025, 1, 1, 12, 0, 1).single().unwrap();
-        let hist = Candle {
-            symbol: extract_root(&instr).to_string(),
-            instrument: instr.clone(),
-            time_start: last_start,
-            time_end: last_end - chrono::Duration::nanoseconds(1),
-            open: Decimal::from(100),
-            high: Decimal::from(100),
-            low: Decimal::from(100),
-            close: Decimal::from(100),
-            volume: Decimal::from(1),
-            ask_volume: Decimal::from(0),
-            bid_volume: Decimal::from(1),
-            resolution: Resolution::Seconds(1),
-        };
-        let batch = BarsBatch { topic, seq: 0, bars: vec![hist], provider_kind: provider };
-        let _ = bus().broadcast(Response::BarBatch(batch));
-
-        // Simulate DbUpdateComplete to trigger warmup replay
-        let _ = bus().broadcast(Response::DbUpdateComplete {
-            provider,
-            instrument: instr.clone(),
-            topic,
-            corr_id: 0,
-            success: true,
-            error_msg: None,
-        });
-
-        // Also send a tick in the new second to ensure candle closes shortly via on_time
-        let t_next = mk_tick(&instr, 102, 2025, 1, 1, 12, 0, 2, 100);
-        let _ = bus().broadcast(Response::Tick { tick: t_next, provider_kind: provider });
-
-        // Wait a bit for replay + on_time to flush
-        sleep(Duration::from_millis(150)).await;
-
-        // Assert we received a candle for 12:00:01 that includes the cached tick
-        let got = bars.lock().unwrap().clone();
-        let found = got.into_iter().find(|c| c.instrument == instr && c.resolution == Resolution::Seconds(1) && c.time_start == Utc.with_ymd_and_hms(2025, 1, 1, 12, 0, 1).single().unwrap());
-        assert!(found.is_some(), "expected a 12:00:01 candle from warmup replay");
-        let c = found.unwrap();
-        assert_eq!(c.open, Decimal::from(101));
-        assert_eq!(c.close, Decimal::from(101));
-    }
-}

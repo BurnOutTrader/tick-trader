@@ -108,7 +108,7 @@ impl Candle {
     }
 
     pub fn is_closed(&self, time: DateTime<Utc>) -> bool {
-        time > self.time_end
+        time >= self.time_end
     }
 }
 
