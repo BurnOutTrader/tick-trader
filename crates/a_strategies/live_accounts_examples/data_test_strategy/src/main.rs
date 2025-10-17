@@ -14,7 +14,7 @@ use tt_types::accounts::account::AccountName;
 use tt_types::consolidators::CandlesToCandlesConsolidator;
 use tt_types::data::mbp10::Mbp10;
 use tt_types::data::models::Resolution;
-use tt_types::keys::{AccountKey, SymbolKey, Topic};
+use tt_types::keys::{AccountKey, SymbolKey};
 use tt_types::providers::{ProjectXTenant, ProviderKind};
 use tt_types::securities::symbols::Instrument;
 use tt_types::wire;
@@ -26,11 +26,15 @@ struct DataTestStrategy {
 }
 
 impl DataTestStrategy {
-    pub fn new(account_key: AccountKey, symbol_key: SymbolKey, data_topic: DataTopic) -> DataTestStrategy {
+    pub fn new(
+        account_key: AccountKey,
+        symbol_key: SymbolKey,
+        data_topic: DataTopic,
+    ) -> DataTestStrategy {
         Self {
             account_key,
             symbol_key,
-            data_topic
+            data_topic,
         }
     }
 }

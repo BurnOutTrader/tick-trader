@@ -25,15 +25,19 @@ use tt_types::wire;
 struct HistoricalDataTestStrategy {
     account_key: AccountKey,
     symbol_key: SymbolKey,
-    data_topic: DataTopic
+    data_topic: DataTopic,
 }
 
 impl HistoricalDataTestStrategy {
-    pub fn new(account_key: AccountKey, symbol_key: SymbolKey, data_topic: DataTopic) -> HistoricalDataTestStrategy {
+    pub fn new(
+        account_key: AccountKey,
+        symbol_key: SymbolKey,
+        data_topic: DataTopic,
+    ) -> HistoricalDataTestStrategy {
         Self {
             account_key,
             symbol_key,
-            data_topic
+            data_topic,
         }
     }
 }
