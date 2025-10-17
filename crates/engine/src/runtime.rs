@@ -865,3 +865,134 @@ mod engine_shm_tests {
         );
     }
 }*/
+
+
+#[cfg(test)]
+mod warmup_integration_tests {
+    use super::*;
+    use crate::statics::bus::bus;
+    use crate::statics::consolidators::add_hybrid_tick_or_candle;
+    use crate::statics::subscriptions::subscribe;
+    use crate::traits::Strategy;
+    use chrono::{TimeZone, Utc};
+    use rust_decimal::Decimal;
+    use std::str::FromStr;
+    use std::sync::{Arc, Mutex};
+    use tokio::time::{sleep, Duration};
+    use tt_types::data::core::{Candle, Tick};
+    use tt_types::data::models::Resolution;
+    use tt_types::keys::{SymbolKey, Topic};
+    use tt_types::providers::{ProjectXTenant, ProviderKind};
+    use tt_types::securities::futures_helpers::extract_root;
+    use tt_types::securities::symbols::Instrument;
+    use tt_types::wire::{BarsBatch, Response};
+
+    struct TestStrategy {
+        key: SymbolKey,
+        topic: Topic,
+        bars: Arc<Mutex<Vec<Candle>>>,
+        warmups: Arc<tokio::sync::Notify>,
+    }
+    impl TestStrategy {
+        fn new(key: SymbolKey, topic: Topic, bars: Arc<Mutex<Vec<Candle>>>, warmups: Arc<tokio::sync::Notify>) -> Self {
+            Self { key, topic, bars, warmups }
+        }
+    }
+    impl Strategy for TestStrategy {
+        fn on_start(&mut self) {
+            subscribe(DataTopic::from(self.topic), self.key.clone());
+            add_hybrid_tick_or_candle(
+                DataTopic::from(self.topic),
+                self.key.clone(),
+                Resolution::Seconds(1),
+                None,
+            );
+        }
+        fn on_bar(&mut self, c: &Candle, _prov: ProviderKind) {
+            self.bars.lock().unwrap().push(c.clone());
+        }
+        fn on_warmup_complete(&mut self) { self.warmups.notify_waiters(); }
+    }
+
+    fn mk_tick(instr: &Instrument, price: i64, y: i32, m: u32, d: u32, h: u32, min: u32, s: u32, ms: u32) -> Tick {
+        Tick {
+            symbol: extract_root(instr).to_string(),
+            instrument: instr.clone(),
+            price: Decimal::from(price),
+            volume: Decimal::from(1),
+            time: Utc.with_ymd_and_hms(y, m, d, h, min, s).single().unwrap() + chrono::Duration::milliseconds(ms as i64),
+            side: tt_types::data::models::TradeSide::None,
+            venue_seq: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn warmup_replay_rebuilds_current_candle() {
+        // Initialize in-memory bus
+        let (req_tx, _rx) = tokio::sync::mpsc::channel::<tt_types::wire::Request>(256);
+        let bus_client = crate::client::ClientMessageBus::new_with_transport(req_tx);
+        let _ = crate::statics::bus::BUS_CLIENT.set(bus_client);
+        // Arrange strategy + engine
+        let instr = Instrument::from_str("MNQ.Z25").unwrap();
+        let provider = ProviderKind::ProjectX(ProjectXTenant::Topstep);
+        let key = SymbolKey::new(instr.clone(), provider);
+        let topic = Topic::Candles1s;
+        let bars: Arc<Mutex<Vec<Candle>>> = Arc::new(Mutex::new(Vec::new()));
+        let warmups = Arc::new(tokio::sync::Notify::new());
+        let mut engine = EngineRuntime::new(Some(100_000));
+        let strat = TestStrategy::new(key.clone(), topic, bars.clone(), warmups.clone());
+        let _ = tokio::spawn(async move { let _ = engine.start(strat, false).await; });
+
+        // Give engine time to subscribe and request warmup
+        sleep(Duration::from_millis(50)).await;
+
+        // Simulate a live tick that should be cached during warmup
+        let t_cached = mk_tick(&instr, 101, 2025, 1, 1, 12, 0, 1, 100);
+        let _ = bus().broadcast(Response::Tick { tick: t_cached.clone(), provider_kind: provider });
+
+        // Simulate historical bar arriving for previous second (last_hist_end = 12:00:00.999999999)
+        let last_start = Utc.with_ymd_and_hms(2025, 1, 1, 12, 0, 0).single().unwrap();
+        let last_end = Utc.with_ymd_and_hms(2025, 1, 1, 12, 0, 1).single().unwrap();
+        let hist = Candle {
+            symbol: extract_root(&instr).to_string(),
+            instrument: instr.clone(),
+            time_start: last_start,
+            time_end: last_end - chrono::Duration::nanoseconds(1),
+            open: Decimal::from(100),
+            high: Decimal::from(100),
+            low: Decimal::from(100),
+            close: Decimal::from(100),
+            volume: Decimal::from(1),
+            ask_volume: Decimal::from(0),
+            bid_volume: Decimal::from(1),
+            resolution: Resolution::Seconds(1),
+        };
+        let batch = BarsBatch { topic, seq: 0, bars: vec![hist], provider_kind: provider };
+        let _ = bus().broadcast(Response::BarBatch(batch));
+
+        // Simulate DbUpdateComplete to trigger warmup replay
+        let _ = bus().broadcast(Response::DbUpdateComplete {
+            provider,
+            instrument: instr.clone(),
+            topic,
+            corr_id: 0,
+            success: true,
+            error_msg: None,
+        });
+
+        // Also send a tick in the new second to ensure candle closes shortly via on_time
+        let t_next = mk_tick(&instr, 102, 2025, 1, 1, 12, 0, 2, 100);
+        let _ = bus().broadcast(Response::Tick { tick: t_next, provider_kind: provider });
+
+        // Wait a bit for replay + on_time to flush
+        sleep(Duration::from_millis(150)).await;
+
+        // Assert we received a candle for 12:00:01 that includes the cached tick
+        let got = bars.lock().unwrap().clone();
+        let found = got.into_iter().find(|c| c.instrument == instr && c.resolution == Resolution::Seconds(1) && c.time_start == Utc.with_ymd_and_hms(2025, 1, 1, 12, 0, 1).single().unwrap());
+        assert!(found.is_some(), "expected a 12:00:01 candle from warmup replay");
+        let c = found.unwrap();
+        assert_eq!(c.open, Decimal::from(101));
+        assert_eq!(c.close, Decimal::from(101));
+    }
+}
