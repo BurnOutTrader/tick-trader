@@ -1030,3 +1030,82 @@ impl Consolidator for HybridTickOrCandleToCandles {
         guard.update_time(t).map(ConsolidatedOut::Candle)
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{TimeZone, Utc};
+    use rust_decimal::Decimal;
+    use std::str::FromStr;
+
+    fn mk_tick(instr: &Instrument, price: i64, vol: i64, y: i32, m: u32, d: u32, h: u32, min: u32, s: u32, ms: u32) -> Tick {
+        Tick {
+            symbol: extract_root(instr).to_string(),
+            instrument: instr.clone(),
+            price: Decimal::from(price),
+            volume: Decimal::from(vol),
+            time: Utc.with_ymd_and_hms(y, m, d, h, min, s).single().unwrap() + chrono::Duration::milliseconds(ms as i64),
+            side: TradeSide::None,
+            venue_seq: None,
+        }
+    }
+
+    #[test]
+    fn ticks_to_candles_1s_across_boundary() {
+        let instr = Instrument::from_str("MNQ.Z25").unwrap();
+        let mut cons = TicksToCandlesConsolidator::new(Resolution::Seconds(1), extract_root(&instr).to_string(), None, instr.clone());
+
+        let t0 = mk_tick(&instr, 100, 1, 2025, 1, 1, 12, 0, 0, 100);
+        let t1 = mk_tick(&instr, 105, 2, 2025, 1, 1, 12, 0, 0, 900);
+        let t2 = mk_tick(&instr, 103, 1, 2025, 1, 1, 12, 0, 1, 100); // first tick in next second -> should flush prior
+
+        assert!(matches!(cons.on_tick(&t0), None));
+        assert!(matches!(cons.on_tick(&t1), None));
+        let out = cons.on_tick(&t2);
+        match out {
+            Some(ConsolidatedOut::Candle(c)) => {
+                assert_eq!(c.instrument, instr);
+                assert_eq!(c.resolution, Resolution::Seconds(1));
+                let start = Utc.with_ymd_and_hms(2025, 1, 1, 12, 0, 0).single().unwrap();
+                let end_exclusive = Utc.with_ymd_and_hms(2025, 1, 1, 12, 0, 1).single().unwrap();
+                assert_eq!(c.time_start, start);
+                assert_eq!(c.time_end, end_exclusive - chrono::Duration::nanoseconds(1));
+                assert_eq!(c.open, Decimal::from(100));
+                assert_eq!(c.high, Decimal::from(105));
+                assert_eq!(c.low, Decimal::from(100));
+                assert_eq!(c.close, Decimal::from(105));
+                assert_eq!(c.volume, Decimal::from(3));
+            }
+            other => panic!("unexpected: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn ticks_to_candles_on_time_finalizes_gap() {
+        let instr = Instrument::from_str("MNQ.Z25").unwrap();
+        let mut cons = TicksToCandlesConsolidator::new(Resolution::Seconds(1), extract_root(&instr).to_string(), None, instr.clone());
+
+        let t0 = mk_tick(&instr, 200, 1, 2025, 1, 1, 12, 0, 0, 100);
+        assert!(cons.on_tick(&t0).is_none());
+        // No more ticks; advancing time into next second should close the 12:00:00 window
+        let tick_time = Utc.with_ymd_and_hms(2025, 1, 1, 12, 0, 1).single().unwrap();
+        let out = cons.on_time(tick_time);
+        match out {
+            Some(ConsolidatedOut::Candle(c)) => {
+                assert_eq!(c.instrument, instr);
+                assert_eq!(c.resolution, Resolution::Seconds(1));
+                let start = Utc.with_ymd_and_hms(2025, 1, 1, 12, 0, 0).single().unwrap();
+                let end_exclusive = Utc.with_ymd_and_hms(2025, 1, 1, 12, 0, 1).single().unwrap();
+                assert_eq!(c.time_start, start);
+                assert_eq!(c.time_end, end_exclusive - chrono::Duration::nanoseconds(1));
+                assert_eq!(c.open, Decimal::from(200));
+                assert_eq!(c.high, Decimal::from(200));
+                assert_eq!(c.low, Decimal::from(200));
+                assert_eq!(c.close, Decimal::from(200));
+                assert_eq!(c.volume, Decimal::from(1));
+            }
+            other => panic!("unexpected: {:?}", other),
+        }
+    }
+}

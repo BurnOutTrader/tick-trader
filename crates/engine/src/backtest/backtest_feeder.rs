@@ -405,13 +405,11 @@ impl BacktestFeeder {
             // helper: normalize and emit a single TopicDataEnum as Response
             // Map candle resolution to a Topic variant for batching
             fn topic_for_candle(c: &tt_types::data::core::Candle) -> Topic {
-                use tt_types::data::models::Resolution;
-                match c.resolution {
-                    Resolution::Seconds(1) => Topic::Candles1s,
-                    Resolution::Minutes(1) => Topic::Candles1m,
-                    Resolution::Hours(1) => Topic::Candles1h,
-                    Resolution::Daily => Topic::Candles1d,
-                    _ => panic!("unexpected resolution"),
+                if let Some(t) = crate::models::DataTopic::topic_for_resolution(&c.resolution) {
+                    t
+                } else {
+                    // Fallback to a safe default; diagnostics elsewhere will log mismatches
+                    Topic::Candles1d
                 }
             }
             async fn emit_one(
