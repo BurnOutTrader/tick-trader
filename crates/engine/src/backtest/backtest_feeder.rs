@@ -450,7 +450,7 @@ impl BacktestFeeder {
                         let _ = bus.broadcast(Response::BarBatch(batch));
                     }
                 }
-                await_ack(notify).await; //todo! possibly notify is no longer needed for backtest sync
+                //await_ack(notify).await; //todo! possibly notify is no longer needed for backtest sync
             }
 
             // Main loop: interleave handling of requests with emitting events in time order
