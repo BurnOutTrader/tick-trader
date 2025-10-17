@@ -25,13 +25,15 @@ use tt_types::wire;
 struct HistoricalDataTestStrategy {
     account_key: AccountKey,
     symbol_key: SymbolKey,
+    data_topic: DataTopic
 }
 
 impl HistoricalDataTestStrategy {
-    pub fn new(account_key: AccountKey, symbol_key: SymbolKey) -> HistoricalDataTestStrategy {
+    pub fn new(account_key: AccountKey, symbol_key: SymbolKey, data_topic: DataTopic) -> HistoricalDataTestStrategy {
         Self {
             account_key,
             symbol_key,
+            data_topic
         }
     }
 }
@@ -41,14 +43,14 @@ impl Strategy for HistoricalDataTestStrategy {
         info!("strategy start");
 
         // Non-blocking subscribe via handle command queue, you can do this at run time from anywhere to subscribe or unsubscribe a custom universe
-        subscribe(DataTopic::Candles1s, self.symbol_key.clone());
+        subscribe(self.data_topic, self.symbol_key.clone());
         let consolidator = CandlesToCandlesConsolidator::new(
             Resolution::Minutes(15),
             None,
             self.symbol_key.instrument.clone(),
         );
         add_consolidator(
-            DataTopic::Candles1s,
+            self.data_topic,
             self.symbol_key.clone(),
             Box::new(consolidator),
         );
@@ -135,10 +137,11 @@ async fn main() -> anyhow::Result<()> {
         inst.clone(),
         ProviderKind::ProjectX(ProjectXTenant::Topstep),
     );
+    let data_topic = DataTopic::Candles1m;
     let account_key = AccountKey::new(ProjectX(ProjectXTenant::Topstep), account_name);
     // Configure and start backtest
     let cfg = BacktestConfig::from_to(chrono::Duration::milliseconds(250), start_date, end_date);
-    let strategy = HistoricalDataTestStrategy::new(account_key, key);
+    let strategy = HistoricalDataTestStrategy::new(account_key, key, data_topic);
     start_backtest(db, cfg, strategy, dec!(150_000)).await?;
 
     sleep(Duration::from_secs(60)).await;

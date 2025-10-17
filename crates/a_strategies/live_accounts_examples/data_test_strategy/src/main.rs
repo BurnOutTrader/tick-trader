@@ -14,7 +14,7 @@ use tt_types::accounts::account::AccountName;
 use tt_types::consolidators::CandlesToCandlesConsolidator;
 use tt_types::data::mbp10::Mbp10;
 use tt_types::data::models::Resolution;
-use tt_types::keys::{AccountKey, SymbolKey};
+use tt_types::keys::{AccountKey, SymbolKey, Topic};
 use tt_types::providers::{ProjectXTenant, ProviderKind};
 use tt_types::securities::symbols::Instrument;
 use tt_types::wire;
@@ -22,13 +22,15 @@ use tt_types::wire;
 struct DataTestStrategy {
     account_key: AccountKey,
     symbol_key: SymbolKey,
+    data_topic: DataTopic,
 }
 
 impl DataTestStrategy {
-    pub fn new(account_key: AccountKey, symbol_key: SymbolKey) -> DataTestStrategy {
+    pub fn new(account_key: AccountKey, symbol_key: SymbolKey, data_topic: DataTopic) -> DataTestStrategy {
         Self {
             account_key,
             symbol_key,
+            data_topic
         }
     }
 }
@@ -38,14 +40,14 @@ impl Strategy for DataTestStrategy {
         info!("strategy start");
 
         // Non-blocking subscribe via handle command queue, you can do this at run time from anywhere to subscribe or unsubscribe a custom universe
-        subscribe(DataTopic::Candles1s, self.symbol_key.clone());
+        subscribe(self.data_topic, self.symbol_key.clone());
         let consolidator = CandlesToCandlesConsolidator::new(
             Resolution::Minutes(15),
             None,
             self.symbol_key.instrument.clone(),
         );
         add_consolidator(
-            DataTopic::Candles1s,
+            self.data_topic,
             self.symbol_key.clone(),
             Box::new(consolidator),
         );
@@ -121,16 +123,17 @@ async fn main() -> anyhow::Result<()> {
     connect_live_bus().await?;
 
     let sk = SymbolKey::new(
-        Instrument::from_str("MNQ.Z25").unwrap(),
+        Instrument::from_str("MNQ.Z25")?,
         ProviderKind::ProjectX(ProjectXTenant::Topstep),
     );
     let account = AccountKey::new(
         ProviderKind::ProjectX(ProjectXTenant::Topstep),
         AccountName::from_str("PRAC-V2-64413-98419885").unwrap(),
     );
+    let data_topic = DataTopic::Candles1m;
 
     let mut engine = EngineRuntime::new(Some(100_000));
-    let strategy = DataTestStrategy::new(account, sk);
+    let strategy = DataTestStrategy::new(account, sk, data_topic);
     engine.start(strategy, false).await?;
 
     sleep(Duration::from_secs(60)).await;
