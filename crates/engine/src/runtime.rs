@@ -132,6 +132,13 @@ impl EngineRuntime {
                 tt_types::data::models::Resolution,
                 DateTime<Utc>,
             )> = HashSet::new();
+            // Live duplicate suppression for boundary windows within the current second tick
+            let mut live_emitted_windows: HashSet<(
+                ProviderKind,
+                Instrument,
+                tt_types::data::models::Resolution,
+                DateTime<Utc>,
+            )> = HashSet::new();
             loop {
                 tokio::select! {
                         // Drive a time-based consolidation first if due
@@ -149,9 +156,16 @@ impl EngineRuntime {
                                         }
                                     } // all MapRefMut guards dropped here; no locks held
                                     for (prov, c) in outs {
+                                        // Suppress duplicates within current live tick: skip if same window already emitted earlier via ticks/quotes/candles
+                                        if live_emitted_windows.contains(&(prov, c.instrument.clone(), c.resolution, c.time_end)) {
+                                            continue;
+                                        }
+                                        live_emitted_windows.insert((prov, c.instrument.clone(), c.resolution, c.time_end));
                                         info!("emit:on_time candle {} {} {}..{} O:{} H:{} L:{} C:{}", c.instrument, c.resolution.as_key().unwrap_or_else(|| "na".to_string()), c.time_start, c.time_end, c.open, c.high, c.low, c.close);
                                         strategy.on_bar(&c, prov);
                                     }
+                                    // Clear after on_time to only suppress duplicates within this boundary cycle
+                                    live_emitted_windows.clear();
                                 }
                             }
                         },
@@ -236,6 +250,9 @@ impl EngineRuntime {
                                             && let tt_types::consolidators::ConsolidatedOut::Candle(ref c) = out
                                         {
                                             info!("emit:consolidator(tick) candle {} {} {}..{} O:{} H:{} L:{} C:{}", c.instrument, c.resolution.as_key().unwrap_or_else(|| "na".to_string()), c.time_start, c.time_end, c.open, c.high, c.low, c.close);
+                                            if !backtest_mode {
+                                                live_emitted_windows.insert((provider_kind, c.instrument.clone(), c.resolution, c.time_end));
+                                            }
                                             strategy.on_bar(c, provider_kind);
                                         }
                                     }
@@ -254,12 +271,11 @@ impl EngineRuntime {
                                                 if entry.value().awaiting_db
                                                     && sk.provider == provider_kind
                                                     && sk.instrument == q.instrument
-                                                {
-                                                    if let Some(mut e) = warmups_for_task.get_mut(&(tp, sk)) {
-                                                        e.value_mut().cached_quotes.push_back(q.clone());
-                                                        cached_any = true;
-                                                    }
+                                                && let Some(mut e) = warmups_for_task.get_mut(&(tp, sk)) {
+                                                    e.value_mut().cached_quotes.push_back(q.clone());
+                                                    cached_any = true;
                                                 }
+                                                
                                             }
                                             if cached_any { continue; }
                                         }
@@ -273,6 +289,9 @@ impl EngineRuntime {
                                             && let tt_types::consolidators::ConsolidatedOut::Candle(ref c) = out
                                         {
                                             info!("emit:consolidator(bbo) candle {} {} {}..{} O:{} H:{} L:{} C:{}", c.instrument, c.resolution.as_key().unwrap_or_else(|| "na".to_string()), c.time_start, c.time_end, c.open, c.high, c.low, c.close);
+                                            if !backtest_mode {
+                                                live_emitted_windows.insert((provider_kind, c.instrument.clone(), c.resolution, c.time_end));
+                                            }
                                             strategy.on_bar(c, provider_kind);
                                         }
                                     }
@@ -301,6 +320,9 @@ impl EngineRuntime {
                                         LAST_PRICE.insert(symbol_key, b.close);
                                         crate::statics::portfolio::apply_mark(provider_kind, &b.instrument, b.close, b.time_end);
                                         strategy.on_bar(&b, provider_kind);
+                                        if !backtest_mode {
+                                            live_emitted_windows.insert((provider_kind, b.instrument.clone(), b.resolution, b.time_end));
+                                        }
                                         // Drive consolidators for incoming candles (candle-to-candle)
                                         let tpc = if let Some(expected) = DataTopic::topic_for_resolution(&b.resolution) {
                                             if expected != topic {
@@ -665,6 +687,16 @@ impl EngineRuntime {
                             "warmup: requested DbUpdateKeyLatest for {:?} {} on {:?}",
                             topic, key.instrument, key.provider
                         );
+                    }
+                    // Invariant: provider on subscribe should match consolidator provider used for this instrument (coarse check)
+                    for entry in CONSOLIDATORS.iter() {
+                        let k = entry.key();
+                        if k.instrument == key.instrument && k.provider != key.provider {
+                            info!(
+                                "invariant: provider mismatch: consolidator provider={:?} vs subscribe provider={:?} for {} on {:?}",
+                                k.provider, key.provider, key.instrument, topic
+                            );
+                        }
                     }
                     // Forward the original subscribe request
                     let _ = bus
