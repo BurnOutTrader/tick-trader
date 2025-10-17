@@ -271,11 +271,11 @@ impl EngineRuntime {
                                                 if entry.value().awaiting_db
                                                     && sk.provider == provider_kind
                                                     && sk.instrument == q.instrument
-                                                && let Some(mut e) = warmups_for_task.get_mut(&(tp, sk)) {
-                                                    e.value_mut().cached_quotes.push_back(q.clone());
-                                                    cached_any = true;
-                                                }
-                                                
+                                                    && let Some(mut e) = warmups_for_task.get_mut(&(tp, sk)) {
+                                                        e.value_mut().cached_quotes.push_back(q.clone());
+                                                        cached_any = true;
+                                                    }
+
                                             }
                                             if cached_any { continue; }
                                         }
