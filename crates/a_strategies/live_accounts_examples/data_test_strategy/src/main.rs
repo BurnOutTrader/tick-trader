@@ -7,11 +7,10 @@ use tracing::level_filters::LevelFilter;
 use tt_engine::models::DataTopic;
 use tt_engine::runtime::EngineRuntime;
 use tt_engine::statics::bus::connect_live_bus;
-use tt_engine::statics::consolidators::add_consolidator;
+use tt_engine::statics::consolidators::add_hybrid_tick_or_candle;
 use tt_engine::statics::subscriptions::subscribe;
 use tt_engine::traits::Strategy;
 use tt_types::accounts::account::AccountName;
-use tt_types::consolidators::CandlesToCandlesConsolidator;
 use tt_types::data::mbp10::Mbp10;
 use tt_types::data::models::Resolution;
 use tt_types::keys::{AccountKey, SymbolKey};
@@ -45,15 +44,12 @@ impl Strategy for DataTestStrategy {
 
         // Non-blocking subscribe via handle command queue, you can do this at run time from anywhere to subscribe or unsubscribe a custom universe
         subscribe(self.data_topic, self.symbol_key.clone());
-        let consolidator = CandlesToCandlesConsolidator::new(
-            Resolution::Minutes(15),
-            None,
-            self.symbol_key.instrument.clone(),
-        );
-        add_consolidator(
+        subscribe(DataTopic::Ticks, self.symbol_key.clone());
+        add_hybrid_tick_or_candle(
             self.data_topic,
             self.symbol_key.clone(),
-            Box::new(consolidator),
+            Resolution::Minutes(15),
+            None,
         );
     }
 
@@ -134,7 +130,7 @@ async fn main() -> anyhow::Result<()> {
         ProviderKind::ProjectX(ProjectXTenant::Topstep),
         AccountName::from_str("PRAC-V2-64413-98419885").unwrap(),
     );
-    let data_topic = DataTopic::Candles1m;
+    let data_topic = DataTopic::Candles1s;
 
     let mut engine = EngineRuntime::new(Some(100_000));
     let strategy = DataTestStrategy::new(account, sk, data_topic);

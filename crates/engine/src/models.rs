@@ -144,6 +144,19 @@ impl DataTopic {
             _ => unimplemented!("Topic: {} not added to engine handling", topic),
         }
     }
+
+    /// Centralized mapping from candle resolution to Topic for batching/validation.
+    /// Only canonical base resolutions are mapped; returns None for unsupported granularities.
+    pub fn topic_for_resolution(res: &tt_types::data::models::Resolution) -> Option<Topic> {
+        use tt_types::data::models::Resolution;
+        match *res {
+            Resolution::Seconds(1) => Some(Topic::Candles1s),
+            Resolution::Minutes(1) => Some(Topic::Candles1m),
+            Resolution::Hours(1) => Some(Topic::Candles1h),
+            Resolution::Daily => Some(Topic::Candles1d),
+            _ => None,
+        }
+    }
 }
 
 // Non-blocking commands enqueued by the strategy/handle and drained by the engine task

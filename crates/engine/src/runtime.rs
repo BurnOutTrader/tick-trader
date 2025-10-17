@@ -7,7 +7,7 @@ use crate::traits::Strategy;
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use smallvec::SmallVec;
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Notify;
@@ -18,7 +18,6 @@ use tt_types::consolidators::ConsolidatorKey;
 use tt_types::data::core::Candle;
 use tt_types::data::core::{Bbo, Tick};
 use tt_types::data::mbp10::Mbp10;
-use tt_types::data::models::Resolution;
 use tt_types::keys::{AccountKey, SymbolKey, Topic};
 use tt_types::providers::ProviderKind;
 use tt_types::securities::symbols::Instrument;
@@ -29,6 +28,7 @@ use tt_types::wire::{Bytes, QuoteBatch};
 struct WarmupState {
     awaiting_db: bool,
     cached_ticks: VecDeque<Tick>,
+    cached_quotes: VecDeque<Bbo>,
     last_hist_end: Option<DateTime<Utc>>, // last candle time_end seen during warmup
 }
 
@@ -125,6 +125,13 @@ impl EngineRuntime {
                 iv
             };
             let mut warmup_complete = false;
+            // Backtest duplicate suppression set for candle windows emitted at current logical time
+            let mut bt_emitted_windows: HashSet<(
+                ProviderKind,
+                Instrument,
+                tt_types::data::models::Resolution,
+                DateTime<Utc>,
+            )> = HashSet::new();
             loop {
                 tokio::select! {
                         // Drive a time-based consolidation first if due
@@ -142,6 +149,7 @@ impl EngineRuntime {
                                         }
                                     } // all MapRefMut guards dropped here; no locks held
                                     for (prov, c) in outs {
+                                        info!("emit:on_time candle {} {} {}..{} O:{} H:{} L:{} C:{}", c.instrument, c.resolution.as_key().unwrap_or_else(|| "na".to_string()), c.time_start, c.time_end, c.open, c.high, c.low, c.close);
                                         strategy.on_bar(&c, prov);
                                     }
                                 }
@@ -166,8 +174,16 @@ impl EngineRuntime {
                                             }
                                         }
                                         for (prov, c) in outs {
+                                            // Suppress duplicates: if this window already emitted via BarsBatch at this logical time
+                                            if bt_emitted_windows.contains(&(prov, c.instrument.clone(), c.resolution, c.time_end)) {
+                                                continue;
+                                            }
+                                            bt_emitted_windows.insert((prov, c.instrument.clone(), c.resolution, c.time_end));
+                                            info!("emit:on_time(backtest) candle {} {} {}..{} O:{} H:{} L:{} C:{}", c.instrument, c.resolution.as_key().unwrap_or_else(|| "na".to_string()), c.time_start, c.time_end, c.open, c.high, c.low, c.close);
                                             strategy.on_bar(&c, prov);
                                         }
+                                        // Clear tracking for next logical time step
+                                        bt_emitted_windows.clear();
                                     }
                                     // 3) Flat-by-close enforcement is handled by backtest risk models; do not enforce in runtime
                                 },
@@ -219,6 +235,7 @@ impl EngineRuntime {
                                             && let Some(out) = cons.on_tick(&t)
                                             && let tt_types::consolidators::ConsolidatedOut::Candle(ref c) = out
                                         {
+                                            info!("emit:consolidator(tick) candle {} {} {}..{} O:{} H:{} L:{} C:{}", c.instrument, c.resolution.as_key().unwrap_or_else(|| "na".to_string()), c.time_start, c.time_end, c.open, c.high, c.low, c.close);
                                             strategy.on_bar(c, provider_kind);
                                         }
                                     }
@@ -229,6 +246,23 @@ impl EngineRuntime {
                                     ..
                                 }) => {
                                     for q in quotes {
+                                        // If any live warmup is active for this instrument/provider, cache the quote instead of processing now
+                                        if !warmup_complete {
+                                            let mut cached_any = false;
+                                            for entry in warmups_for_task.iter() {
+                                                let (tp, sk) = (entry.key().0, entry.key().1.clone());
+                                                if entry.value().awaiting_db
+                                                    && sk.provider == provider_kind
+                                                    && sk.instrument == q.instrument
+                                                {
+                                                    if let Some(mut e) = warmups_for_task.get_mut(&(tp, sk)) {
+                                                        e.value_mut().cached_quotes.push_back(q.clone());
+                                                        cached_any = true;
+                                                    }
+                                                }
+                                            }
+                                            if cached_any { continue; }
+                                        }
                                         let symbol_key = SymbolKey::new(q.instrument.clone(), provider_kind);
                                         LAST_ASK.insert(symbol_key.clone(), q.ask); LAST_BID.insert(symbol_key, q.bid);
                                         strategy.on_quote(&q, provider_kind);
@@ -238,6 +272,7 @@ impl EngineRuntime {
                                             && let Some(out) = cons.on_bbo(&q)
                                             && let tt_types::consolidators::ConsolidatedOut::Candle(ref c) = out
                                         {
+                                            info!("emit:consolidator(bbo) candle {} {} {}..{} O:{} H:{} L:{} C:{}", c.instrument, c.resolution.as_key().unwrap_or_else(|| "na".to_string()), c.time_start, c.time_end, c.open, c.high, c.low, c.close);
                                             strategy.on_bar(c, provider_kind);
                                         }
                                     }
@@ -249,6 +284,10 @@ impl EngineRuntime {
                                     ..
                                 }) => {
                                     for b in bars {
+                                        // Record emitted candle window for backtest duplicate suppression
+                                        if backtest_mode {
+                                            bt_emitted_windows.insert((provider_kind, b.instrument.clone(), b.resolution, b.time_end));
+                                        }
                                         let symbol_key = SymbolKey::new(b.instrument.clone(), provider_kind);
                                         if !warmup_complete {
                                             // Track last historical end for warmup if matching key exists
@@ -263,13 +302,13 @@ impl EngineRuntime {
                                         crate::statics::portfolio::apply_mark(provider_kind, &b.instrument, b.close, b.time_end);
                                         strategy.on_bar(&b, provider_kind);
                                         // Drive consolidators for incoming candles (candle-to-candle)
-                                        let tpc = match b.resolution {
-                                            tt_types::data::models::Resolution::Seconds(1) => Topic::Candles1s,
-                                            tt_types::data::models::Resolution::Minutes(1) => Topic::Candles1m,
-                                            tt_types::data::models::Resolution::Hours(1) => Topic::Candles1h,
-                                            tt_types::data::models::Resolution::Daily => Topic::Candles1d,
-                                            tt_types::data::models::Resolution::Weekly => Topic::Candles1d,
-                                            _ => Topic::Candles1d,
+                                        let tpc = if let Some(expected) = DataTopic::topic_for_resolution(&b.resolution) {
+                                            if expected != topic {
+                                                info!("invariant: topic-resolution mismatch: {:?} vs {:?} for instrument {}", expected, topic, b.instrument);
+                                            }
+                                            expected
+                                        } else {
+                                            Topic::Candles1d
                                         };
                                         let key = ConsolidatorKey::new(b.instrument.clone(), provider_kind, tpc);
                                         if let Some(mut cons) =
@@ -348,6 +387,19 @@ impl EngineRuntime {
                                     strategy.on_tick(&tick, provider_kind);
                                 }
                                 Response::Quote { bbo, provider_kind } => {
+                                    // Cache quote if any warmup is active for this instrument/provider
+                                    let mut cached = false;
+                                    for entry in warmups_for_task.iter() {
+                                        let (tp, sk) = (entry.key().0, entry.key().1.clone());
+                                        if entry.value().awaiting_db
+                                            && sk.provider == provider_kind
+                                            && sk.instrument == bbo.instrument
+                                        && let Some(mut e) = warmups_for_task.get_mut(&(tp, sk)) {
+                                            e.value_mut().cached_quotes.push_back(bbo.clone());
+                                            cached = true;
+                                        }
+                                    }
+                                    if cached { continue; }
                                     let symbol_key = SymbolKey::new(bbo.instrument.clone(), provider_kind);
                                     LAST_BID.insert(symbol_key.clone(), bbo.bid);
                                     LAST_ASK.insert(symbol_key.clone(), bbo.ask);
@@ -469,6 +521,7 @@ impl EngineRuntime {
                                     instrument,
                                     success,
                                 } => {
+                                    info!("subscribe: ack {:?} {} success={}", topic, instrument, success);
                                     let data_topic = DataTopic::from(topic);
                                     strategy.on_subscribe(instrument, data_topic, success);
                                 }
@@ -516,11 +569,35 @@ impl EngineRuntime {
                                                                                 && let Some(out) = cons.on_tick(&t)
                                                                                 && let tt_types::consolidators::ConsolidatedOut::Candle(ref c) = out
                                                                             {
+                                                                                info!("emit:consolidator(replay) candle {} {} {}..{} O:{} H:{} L:{} C:{}", c.instrument, c.resolution.as_key().unwrap_or_else(|| "na".to_string()), c.time_start, c.time_end, c.open, c.high, c.low, c.close);
                                                                                 strategy.on_bar(c, provider);
                                                                             }
                                                                         }
-                                                                        // Announce warmup complete to the strategy
-                                                                        strategy.on_warmup_complete();
+                                                                        // Replay cached quotes strictly after cutoff as well
+                                                                        for q in st.cached_quotes.into_iter() {
+                                                                            if let Some(cu) = cutoff && q.time <= cu { continue; }
+                                                                            let symbol_key = SymbolKey::new(q.instrument.clone(), provider);
+                                                                            LAST_BID.insert(symbol_key.clone(), q.bid);
+                                                                            LAST_ASK.insert(symbol_key.clone(), q.ask);
+                                                                            strategy.on_quote(&q, provider);
+                                                                            let key = ConsolidatorKey::new(q.instrument.clone(), provider, Topic::Quotes);
+                                                                            if let Some(mut cons) = CONSOLIDATORS
+                                                                                .get_mut(&key)
+                                                                                && let Some(out) = cons.on_bbo(&q)
+                                                                                && let tt_types::consolidators::ConsolidatedOut::Candle(ref c) = out
+                                                                            {
+                                                                                info!("emit:consolidator(replay) candle {} {} {}..{} O:{} H:{} L:{} C:{}", c.instrument, c.resolution.as_key().unwrap_or_else(|| "na".to_string()), c.time_start, c.time_end, c.open, c.high, c.low, c.close);
+                                                                                strategy.on_bar(c, provider);
+                                                                            }
+                                                                        }
+                                                                        // Announce warmup complete when all keys finished
+                                                                        if warmups_for_task.is_empty() && !warmup_complete {
+                                                                            info!("warmup: complete for all keys; signaling strategy");
+                                                                            strategy.on_warmup_complete();
+                                                                            warmup_complete = true;
+                                                                        } else {
+                                                                            info!("warmup: finished for key {} on {:?}", instrument, provider);
+                                                                        }
                                                                     }
                                                                 }
                             }
@@ -558,55 +635,36 @@ impl EngineRuntime {
         while let Some(cmd) = CMD_Q.pop() {
             match cmd {
                 Command::Subscribe { topic, key } => {
-                    // Live ProjectX warmup orchestration for candle subscriptions
-                    if !backtest_mode && let ProviderKind::ProjectX(_) = key.provider {
-                        let data_topic = DataTopic::from(topic);
-                        let dst_res: Option<Resolution> = match data_topic {
-                            DataTopic::Candles1s => Some(Resolution::Seconds(1)),
-                            DataTopic::Candles1m => Some(Resolution::Minutes(1)),
-                            DataTopic::Candles1h => Some(Resolution::Hours(1)),
-                            DataTopic::Candles1d => Some(Resolution::Daily),
-                            _ => None,
-                        };
-                        if let Some(res) = dst_res {
-                            // Avoid auto-hybrid for Daily (requires hours). Keep minimal intraday support.
-                            if !matches!(res, Resolution::Daily | Resolution::Weekly) {
-                                // Register a hybrid consolidator (candles+ticks)
-                                crate::statics::consolidators::add_hybrid_tick_or_candle(
-                                    data_topic,
-                                    key.clone(),
-                                    res,
-                                    None,
-                                );
-                                // Initialize warmup tracking for this candle subscription
-                                warmups.insert(
-                                    (topic, key.clone()),
-                                    WarmupState {
-                                        awaiting_db: true,
-                                        cached_ticks: VecDeque::new(),
-                                        last_hist_end: None,
-                                    },
-                                );
-                                // Start live ticks immediately to build a cache while DB updates
-                                let _ = bus
-                                    .handle_request(Request::SubscribeKey(SubscribeKey {
-                                        topic: Topic::Ticks,
-                                        key: key.clone(),
-                                        latest_only: false,
-                                        from_seq: 0,
-                                    }))
-                                    .await;
-                                // Best-effort: trigger server-side DB update for latest candles
-                                let _ = bus
-                                    .handle_request(Request::DbUpdateKeyLatest(DbUpdateKeyLatest {
-                                        provider: key.provider,
-                                        instrument: key.instrument.clone(),
-                                        topic,
-                                        corr_id: 0,
-                                    }))
-                                    .await;
-                            }
-                        }
+                    // Log subscribe intent
+                    info!(
+                        "subscribe: sending {:?} for {} via {:?}",
+                        topic, key.instrument, key.provider
+                    );
+                    // Live warmup orchestration for candle subscriptions (1s/1m):
+                    if !backtest_mode && matches!(topic, Topic::Candles1s | Topic::Candles1m) {
+                        // Track warmup state for this (topic,key)
+                        warmups.insert(
+                            (topic, key.clone()),
+                            WarmupState {
+                                awaiting_db: true,
+                                cached_ticks: VecDeque::new(),
+                                cached_quotes: VecDeque::new(),
+                                last_hist_end: None,
+                            },
+                        );
+                        // Kick off a DB update to fetch the latest completed bars
+                        let _ = bus
+                            .handle_request(Request::DbUpdateKeyLatest(DbUpdateKeyLatest {
+                                provider: key.provider,
+                                instrument: key.instrument.clone(),
+                                topic,
+                                corr_id: 0,
+                            }))
+                            .await;
+                        info!(
+                            "warmup: requested DbUpdateKeyLatest for {:?} {} on {:?}",
+                            topic, key.instrument, key.provider
+                        );
                     }
                     // Forward the original subscribe request
                     let _ = bus
