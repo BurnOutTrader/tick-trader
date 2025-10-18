@@ -1,14 +1,16 @@
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::sync::Arc;
+use anyhow::Context;
 use tokio::sync::Notify;
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 use tokio::time::{Duration as TokioDuration, timeout};
-use tracing::info;
+use tracing::{info, warn};
 use tt_database::ingest::{ingest_bbo, ingest_candles, ingest_ticks};
 use tt_database::init::{Connection, init_db};
 use tt_database::queries::latest_data_time;
+use tt_database::schema::ensure_schema;
 use tt_types::data::models::Resolution;
 use tt_types::engine_id::EngineUuid;
 use tt_types::history::{HistoricalRangeRequest, HistoryEvent};
@@ -97,21 +99,17 @@ impl DownloadTaskHandle {
     }
 }
 
-impl Default for DownloadManager {
-    fn default() -> DownloadManager {
-        Self::new()
-    }
-}
-
 impl DownloadManager {
-    pub fn new() -> Self {
-        let db = init_db().unwrap();
-        Self {
+    // Async ctor for the current-thread case (and generally the idiomatic choice)
+    pub async fn new_async() -> anyhow::Result<DownloadManager> {
+        let db = init_db().context("init_db failed")?;
+        tt_database::schema::ensure_schema(&db).await.context("ensure_schema failed")?;
+        Ok(Self {
             inner: std::sync::Arc::new(DownloadManagerInner {
                 inflight: Arc::new(RwLock::new(HashMap::new())),
                 db,
             }),
-        }
+        })
     }
 
     /// If an identical update task is already inflight, return a handle to it; otherwise None.
@@ -139,7 +137,7 @@ impl DownloadManager {
     pub async fn start_update(
         &self,
         client: std::sync::Arc<dyn HistoricalDataProvider>,
-        req: HistoricalRangeRequest,
+        mut req: HistoricalRangeRequest,
     ) -> anyhow::Result<DownloadTaskHandle> {
         let key = DownloadKey::new(req.provider_kind, req.instrument.clone(), req.topic);
         // fast path: existing
@@ -180,11 +178,13 @@ impl DownloadManager {
         }
         if should_spawn {
             let dm = self.clone();
+            let db_conn = dm.inner.db.clone();
+
             let entry2 = entry_arc.clone();
             let key2 = key.clone();
             let client2 = client.clone();
             let req2 = req.clone();
-            let db_conn = dm.inner.db.clone();
+
             let handle = tokio::spawn(async move {
                 let res = run_download(client2, req2, db_conn).await;
                 // store result and notify
@@ -230,21 +230,21 @@ async fn run_download(
 
     let provider_code = client.name();
 
-    let earliest = client
-        .earliest_available(req.instrument.clone(), req.topic)
-        .await?;
     let now = Utc::now();
 
     // Simplified cursoring: start from latest persisted time if available; otherwise from provider's earliest.
     let last_opt = latest_data_time(&connection, req.provider_kind, &req.instrument, req.topic).await?;
+    info!("Latest data time: {:?}", last_opt);
     let mut cursor: DateTime<Utc> = if let Some(ts) = last_opt {
         ts
     } else {
-        earliest.ok_or_else(|| anyhow::anyhow!("no data available"))?
+        client
+            .earliest_available(req.instrument.clone(), req.topic)
+            .await?.ok_or_else(|| anyhow::anyhow!("no data available"))?
     };
     let symbol = req.instrument.to_string();
     if cursor >= now {
-        tracing::info!(%symbol, ?provider_code, %req.exchange, "up to date");
+        tracing::info!(%symbol, ?provider_code, "up to date");
         return Ok(());
     }
 
@@ -257,7 +257,6 @@ async fn run_download(
             provider_kind: req.provider_kind,
             topic: req.topic,
             instrument: req.instrument.clone(),
-            exchange: req.exchange,
             start: cursor,
             end,
         };
@@ -292,40 +291,36 @@ async fn run_download(
         let mut ticks: Vec<tt_types::data::core::Tick> = Vec::new();
         let mut candles: Vec<tt_types::data::core::Candle> = Vec::new();
         let mut quotes: Vec<tt_types::data::core::Bbo> = Vec::new();
+        let mut saw_candle_events: bool = false;
+        // Diagnostics counters for candles
+        let total_events: usize = events.len();
+        let mut filtered_wrong_res: usize = 0;
+        let mut filtered_not_closed: usize = 0;
+        let mut filtered_le_cursor: usize = 0;
 
         for ev in events {
             match ev {
                 HistoryEvent::Candle(c) => {
-                    if matches!(
-                        req.topic,
-                        Topic::Candles1s | Topic::Candles1m | Topic::Candles1h | Topic::Candles1d
-                    ) {
-                        // Ensure resolution matches the topic (prevents 1s resume issues)
-                        if let Some(expected) = resolution {
-                            if c.resolution != expected {
-                                continue;
-                            }
-                        }
-                        // Skip duplicates at or before the cursor to avoid infinite loops
-                        if c.time_end <= cursor {
+                    saw_candle_events = true;
+                    // Ensure resolution matches the topic (prevents 1s resume issues)
+                    if let Some(expected) = resolution {
+                        if c.resolution != expected {
+                            filtered_wrong_res += 1;
                             continue;
                         }
-                        // Accept candles that are "closed enough" for their resolution.
-                        // This avoids skipping a provider's partial boundary bar that repeats across windows.
-                        let accept = match resolution {
-                            Some(Resolution::Seconds(1)) => c.time_end <= (now - chrono::Duration::seconds(1)),
-                            Some(Resolution::Minutes(1)) => c.time_end <= (now - chrono::Duration::seconds(60)),
-                            Some(Resolution::Hours(1)) => c.time_end <= (now - chrono::Duration::seconds(3600)),
-                            Some(Resolution::Daily) => c.time_end <= (now - chrono::Duration::days(1)),
-                            _ => c.is_closed(now),
-                        };
-                        if !accept {
-                            continue;
-                        }
-                        let ts = c.time_end;
-                        max_ts = Some(max_ts.map_or(ts, |m| m.max(ts)));
-                        candles.push(c);
                     }
+                    // Skip duplicates at or before the cursor to avoid infinite loops
+                    if c.time_end <= cursor {
+                        filtered_le_cursor += 1;
+                        continue;
+                    }
+                    if !c.is_closed(Utc::now()) {
+                        filtered_not_closed += 1;
+                        continue;
+                    }
+                    let ts = c.time_end;
+                    max_ts = Some(max_ts.map_or(ts, |m| m.max(ts)));
+                    candles.push(c);
                 }
                 HistoryEvent::Tick(t) => {
                     if matches!(req.topic, Topic::Ticks) {
@@ -349,25 +344,43 @@ async fn run_download(
             }
         }
 
+        // Diagnostics summary for candles and prep rows_affected capture
+        if matches!(req.topic, Topic::Candles1s | Topic::Candles1m | Topic::Candles1h | Topic::Candles1d) {
+            let kept_candles = candles.len();
+            let (first_end, last_end) = if kept_candles > 0 {
+                let min = candles.iter().map(|c| c.time_end).min().unwrap();
+                let max = candles.iter().map(|c| c.time_end).max().unwrap();
+                (Some(min), Some(max))
+            } else { (None, None) };
+            let table = match req.topic { Topic::Candles1s => "bars_1s", Topic::Candles1m => "bars_1m", Topic::Candles1h => "bars_1h", Topic::Candles1d => "bars_1d", _ => "" };
+            tracing::info!(total_events, kept_candles, filtered_wrong_res, filtered_not_closed, filtered_le_cursor, %table, first_end=?first_end, last_end=?last_end, start=%cursor, end=%end, "fetch filter summary");
+        }
+
+        let mut last_rows_affected: Option<u64> = None;
+
         // Persist
         match req.topic {
             Topic::Ticks => {
                 if !ticks.is_empty() {
-                    let _rows =
+                    let rows =
                         ingest_ticks(&connection, req.provider_kind, &req.instrument, ticks)
                             .await?;
-                    tracing::info!(rows = _rows, start=%cursor, end=%end, "persisted ticks");
+                    tracing::info!(topic=?req.topic, rows_affected=rows, start=%cursor, end=%end, "persisted ticks");
+                    last_rows_affected = Some(rows);
                 } else {
                     tracing::debug!(start=%cursor, end=%end, "no ticks returned");
+                    last_rows_affected = Some(0);
                 }
             }
             Topic::Quotes => {
                 if !quotes.is_empty() {
                     let rows =
                         ingest_bbo(&connection, req.provider_kind, &req.instrument, quotes).await?;
-                    tracing::info!(rows = rows, start=%cursor, end=%end, "persisted bbo");
+                    tracing::info!(topic=?req.topic, rows_affected=rows, start=%cursor, end=%end, "persisted bbo");
+                    last_rows_affected = Some(rows);
                 } else {
                     tracing::debug!(start=%cursor, end=%end, "no bbo returned");
+                    last_rows_affected = Some(0);
                 }
             }
             Topic::Candles1s | Topic::Candles1m | Topic::Candles1h | Topic::Candles1d => {
@@ -375,9 +388,11 @@ async fn run_download(
                     let rows =
                         ingest_candles(&connection, req.provider_kind, &req.instrument, candles)
                             .await?;
-                    tracing::info!(rows = rows, start=%cursor, end=%end, "persisted candles");
+                    tracing::info!(topic=?req.topic, rows_affected=rows, start=%cursor, end=%end, "persisted candles");
+                    last_rows_affected = Some(rows);
                 } else {
                     tracing::debug!(start=%cursor, end=%end, "no candles returned");
+                    last_rows_affected = Some(0);
                 }
             }
             Topic::MBP10 => {}
@@ -385,6 +400,7 @@ async fn run_download(
         }
 
         // Advance cursor by what we actually saw; if none (or no progress), move to window end.
+        let old_cursor = cursor;
         if let Some(ts) = max_ts {
             if ts <= cursor {
                 cursor = end;
@@ -392,8 +408,12 @@ async fn run_download(
                 cursor = ts;
             }
         } else {
+            if matches!(req.topic, Topic::Candles1s | Topic::Candles1m | Topic::Candles1h | Topic::Candles1d) && saw_candle_events {
+                tracing::warn!(start=%cursor, end=%end, "no progress from candle batch (likely all <= cursor); advancing by full window");
+            }
             cursor = end;
         }
+        tracing::info!(topic=?req.topic, rows_affected=?last_rows_affected, cursor_old=%old_cursor, cursor_new=%cursor, max_ts=?max_ts, "cursor advance");
     }
     info!("Historical database update completed");
     Ok(())
@@ -408,14 +428,8 @@ fn choose_span(res: Option<Resolution>) -> chrono::Duration {
     match res {
         Some(Resolution::Seconds(_)) => chrono::Duration::days(1),
         Some(Resolution::Minutes(_)) => chrono::Duration::days(1),
-        Some(Resolution::Hours(h)) => {
-            if h <= 1 {
-                chrono::Duration::days(1)
-            } else {
-                chrono::Duration::days(7)
-            }
-        }
-        Some(Resolution::Daily) | Some(Resolution::Weekly) => chrono::Duration::days(7),
+        Some(Resolution::Hours(h)) =>     chrono::Duration::days(100),
+        Some(Resolution::Daily) | Some(Resolution::Weekly) => chrono::Duration::days(365),
         None => chrono::Duration::days(1), // ticks/quotes/depth: be conservative
     }
 }

@@ -296,7 +296,7 @@ impl PXClient {
             )
         };
 
-        let limit: i32 = 20_000;
+        let limit: i32 = 5_000;
         let step = resolution.as_duration();
         let chunk_span = step * limit;
 

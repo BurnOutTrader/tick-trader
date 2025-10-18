@@ -21,19 +21,6 @@ rust_decimal = {workspace = true}
 ahash = { workspace = true }
 crossbeam = { workspace = true }
 sqlx = { workspace = true }
-smallvec = "1.15.1"
-colored = {workspace = true}
 futures-util = {workspace = true}
 tokio-util = {workspace = true}
 
-[[bin]]
-name = "tt-engine-test_strategy"
-path = "bin/data_test_strategy.rs"
-
-[[bin]]
-name = "tt-backtest_test"
-path = "bin/backtest_test.rs"
-
-[[bin]]
-name = "tt-backtest_orders"
-path = "bin/backtest_orders.rs"

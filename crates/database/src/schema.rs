@@ -12,9 +12,9 @@ pub async fn ensure_schema(pool: &Pool<Postgres>) -> Result<()> {
     );
     "#;
 
-    // Historical 1m bars (base table) representing tt-types::data::core::Candle exactly.
-    let create_bars = r#"
-    CREATE TABLE IF NOT EXISTS bars (
+    // New per-resolution bar tables
+    let create_bars_1s = r#"
+    CREATE TABLE IF NOT EXISTS bars_1s (
         provider   TEXT         NOT NULL,
         symbol_id  BIGINT       NOT NULL REFERENCES instrument(id),
         time_start TIMESTAMPTZ  NOT NULL,
@@ -26,9 +26,63 @@ pub async fn ensure_schema(pool: &Pool<Postgres>) -> Result<()> {
         volume     NUMERIC(18,9) NOT NULL,
         ask_volume NUMERIC(18,9) NOT NULL,
         bid_volume NUMERIC(18,9) NOT NULL,
-        resolution TEXT          NOT NULL,
-        PRIMARY KEY (provider, symbol_id, time_end, resolution)
+        PRIMARY KEY (provider, symbol_id, time_end)
     );
+    CREATE INDEX IF NOT EXISTS ix_bars_1s_key ON bars_1s (provider, symbol_id, time_end);
+    "#;
+
+    let create_bars_1m = r#"
+    CREATE TABLE IF NOT EXISTS bars_1m (
+        provider   TEXT         NOT NULL,
+        symbol_id  BIGINT       NOT NULL REFERENCES instrument(id),
+        time_start TIMESTAMPTZ  NOT NULL,
+        time_end   TIMESTAMPTZ  NOT NULL,
+        open       NUMERIC(18,9) NOT NULL,
+        high       NUMERIC(18,9) NOT NULL,
+        low        NUMERIC(18,9) NOT NULL,
+        close      NUMERIC(18,9) NOT NULL,
+        volume     NUMERIC(18,9) NOT NULL,
+        ask_volume NUMERIC(18,9) NOT NULL,
+        bid_volume NUMERIC(18,9) NOT NULL,
+        PRIMARY KEY (provider, symbol_id, time_end)
+    );
+    CREATE INDEX IF NOT EXISTS ix_bars_1m_key ON bars_1m (provider, symbol_id, time_end);
+    "#;
+
+    let create_bars_1h = r#"
+    CREATE TABLE IF NOT EXISTS bars_1h (
+        provider   TEXT         NOT NULL,
+        symbol_id  BIGINT       NOT NULL REFERENCES instrument(id),
+        time_start TIMESTAMPTZ  NOT NULL,
+        time_end   TIMESTAMPTZ  NOT NULL,
+        open       NUMERIC(18,9) NOT NULL,
+        high       NUMERIC(18,9) NOT NULL,
+        low        NUMERIC(18,9) NOT NULL,
+        close      NUMERIC(18,9) NOT NULL,
+        volume     NUMERIC(18,9) NOT NULL,
+        ask_volume NUMERIC(18,9) NOT NULL,
+        bid_volume NUMERIC(18,9) NOT NULL,
+        PRIMARY KEY (provider, symbol_id, time_end)
+    );
+    CREATE INDEX IF NOT EXISTS ix_bars_1h_key ON bars_1h (provider, symbol_id, time_end);
+    "#;
+
+    let create_bars_1d = r#"
+    CREATE TABLE IF NOT EXISTS bars_1d (
+        provider   TEXT         NOT NULL,
+        symbol_id  BIGINT       NOT NULL REFERENCES instrument(id),
+        time_start TIMESTAMPTZ  NOT NULL,
+        time_end   TIMESTAMPTZ  NOT NULL,
+        open       NUMERIC(18,9) NOT NULL,
+        high       NUMERIC(18,9) NOT NULL,
+        low        NUMERIC(18,9) NOT NULL,
+        close      NUMERIC(18,9) NOT NULL,
+        volume     NUMERIC(18,9) NOT NULL,
+        ask_volume NUMERIC(18,9) NOT NULL,
+        bid_volume NUMERIC(18,9) NOT NULL,
+        PRIMARY KEY (provider, symbol_id, time_end)
+    );
+    CREATE INDEX IF NOT EXISTS ix_bars_1d_key ON bars_1d (provider, symbol_id, time_end);
     "#;
 
     // Hot cache: one row per (provider, symbol) with the latest 1m bar, mirroring Candle fields.
@@ -144,7 +198,11 @@ pub async fn ensure_schema(pool: &Pool<Postgres>) -> Result<()> {
     "#;
 
     pool.execute(create_instrument).await?;
-    pool.execute(create_bars).await?;
+    pool.execute(create_bars_1s).await?;
+    pool.execute(create_bars_1m).await?;
+    pool.execute(create_bars_1h).await?;
+    pool.execute(create_bars_1d).await?;
+
     pool.execute(create_latest).await?;
     pool.execute(create_ticks).await?;
     pool.execute(create_bbo).await?;

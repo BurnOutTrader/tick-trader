@@ -16,7 +16,6 @@ use tokio_util::codec::length_delimited::LengthDelimitedCodec;
 use tokio_util::codec::{FramedRead, FramedWrite};
 use tracing::{error, info, trace, warn};
 use tt_database::init::{Connection, init_db};
-use tt_types::history::{HistoricalRangeRequest, HistoryEvent};
 use tt_types::keys::{AccountKey, SymbolKey, Topic};
 use tt_types::providers::ProviderKind;
 use tt_types::securities::security::FuturesContract;
@@ -142,11 +141,7 @@ pub trait UpstreamManager: Send + Sync {
         &self,
         provider: tt_types::providers::ProviderKind,
     ) -> Result<Vec<FuturesContract>>;
-    async fn fetch_historical_data(
-        &self,
-        req: HistoricalRangeRequest,
-    ) -> anyhow::Result<Vec<HistoryEvent>>;
-    async fn update_historical_database(&self, req: HistoricalRangeRequest) -> anyhow::Result<()>;
+
     async fn update_historical_latest_by_key(
         &self,
         provider: tt_types::providers::ProviderKind,

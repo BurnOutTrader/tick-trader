@@ -23,6 +23,7 @@ struct DataTestStrategy {
     symbol_key: SymbolKey,
     data_topic: DataTopic,
     is_warmed_up: bool,
+    resolution: Resolution
 }
 
 impl DataTestStrategy {
@@ -30,12 +31,14 @@ impl DataTestStrategy {
         account_key: AccountKey,
         symbol_key: SymbolKey,
         data_topic: DataTopic,
+        resolution: Resolution,
     ) -> DataTestStrategy {
         Self {
             account_key,
             symbol_key,
             data_topic,
             is_warmed_up: false,
+            resolution
         }
     }
 }
@@ -45,11 +48,10 @@ impl Strategy for DataTestStrategy {
         info!("strategy start: warming up");
         // Non-blocking subscribe via handle command queue, you can do this at run time from anywhere to subscribe or unsubscribe a custom universe
         subscribe(self.data_topic, self.symbol_key.clone());
-        subscribe(DataTopic::Candles1h, self.symbol_key.clone());
         add_hybrid_tick_or_candle(
             self.data_topic,
             self.symbol_key.clone(),
-            Resolution::Seconds(1),
+            self.resolution,
             None,
         );
     }
@@ -136,11 +138,10 @@ async fn main() -> anyhow::Result<()> {
         ProviderKind::ProjectX(ProjectXTenant::Topstep),
         AccountName::from_str("PRAC-V2-64413-98419885").unwrap(),
     );
-    let data_topic = DataTopic::Candles1h;
-
+    let data_topic = DataTopic::Candles1s;
 
     let mut engine = EngineRuntime::new(Some(100_000));
-    let strategy = DataTestStrategy::new(account, sk, data_topic);
+    let strategy = DataTestStrategy::new(account, sk, data_topic, Resolution::Minutes(15));
     engine.start(strategy, false).await?;
 
     sleep(Duration::from_secs(60)).await;

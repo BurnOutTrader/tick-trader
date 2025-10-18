@@ -130,8 +130,9 @@ async fn main() -> anyhow::Result<()> {
     eprintln!("tick-trader server listening on UDS: {}", path);
     // New standalone Router (initial, single-process, unsharded stub)
     let router = Arc::new(Router::new(8));
+    let mng = tt_providers::manager::ProviderManager::new_async(router.clone()).await?;
     // Wire upstream manager (providers) into the router for first/last sub notifications
-    let mgr = Arc::new(tt_providers::manager::ProviderManager::new(router.clone()));
+    let mgr = Arc::new(mng);
     router.set_backend(mgr);
 
     loop {

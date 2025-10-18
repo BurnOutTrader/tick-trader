@@ -1,4 +1,4 @@
-use crate::data::core::{Bbo, Candle, Exchange, Tick};
+use crate::data::core::{Bbo, Candle, Tick};
 use crate::keys::Topic;
 use crate::providers::ProviderKind;
 use crate::securities::symbols::Instrument;
@@ -13,7 +13,6 @@ pub struct HistoricalRangeRequest {
     pub provider_kind: ProviderKind,
     pub topic: Topic,
     pub instrument: Instrument,
-    pub exchange: Exchange,
     pub start: DateTime<Utc>,
     pub end: DateTime<Utc>,
 }

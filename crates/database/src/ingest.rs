@@ -2,6 +2,7 @@ use ahash::AHashMap;
 use anyhow::Result;
 use rust_decimal::prelude::ToPrimitive;
 use sqlx::{QueryBuilder, Row};
+use log::{error, warn};
 use tt_types::data::models::{Resolution, TradeSide};
 use tt_types::providers::ProviderKind;
 use tt_types::securities::symbols::Instrument;
@@ -20,8 +21,7 @@ fn resolution_key(res: &Resolution) -> &'static str {
         Resolution::Minutes(1) => "min1",
         Resolution::Hours(1) => "hr1",
         Resolution::Daily => "day1",
-        // You can expand as needed
-        _ => panic!("Unsupported "), // safe fallback
+        _ => panic!("Incorrect resolution key"),
     }
 }
 
@@ -142,7 +142,7 @@ pub async fn ingest_bbo(
     Ok(res.rows_affected())
 }
 
-/// Insert a batch of candles into bars_1m and update latest_bar_1m.
+/// Insert a batch of candles into per-resolution tables and update latest_bar_1m.
 pub async fn ingest_candles(
     conn: &Connection,
     provider: ProviderKind,
@@ -155,32 +155,116 @@ pub async fn ingest_candles(
     let sym = instrument.to_string();
     let inst_id = get_or_create_instrument_id(conn, &sym).await?;
 
-    // Bulk insert bars mapping Candle fields exactly
     let provider_code = crate::paths::provider_kind_to_db_string(provider);
-    let mut qb = QueryBuilder::new(
-        "INSERT INTO bars (provider, symbol_id, time_start, time_end, open, high, low, close, volume, ask_volume, bid_volume, resolution) ",
-    );
-    qb.push_values(rows.iter(), |mut b, r| {
-        let res_str: String = if matches!(r.resolution, Resolution::Seconds(1)) {
-            resolution_key(&r.resolution).to_string()
-        } else {
-            r.resolution.to_string()
-        };
-        b.push_bind(&provider_code)
-            .push_bind(inst_id)
-            .push_bind(r.time_start)
-            .push_bind(r.time_end)
-            .push_bind(r.open)
-            .push_bind(r.high)
-            .push_bind(r.low)
-            .push_bind(r.close)
-            .push_bind(r.volume)
-            .push_bind(r.ask_volume)
-            .push_bind(r.bid_volume)
-            .push_bind(res_str);
-    });
-    qb.push(" ON CONFLICT (provider, symbol_id, time_end, resolution) DO NOTHING ");
-    let res = qb.build().execute(conn).await?;
+
+    // Bucket rows by resolution (support only 1s/1m/1h/1d for physical tables)
+    let mut r1s: Vec<&Candle> = Vec::new();
+    let mut r1m: Vec<&Candle> = Vec::new();
+    let mut r1h: Vec<&Candle> = Vec::new();
+    let mut r1d: Vec<&Candle> = Vec::new();
+    for r in rows.iter() {
+        match r.resolution {
+            Resolution::Seconds(1) => r1s.push(r),
+            Resolution::Minutes(1) => r1m.push(r),
+            Resolution::Hours(1) => r1h.push(r),
+            Resolution::Daily => r1d.push(r),
+            _ => {
+                // Skip unsupported resolutions silently; callers request only 1s/1m/1h/1d
+                warn!("Unknown resolution {:?}", r);
+                continue;
+            }
+        }
+    }
+
+    let mut total: u64 = 0;
+
+    if !r1s.is_empty() {
+        let mut qb = QueryBuilder::new(
+            "INSERT INTO bars_1s (provider, symbol_id, time_start, time_end, open, high, low, close, volume, ask_volume, bid_volume) ",
+        );
+        qb.push_values(r1s.iter(), |mut b, &r| {
+            b.push_bind(&provider_code)
+                .push_bind(inst_id)
+                .push_bind(r.time_start)
+                .push_bind(r.time_end)
+                .push_bind(r.open)
+                .push_bind(r.high)
+                .push_bind(r.low)
+                .push_bind(r.close)
+                .push_bind(r.volume)
+                .push_bind(r.ask_volume)
+                .push_bind(r.bid_volume);
+        });
+        qb.push(" ON CONFLICT (provider, symbol_id, time_end) DO NOTHING ");
+        let res = qb.build().execute(conn).await?;
+        total += res.rows_affected();
+    }
+
+    if !r1m.is_empty() {
+        let mut qb = QueryBuilder::new(
+            "INSERT INTO bars_1m (provider, symbol_id, time_start, time_end, open, high, low, close, volume, ask_volume, bid_volume) ",
+        );
+        qb.push_values(r1m.iter(), |mut b, &r| {
+            b.push_bind(&provider_code)
+                .push_bind(inst_id)
+                .push_bind(r.time_start)
+                .push_bind(r.time_end)
+                .push_bind(r.open)
+                .push_bind(r.high)
+                .push_bind(r.low)
+                .push_bind(r.close)
+                .push_bind(r.volume)
+                .push_bind(r.ask_volume)
+                .push_bind(r.bid_volume);
+        });
+        qb.push(" ON CONFLICT (provider, symbol_id, time_end) DO NOTHING ");
+        let res = qb.build().execute(conn).await?;
+        total += res.rows_affected();
+    }
+
+    if !r1h.is_empty() {
+        let mut qb = QueryBuilder::new(
+            "INSERT INTO bars_1h (provider, symbol_id, time_start, time_end, open, high, low, close, volume, ask_volume, bid_volume) ",
+        );
+        qb.push_values(r1h.iter(), |mut b, &r| {
+            b.push_bind(&provider_code)
+                .push_bind(inst_id)
+                .push_bind(r.time_start)
+                .push_bind(r.time_end)
+                .push_bind(r.open)
+                .push_bind(r.high)
+                .push_bind(r.low)
+                .push_bind(r.close)
+                .push_bind(r.volume)
+                .push_bind(r.ask_volume)
+                .push_bind(r.bid_volume);
+        });
+        qb.push(" ON CONFLICT (provider, symbol_id, time_end) DO NOTHING ");
+        let res = qb.build().execute(conn).await?;
+        total += res.rows_affected();
+    }
+
+    if !r1d.is_empty() {
+        let mut qb = QueryBuilder::new(
+            "INSERT INTO bars_1d (provider, symbol_id, time_start, time_end, open, high, low, close, volume, ask_volume, bid_volume) ",
+        );
+        qb.push_values(r1d.iter(), |mut b, &r| {
+            b.push_bind(&provider_code)
+                .push_bind(inst_id)
+                .push_bind(r.time_start)
+                .push_bind(r.time_end)
+                .push_bind(r.open)
+                .push_bind(r.high)
+                .push_bind(r.low)
+                .push_bind(r.close)
+                .push_bind(r.volume)
+                .push_bind(r.ask_volume)
+                .push_bind(r.bid_volume);
+        });
+        qb.push(" ON CONFLICT (provider, symbol_id, time_end) DO NOTHING ");
+        let res = qb.build().execute(conn).await?;
+        total += res.rows_affected();
+    }
 
     // Update extent cache per topic based on each row's resolution (batch may mix resolutions)
     use std::collections::HashMap;
@@ -194,7 +278,7 @@ pub async fn ingest_candles(
             tt_types::data::models::Resolution::Minutes(1) => Topic::Candles1m as i16,
             tt_types::data::models::Resolution::Hours(_) => Topic::Candles1h as i16,
             tt_types::data::models::Resolution::Daily => Topic::Candles1d as i16,
-            _ => Topic::Candles1m as i16,
+            _ => panic!("unexpected resolution"),
         };
         let entry = extent_map
             .entry(topic_i16)
@@ -234,7 +318,7 @@ pub async fn ingest_candles(
         .await?;
     }
 
-    Ok(res.rows_affected())
+    Ok(total)
 }
 
 pub async fn ingest_mbp10(

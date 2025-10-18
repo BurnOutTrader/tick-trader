@@ -17,6 +17,10 @@ use tt_types::server_side::traits::{
     ExecutionProvider, HistoricalDataProvider, MarketDataProvider, ProviderSessionSpec,
 };
 use tt_types::wire::OrdersBatch;
+// Added for unified wait semantics and diagnostics
+use tokio::time::{timeout, Duration as TokioDuration};
+use tt_database::init::init_db;
+use tt_database::queries::latest_data_time;
 
 /// Minimal ProviderManager that ensures a provider pair exists for a given ProviderKind.
 /// For this initial pass, it uses the ProjectX in-process adapter and returns dyn traits.
@@ -209,55 +213,6 @@ impl UpstreamManager for ProviderManager {
         Ok(Vec::new())
     }
 
-    async fn fetch_historical_data(
-        &self,
-        req: HistoricalRangeRequest,
-    ) -> anyhow::Result<Vec<HistoryEvent>> {
-        self.ensure_clients(req.provider_kind).await?;
-        if let Some(client) = self.hist.get(&req.provider_kind) {
-            if !client.supports(req.topic) {
-                return Err(anyhow::anyhow!(
-                    "Unsupported topic: {:?} for historical data provider: {:?}",
-                    req.provider_kind,
-                    req.topic
-                ));
-            }
-            return client.fetch(req).await;
-        }
-        Err(anyhow::anyhow!(
-            "Unsupported historical data provider: {:?}",
-            req.provider_kind
-        ))
-    }
-
-    async fn update_historical_database(&self, req: HistoricalRangeRequest) -> anyhow::Result<()> {
-        self.ensure_clients(req.provider_kind).await?;
-        if let Some(client) = self.hist.get(&req.provider_kind) {
-            if !client.supports(req.topic) {
-                return Err(anyhow::anyhow!(
-                    "Unsupported topic: {:?} for historical data provider: {:?}",
-                    req.provider_kind,
-                    req.topic
-                ));
-            }
-            let dm = &self.download_manager;
-            if let Some(handle) = dm.request_update(client.clone(), req.clone()).await? {
-                tracing::info!(task_id=%handle.id(), provider=?req.provider_kind, instrument=%req.instrument, topic=?req.topic, "historical update already inflight");
-                handle.entry.notify.notified().await;
-                return Ok(());
-            } else {
-                let started = dm.start_update(client.clone(), req.clone()).await?;
-                tracing::info!(task_id=%started.id(), provider=?req.provider_kind, instrument=%req.instrument, topic=?req.topic, "historical update started");
-                started.entry.notify.notified().await;
-                return Ok(());
-            }
-        }
-        Err(anyhow::anyhow!(
-            "Unsupported historical data provider: {:?}",
-            req.provider_kind
-        ))
-    }
-
     async fn update_historical_latest_by_key(
         &self,
         provider: ProviderKind,
@@ -282,38 +237,51 @@ impl UpstreamManager for ProviderManager {
                 topic
             ));
         }
-        // Resolve exchange for this instrument using the provider's securities map
-        let securities = self.get_securities(provider).await.unwrap_or_default();
-        let exchange = if let Some(fc) = securities.iter().find(|c| c.instrument == instrument) {
-            fc.exchange
-        } else {
-            return Err(anyhow::anyhow!(
-                "exchange not found for instrument {} with provider {:?}",
-                instrument,
-                provider
-            ));
-        };
+
+        // Diagnostics: capture latest before
+        let db = init_db()?;
+        let before_latest = latest_data_time(&db, provider, &instrument, topic).await?;
+        tracing::info!(caller="ProviderManager.update_historical_latest_by_key", provider=?provider, instrument=%instrument, topic=?topic, before_latest=?before_latest, "starting historical latest update");
+
         let now = chrono::Utc::now();
         let req = HistoricalRangeRequest {
             provider_kind: provider,
             topic,
             instrument: instrument.clone(),
-            exchange,
             // The download manager computes the actual start time from DB latest; these are placeholders
             start: now - chrono::Duration::days(1),
             end: now,
         };
         let dm = &self.download_manager;
+        // Use a unified wait-for-completion with timeout to prevent hangs
+        const TIMEOUT_SECS: u64 = 300;
         if let Some(handle) = dm.request_update(client.clone(), req.clone()).await? {
-            tracing::info!(task_id=%handle.id(), provider=?provider, instrument=%req.instrument, topic=?req.topic, "historical latest update already inflight");
-            handle.entry.notify.notified().await;
-            Ok(())
+            tracing::info!(task_id=%handle.id(), provider=?provider, instrument=%req.instrument, topic=?req.topic, "historical latest update already inflight; waiting for completion");
+            let wait_res = timeout(TokioDuration::from_secs(TIMEOUT_SECS), handle.wait()).await;
+            match wait_res {
+                Ok(res) => res?,
+                Err(_) => {
+                    tracing::warn!(provider=?provider, instrument=%req.instrument, topic=?req.topic, timeout_secs=TIMEOUT_SECS, "historical latest update wait timed out");
+                    return Err(anyhow::anyhow!("historical update wait timed out"));
+                }
+            }
         } else {
-            let started = dm.start_update(client.clone(), req.clone()).await?;
-            tracing::info!(task_id=%started.id(), provider=?provider, instrument=%req.instrument, topic=?req.topic, "historical latest update started");
-            started.entry.notify.notified().await;
-            Ok(())
+            let handle = dm.start_update(client.clone(), req.clone()).await?;
+            tracing::info!(task_id=%handle.id(), provider=?provider, instrument=%req.instrument, topic=?req.topic, "historical latest update started; waiting for completion");
+            let wait_res = timeout(TokioDuration::from_secs(TIMEOUT_SECS), handle.wait()).await;
+            match wait_res {
+                Ok(res) => res?,
+                Err(_) => {
+                    tracing::warn!(provider=?provider, instrument=%req.instrument, topic=?req.topic, timeout_secs=TIMEOUT_SECS, "historical latest update wait timed out");
+                    return Err(anyhow::anyhow!("historical update wait timed out"));
+                }
+            }
         }
+
+        // Diagnostics: capture latest after
+        let after_latest = latest_data_time(&db, provider, &instrument, topic).await?;
+        tracing::info!(provider=?provider, instrument=%instrument, topic=?topic, before_latest=?before_latest, after_latest=?after_latest, advanced=?after_latest.as_ref().zip(before_latest).map(|(a,b)| *a > b).unwrap_or(after_latest.is_some() && before_latest.is_none()), "historical latest update finished");
+        Ok(())
     }
 }
 
@@ -331,47 +299,33 @@ fn type_i_from(t: tt_types::wire::OrderType) -> i32 {
 }
 
 impl ProviderManager {
-    pub fn new(router: Arc<Router>) -> Self {
+    pub async fn new_async(router: Arc<Router>) -> anyhow::Result<ProviderManager> {
         let session = ProviderSessionSpec::from_env();
-        Self {
+        let download_manager = DownloadManager::new_async().await?;
+        Ok(Self {
             md: DashMap::new(),
             ex: DashMap::new(),
             hist: DashMap::new(),
-            download_manager: DownloadManager::new(),
+            download_manager,
             workers: DashMap::new(),
-            shards: 4,
+            shards: 8,
             bus: router,
             session,
-        }
+        })
     }
-    pub fn with_shards(router: Arc<Router>, shards: usize) -> Self {
+    pub async fn with_shards_async(router: Arc<Router>, shards: usize) -> anyhow::Result<ProviderManager> {
         let session = ProviderSessionSpec::from_env();
-        Self {
+        let download_manager = DownloadManager::new_async().await?;
+        Ok(Self {
             md: DashMap::new(),
             ex: DashMap::new(),
             hist: DashMap::new(),
-            download_manager: DownloadManager::new(),
+            download_manager,
             workers: DashMap::new(),
-            shards: shards.max(1),
+            shards,
             bus: router,
             session,
-        }
-    }
-    pub fn with_router_and_session(
-        router: Arc<Router>,
-        shards: usize,
-        session: ProviderSessionSpec,
-    ) -> Self {
-        Self {
-            md: DashMap::new(),
-            ex: DashMap::new(),
-            hist: DashMap::new(),
-            workers: DashMap::new(),
-            download_manager: DownloadManager::new(),
-            shards: shards.max(1),
-            bus: router,
-            session,
-        }
+        })
     }
 
     pub async fn ensure_clients(&self, kind: ProviderKind) -> anyhow::Result<()> {

@@ -616,7 +616,7 @@ impl EngineRuntime {
                         topic, key.instrument, key.provider
                     );
                     // Live warmup orchestration for candle subscriptions (1s/1m):
-                    if !backtest_mode && matches!(topic, Topic::Candles1s | Topic::Candles1m) {
+                    if !backtest_mode && matches!(topic, Topic::Candles1s | Topic::Candles1m | Topic::Candles1h | Topic::Candles1d) {
                         // Track warmup state for this (topic,key)
                         warmups.insert(
                             (topic, key.clone()),
@@ -683,55 +683,6 @@ impl EngineRuntime {
             }
         }
         count
-    }
-
-    #[allow(dead_code)]
-    /// Trigger a historical DB update for the latest data for a given provider/topic/instrument.
-    /// This sends a DbUpdateKeyLatest request and blocks until the DbUpdateComplete response arrives.
-    /// Returns Ok(()) when the update completed successfully; otherwise returns Err with the server error message.
-    fn update_historical_latest_by_key(
-        provider: ProviderKind,
-        topic: Topic,
-        instrument: Instrument,
-    ) -> anyhow::Result<()> {
-        use anyhow::anyhow;
-        use tt_types::wire::{DbUpdateKeyLatest, Response as WireResp};
-        let fut = async {
-            let instr_clone = instrument.clone();
-            let rx = bus()
-                .request_with_corr(|corr_id| {
-                    Request::DbUpdateKeyLatest(DbUpdateKeyLatest {
-                        provider,
-                        instrument: instr_clone,
-                        topic,
-                        corr_id,
-                    })
-                })
-                .await;
-            match rx.await {
-                Ok(WireResp::DbUpdateComplete {
-                    success, error_msg, ..
-                }) => {
-                    if success {
-                        Ok(())
-                    } else {
-                        Err(anyhow!(
-                            error_msg.unwrap_or_else(|| "historical update failed".to_string())
-                        ))
-                    }
-                }
-                Ok(other) => Err(anyhow!(format!("unexpected response: {:?}", other))),
-                Err(_canceled) => Err(anyhow!("engine response channel closed")),
-            }
-        };
-        // Execute the async flow in a blocking manner
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            // Ensure we don't block the runtime reactor; run in a blocking section
-            tokio::task::block_in_place(|| handle.block_on(fut))
-        } else {
-            let rt = tokio::runtime::Runtime::new().map_err(|e| anyhow!(e))?;
-            rt.block_on(fut)
-        }
     }
 }
 /*

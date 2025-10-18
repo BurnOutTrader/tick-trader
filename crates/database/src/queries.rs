@@ -21,10 +21,17 @@ fn resolution_key(res: &Resolution) -> &'static str {
         Resolution::Minutes(1) => "min1",
         Resolution::Hours(1) => "hr1",
         Resolution::Daily => "day1",
-        Resolution::Hours(n) if *n == 2 => "hr2",
-        Resolution::Hours(n) if *n == 4 => "hr4",
-        Resolution::Hours(n) if *n == 12 => "hr12",
-        _ => "min1",
+        _ => "custom",
+    }
+}
+
+fn resolution_from_topic(topic: Topic) -> Option<Resolution> {
+    match topic {
+        Topic::Candles1s => Some(Resolution::Seconds(1)),
+        Topic::Candles1m => Some(Resolution::Minutes(1)),
+        Topic::Candles1h => Some(Resolution::Hours(1)),
+        Topic::Candles1d => Some(Resolution::Daily),
+        _ => None
     }
 }
 
@@ -44,12 +51,34 @@ pub async fn latest_data_time(
         Topic::Candles1s => {
             let prov = crate::paths::provider_kind_to_db_string(provider);
             let row = sqlx::query(
-                "SELECT MAX(time_end) AS time_end FROM bars WHERE provider=$1 AND symbol_id=$2 AND resolution IN ($3, $4)",
+                "SELECT MAX(time_end) AS time_end FROM bars_1s WHERE provider=$1 AND symbol_id=$2",
             )
             .bind(prov)
             .bind(inst_id)
-            .bind(resolution_key(&Resolution::Seconds(1)))
-            .bind(Resolution::Seconds(1).to_string())
+            .fetch_optional(conn)
+            .await?;
+            row.and_then(|r| r.try_get::<Option<DateTime<Utc>>, _>("time_end").ok())
+                .flatten()
+        }
+        Topic::Candles1h => {
+            let prov = crate::paths::provider_kind_to_db_string(provider);
+            let row = sqlx::query(
+                "SELECT MAX(time_end) AS time_end FROM bars_1h WHERE provider=$1 AND symbol_id=$2",
+            )
+            .bind(prov)
+            .bind(inst_id)
+            .fetch_optional(conn)
+            .await?;
+            row.and_then(|r| r.try_get::<Option<DateTime<Utc>>, _>("time_end").ok())
+                .flatten()
+        }
+        Topic::Candles1d => {
+            let prov = crate::paths::provider_kind_to_db_string(provider);
+            let row = sqlx::query(
+                "SELECT MAX(time_end) AS time_end FROM bars_1d WHERE provider=$1 AND symbol_id=$2",
+            )
+            .bind(prov)
+            .bind(inst_id)
             .fetch_optional(conn)
             .await?;
             row.and_then(|r| r.try_get::<Option<DateTime<Utc>>, _>("time_end").ok())
@@ -69,41 +98,15 @@ pub async fn latest_data_time(
                 Some(r.get::<DateTime<Utc>, _>("time_end"))
             } else {
                 let row = sqlx::query(
-                    "SELECT MAX(time_end) AS time_end FROM bars WHERE provider=$1 AND symbol_id=$2 AND resolution = $3",
+                    "SELECT MAX(time_end) AS time_end FROM bars_1m WHERE provider=$1 AND symbol_id=$2",
                 )
                 .bind(prov)
                 .bind(inst_id)
-                .bind(Resolution::Minutes(1).to_string())
                 .fetch_optional(conn)
                 .await?;
                 row.and_then(|r| r.try_get::<Option<DateTime<Utc>>, _>("time_end").ok())
                     .flatten()
             }
-        }
-        Topic::Candles1h => {
-            let prov = crate::paths::provider_kind_to_db_string(provider);
-            let row = sqlx::query(
-                "SELECT MAX(time_end) AS time_end FROM bars WHERE provider=$1 AND symbol_id=$2 AND resolution LIKE 'Hours(%'",
-            )
-            .bind(prov)
-            .bind(inst_id)
-            .fetch_optional(conn)
-            .await?;
-            row.and_then(|r| r.try_get::<Option<DateTime<Utc>>, _>("time_end").ok())
-                .flatten()
-        }
-        Topic::Candles1d => {
-            let prov = crate::paths::provider_kind_to_db_string(provider);
-            let row = sqlx::query(
-                "SELECT MAX(time_end) AS time_end FROM bars WHERE provider=$1 AND symbol_id=$2 AND resolution = $3",
-            )
-            .bind(prov)
-            .bind(inst_id)
-            .bind(Resolution::Daily.to_string())
-            .fetch_optional(conn)
-            .await?;
-            row.and_then(|r| r.try_get::<Option<DateTime<Utc>>, _>("time_end").ok())
-                .flatten()
         }
         Topic::Ticks => {
             let prov = crate::paths::provider_kind_to_db_string(provider);
@@ -148,27 +151,15 @@ pub async fn get_extent(
     let sym = instrument.to_string();
     let inst_id = get_or_create_instrument_id(conn, &sym).await?;
     let prov = crate::paths::provider_kind_to_db_string(provider);
-    // Try cache first
-    let topic_id = topic as i16 as i32; // cast to smallint-compatible
-    if let Some(r) = sqlx::query("SELECT earliest, latest FROM series_extent WHERE provider=$1 AND symbol_id=$2 AND topic=$3")
-        .bind(&prov)
-        .bind(inst_id)
-        .bind(topic_id)
-        .fetch_optional(conn)
-        .await? {
-        let e = r.get::<Option<DateTime<Utc>>, _>("earliest");
-        let l = r.get::<Option<DateTime<Utc>>, _>("latest");
-        return Ok((e, l));
-    }
+
     // Fallback scan per topic (handle all candle resolutions)
     let (e, l) = match topic {
         Topic::Candles1s => {
             let row = sqlx::query(
-                "SELECT MIN(time_end) e, MAX(time_end) l FROM bars WHERE provider=$1 AND symbol_id=$2 AND resolution=$3",
+                "SELECT MIN(time_end) e, MAX(time_end) l FROM bars_1s WHERE provider=$1 AND symbol_id=$2",
             )
             .bind(&prov)
             .bind(inst_id)
-            .bind(resolution_key(&Resolution::Seconds(1)))
             .fetch_one(conn)
             .await?;
             (
@@ -178,11 +169,10 @@ pub async fn get_extent(
         }
         Topic::Candles1m => {
             let row = sqlx::query(
-                "SELECT MIN(time_end) e, MAX(time_end) l FROM bars WHERE provider=$1 AND symbol_id=$2 AND resolution=$3",
+                "SELECT MIN(time_end) e, MAX(time_end) l FROM bars_1m WHERE provider=$1 AND symbol_id=$2",
             )
             .bind(&prov)
             .bind(inst_id)
-            .bind(tt_types::data::models::Resolution::Minutes(1).to_string())
             .fetch_one(conn)
             .await?;
             (
@@ -192,7 +182,7 @@ pub async fn get_extent(
         }
         Topic::Candles1h => {
             let row = sqlx::query(
-                "SELECT MIN(time_end) e, MAX(time_end) l FROM bars WHERE provider=$1 AND symbol_id=$2 AND resolution LIKE 'Hours(%'",
+                "SELECT MIN(time_end) e, MAX(time_end) l FROM bars_1h WHERE provider=$1 AND symbol_id=$2",
             )
             .bind(&prov)
             .bind(inst_id)
@@ -205,11 +195,10 @@ pub async fn get_extent(
         }
         Topic::Candles1d => {
             let row = sqlx::query(
-                "SELECT MIN(time_end) e, MAX(time_end) l FROM bars WHERE provider=$1 AND symbol_id=$2 AND resolution=$3",
+                "SELECT MIN(time_end) e, MAX(time_end) l FROM bars_1d WHERE provider=$1 AND symbol_id=$2",
             )
             .bind(&prov)
             .bind(inst_id)
-            .bind(tt_types::data::models::Resolution::Daily.to_string())
             .fetch_one(conn)
             .await?;
             (
@@ -299,12 +288,12 @@ pub async fn get_time_indexed(
 
     match topic {
         Topic::Candles1s => {
+            let resolution = Resolution::Seconds(1);
             let rows = sqlx::query(
-                "SELECT time_start, time_end, open, high, low, close, volume, ask_volume, bid_volume FROM bars WHERE provider=$1 AND symbol_id=$2 AND resolution=$3 AND time_end >= $4 AND time_end < $5 ORDER BY time_end ASC",
+                "SELECT time_start, time_end, open, high, low, close, volume, ask_volume, bid_volume FROM bars_1s WHERE provider=$1 AND symbol_id=$2 AND time_end >= $3 AND time_end < $4 ORDER BY time_end ASC",
             )
             .bind(&prov)
             .bind(inst_id)
-            .bind(resolution_key(&Resolution::Seconds(1)))
             .bind(start)
             .bind(end)
             .fetch_all(conn)
@@ -322,7 +311,7 @@ pub async fn get_time_indexed(
                     volume: r.get("volume"),
                     ask_volume: r.get("ask_volume"),
                     bid_volume: r.get("bid_volume"),
-                    resolution: Resolution::Seconds(1),
+                    resolution,
                 };
                 out.entry(c.time_end)
                     .or_default()
@@ -330,12 +319,12 @@ pub async fn get_time_indexed(
             }
         }
         Topic::Candles1m => {
+            let resolution = Resolution::Minutes(1);
             let rows = sqlx::query(
-                "SELECT time_start, time_end, open, high, low, close, volume, ask_volume, bid_volume FROM bars WHERE provider=$1 AND symbol_id=$2 AND resolution=$3 AND time_end >= $4 AND time_end < $5 ORDER BY time_end ASC",
+                "SELECT time_start, time_end, open, high, low, close, volume, ask_volume, bid_volume FROM bars_1m WHERE provider=$1 AND symbol_id=$2 AND time_end >= $3 AND time_end < $4 ORDER BY time_end ASC",
             )
             .bind(&prov)
             .bind(inst_id)
-            .bind(Resolution::Minutes(1).to_string())
             .bind(start)
             .bind(end)
             .fetch_all(conn)
@@ -353,7 +342,7 @@ pub async fn get_time_indexed(
                     volume: r.get("volume"),
                     ask_volume: r.get("ask_volume"),
                     bid_volume: r.get("bid_volume"),
-                    resolution: Resolution::Minutes(1),
+                    resolution,
                 };
                 out.entry(c.time_end)
                     .or_default()
@@ -361,8 +350,9 @@ pub async fn get_time_indexed(
             }
         }
         Topic::Candles1h => {
+            let resolution = Resolution::Hours(1);
             let rows = sqlx::query(
-                "SELECT time_start, time_end, open, high, low, close, volume, ask_volume, bid_volume, resolution FROM bars WHERE provider=$1 AND symbol_id=$2 AND resolution LIKE 'Hours(%' AND time_end >= $3 AND time_end < $4 ORDER BY time_end ASC",
+                "SELECT time_start, time_end, open, high, low, close, volume, ask_volume, bid_volume FROM bars_1h WHERE provider=$1 AND symbol_id=$2 AND time_end >= $3 AND time_end < $4 ORDER BY time_end ASC",
             )
             .bind(&prov)
             .bind(inst_id)
@@ -371,23 +361,6 @@ pub async fn get_time_indexed(
             .fetch_all(conn)
             .await?;
             for r in rows.iter() {
-                let res: String = r.get("resolution");
-                let resolution = if let Some(num) =
-                    res.strip_prefix("Hours(").and_then(|s| s.strip_suffix(")"))
-                {
-                    num.parse::<u8>()
-                        .ok()
-                        .map(Resolution::Hours)
-                        .unwrap_or(Resolution::Hours(1))
-                } else if res.starts_with("hr") {
-                    res.trim_start_matches("hr")
-                        .parse::<u8>()
-                        .ok()
-                        .map(Resolution::Hours)
-                        .unwrap_or(Resolution::Hours(1))
-                } else {
-                    Resolution::Hours(1)
-                };
                 let c = Candle {
                     symbol: instrument.to_string(),
                     instrument: instrument.clone(),
@@ -408,12 +381,12 @@ pub async fn get_time_indexed(
             }
         }
         Topic::Candles1d => {
+            let resolution = Resolution::Daily;
             let rows = sqlx::query(
-                "SELECT time_start, time_end, open, high, low, close, volume, ask_volume, bid_volume FROM bars WHERE provider=$1 AND symbol_id=$2 AND resolution=$3 AND time_end >= $4 AND time_end < $5 ORDER BY time_end ASC",
+                "SELECT time_start, time_end, open, high, low, close, volume, ask_volume, bid_volume FROM bars_1d WHERE provider=$1 AND symbol_id=$2 AND time_end >= $3 AND time_end < $4 ORDER BY time_end ASC",
             )
             .bind(&prov)
             .bind(inst_id)
-            .bind(Resolution::Daily.to_string())
             .bind(start)
             .bind(end)
             .fetch_all(conn)
@@ -431,7 +404,7 @@ pub async fn get_time_indexed(
                     volume: r.get("volume"),
                     ask_volume: r.get("ask_volume"),
                     bid_volume: r.get("bid_volume"),
-                    resolution: Resolution::Daily,
+                    resolution,
                 };
                 out.entry(c.time_end)
                     .or_default()
@@ -608,12 +581,12 @@ pub async fn get_range(
     let lim = limit.clamp(1, 10_000) as i64;
     match topic {
         Topic::Candles1s => {
+            let resolution = Resolution::Seconds(1);
             let rows = sqlx::query(
-                "SELECT time_start, time_end, open, high, low, close, volume, ask_volume, bid_volume FROM bars WHERE provider=$1 AND symbol_id=$2 AND resolution=$3 AND time_end >= $4 AND time_end < $5 ORDER BY time_end ASC LIMIT $6"
+                "SELECT time_start, time_end, open, high, low, close, volume, ask_volume, bid_volume FROM bars_1s WHERE provider=$1 AND symbol_id=$2 AND time_end >= $3 AND time_end < $4 ORDER BY time_end ASC LIMIT $5"
             )
             .bind(&prov)
             .bind(inst_id)
-            .bind(resolution_key(&Resolution::Seconds(1)))
             .bind(start)
             .bind(end)
             .bind(lim)
@@ -633,7 +606,7 @@ pub async fn get_range(
                     volume: r.get("volume"),
                     ask_volume: r.get("ask_volume"),
                     bid_volume: r.get("bid_volume"),
-                    resolution: Resolution::Seconds(1),
+                    resolution,
                 })
                 .collect();
             let batch = tt_types::wire::BarsBatch {
@@ -648,12 +621,12 @@ pub async fn get_range(
             Ok((vec![tt_types::wire::Response::BarBatch(batch)], next))
         }
         Topic::Candles1m => {
+            let resolution = Resolution::Minutes(1);
             let rows = sqlx::query(
-                "SELECT time_start, time_end, open, high, low, close, volume, ask_volume, bid_volume FROM bars WHERE provider=$1 AND symbol_id=$2 AND resolution=$3 AND time_end >= $4 AND time_end < $5 ORDER BY time_end ASC LIMIT $6"
+                "SELECT time_start, time_end, open, high, low, close, volume, ask_volume, bid_volume FROM bars_1m WHERE provider=$1 AND symbol_id=$2 AND time_end >= $3 AND time_end < $4 ORDER BY time_end ASC LIMIT $5"
             )
             .bind(&prov)
             .bind(inst_id)
-            .bind(Resolution::Minutes(1).to_string())
             .bind(start)
             .bind(end)
             .bind(lim)
@@ -673,7 +646,7 @@ pub async fn get_range(
                     volume: r.get("volume"),
                     ask_volume: r.get("ask_volume"),
                     bid_volume: r.get("bid_volume"),
-                    resolution: Resolution::Minutes(1),
+                    resolution,
                 })
                 .collect();
             let batch = tt_types::wire::BarsBatch {
@@ -688,8 +661,9 @@ pub async fn get_range(
             Ok((vec![tt_types::wire::Response::BarBatch(batch)], next))
         }
         Topic::Candles1h => {
+            let resolution = Resolution::Hours(1);
             let rows = sqlx::query(
-                "SELECT time_start, time_end, open, high, low, close, volume, ask_volume, bid_volume, resolution FROM bars WHERE provider=$1 AND symbol_id=$2 AND resolution LIKE 'Hours(%' AND time_end >= $3 AND time_end < $4 ORDER BY time_end ASC LIMIT $5"
+                "SELECT time_start, time_end, open, high, low, close, volume, ask_volume, bid_volume FROM bars_1h WHERE provider=$1 AND symbol_id=$2 AND time_end >= $3 AND time_end < $4 ORDER BY time_end ASC LIMIT $5"
             )
             .bind(&prov)
             .bind(inst_id)
@@ -712,27 +686,7 @@ pub async fn get_range(
                     volume: r.get("volume"),
                     ask_volume: r.get("ask_volume"),
                     bid_volume: r.get("bid_volume"),
-                    // If you stored explicit hr10, keep it; otherwise default to 1h
-                    resolution: {
-                        let res: String = r.get("resolution");
-                        if let Some(num) =
-                            res.strip_prefix("Hours(").and_then(|s| s.strip_suffix(")"))
-                        {
-                            num.parse::<u8>()
-                                .ok()
-                                .map(Resolution::Hours)
-                                .unwrap_or(Resolution::Hours(1))
-                        } else if res.starts_with("hr") {
-                            // Backward compatibility if older keys were stored
-                            res.trim_start_matches("hr")
-                                .parse::<u8>()
-                                .ok()
-                                .map(Resolution::Hours)
-                                .unwrap_or(Resolution::Hours(1))
-                        } else {
-                            Resolution::Hours(1)
-                        }
-                    },
+                    resolution,
                 })
                 .collect();
             let batch = tt_types::wire::BarsBatch {
@@ -747,12 +701,12 @@ pub async fn get_range(
             Ok((vec![tt_types::wire::Response::BarBatch(batch)], next))
         }
         Topic::Candles1d => {
+            let resolution = Resolution::Daily;
             let rows = sqlx::query(
-                "SELECT time_start, time_end, open, high, low, close, volume, ask_volume, bid_volume FROM bars_1m WHERE provider=$1 AND symbol_id=$2 AND resolution=$3 AND time_end >= $4 AND time_end < $5 ORDER BY time_end ASC LIMIT $6"
+                "SELECT time_start, time_end, open, high, low, close, volume, ask_volume, bid_volume FROM bars_1d WHERE provider=$1 AND symbol_id=$2 AND time_end >= $3 AND time_end < $4 ORDER BY time_end ASC LIMIT $5"
             )
             .bind(&prov)
             .bind(inst_id)
-            .bind(Resolution::Daily.to_string())
             .bind(start)
             .bind(end)
             .bind(lim)
@@ -772,7 +726,7 @@ pub async fn get_range(
                     volume: r.get("volume"),
                     ask_volume: r.get("ask_volume"),
                     bid_volume: r.get("bid_volume"),
-                    resolution: Resolution::Daily,
+                    resolution,
                 })
                 .collect();
             let batch = tt_types::wire::BarsBatch {
@@ -912,7 +866,10 @@ pub async fn get_symbols(
     };
     let sql = format!(
         "SELECT DISTINCT i.sym FROM instrument i
-         WHERE EXISTS (SELECT 1 FROM bars b WHERE b.symbol_id=i.id) OR
+         WHERE EXISTS (SELECT 1 FROM bars_1s b WHERE b.symbol_id=i.id AND b.provider=$1) OR
+               EXISTS (SELECT 1 FROM bars_1m b WHERE b.symbol_id=i.id AND b.provider=$1) OR
+               EXISTS (SELECT 1 FROM bars_1h b WHERE b.symbol_id=i.id AND b.provider=$1) OR
+               EXISTS (SELECT 1 FROM bars_1d b WHERE b.symbol_id=i.id AND b.provider=$1) OR
                EXISTS (SELECT 1 FROM tick t WHERE t.symbol_id=i.id AND t.provider=$1) OR
                EXISTS (SELECT 1 FROM bbo q WHERE q.symbol_id=i.id AND q.provider=$1){} ORDER BY i.sym",
         like_sql
