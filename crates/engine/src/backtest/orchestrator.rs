@@ -70,7 +70,7 @@ impl Default for BacktestConfig {
 /// - EngineRuntime in backtest mode (consumes the bus)
 /// - User strategy
 ///
-/// Returns the EngineHandle and the feeder handle (so caller can await/stop as needed).
+/// Spawns the backtest orchestrator and feeder; returns Ok(()) when initialization completes.
 pub async fn start_backtest<S: Strategy>(
     conn: tt_database::init::Connection,
     mut cfg: BacktestConfig,

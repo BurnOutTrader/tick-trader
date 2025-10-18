@@ -21,7 +21,7 @@ Hot loop ordering
 
 Command queue
 - Type: crossbeam::queue::ArrayQueue<Command>; bounded (default 4096) for backpressure isolation.
-- Enqueued by EngineHandle::{subscribe_now,unsubscribe_now,place_now} from strategy callbacks.
+- Enqueued by statics helpers (subscriptions::subscribe/unsubscribe, order_placement::place_order) from strategy callbacks.
 - Drained between messages and also once immediately after on_start to send early subscribes.
 
 SHM workers
@@ -35,10 +35,10 @@ Backpressure hints
 
 Consistency guarantees
 - Marks before callbacks: getters like is_long/is_flat see fresh state corresponding to the current event.
-- Single-threaded strategy: the engine is the sole caller; avoid sharing EngineHandle across threads if you mutate your strategy state externally.
+- Single-threaded strategy: the engine is the sole caller; avoid cross-thread mutation of your strategy state.
 
 Optional async helpers
-- Discovery: EngineHandle::list_instruments(provider, pattern).await with short timeouts.
+- Discovery: use EngineRuntime::list_instruments(provider, pattern).await (or provider-side tooling) with short timeouts.
 - Snapshots: EngineRuntime::last_orders/last_positions/last_accounts for tooling and dashboards.
 
 ASCII map

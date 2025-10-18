@@ -24,6 +24,7 @@ fn dt_to_ns(dt: DateTime<Utc>) -> u64 {
 
 /// Set global clock to Live mode (system time).
 #[inline]
+#[allow(dead_code)]
 pub(crate) fn set_live_clock() {
     *CLOCK_MODE.write().expect("poisoned clock mode") = ClockMode::Live;
 }

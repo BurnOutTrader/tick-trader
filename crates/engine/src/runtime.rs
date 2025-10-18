@@ -65,12 +65,12 @@ impl EngineRuntime {
         rt
     }
 
-    /// Start the engine processing loop and hand an EngineHandle to the strategy.
+    /// Start the engine processing loop and invoke strategy.on_start().
     ///
     /// Parameters:
-    /// - strategy: Your Strategy implementation; on_start will be invoked with an EngineHandle.
+    /// - strategy: Your Strategy implementation; on_start will be invoked synchronously.
     ///
-    /// Returns: EngineHandle for issuing subscriptions and orders from your strategy.
+    /// Returns: Ok(()) after starting; the engine task continues running until stopped.
     pub async fn start<S: Strategy>(
         &mut self,
         mut strategy: S,

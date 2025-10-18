@@ -21,7 +21,7 @@
 
 The engine can place live orders and is intended strictly for testing and evaluation. Do not use in production.
 
-- Surface EngineHandle helpers via top‑level exports
+- Export statics helpers for strategies via top‑level modules (e.g., clock::time_now, subscriptions::subscribe, order_placement::place_order)
 - Move non-strategy functions and objects into features
 - Live consolidator warm up and cache
 - Automatic switching of consolidator types to live feed types post warm up
@@ -82,7 +82,7 @@ pub trait Strategy: Send + 'static {
 pub struct MyStrategy;
 
 impl Strategy for MyStrategy {
-  fn on_start(&mut self, _h: EngineHandle) {}
+  fn on_start(&mut self) {}
   fn on_stop(&mut self) {}
 
   fn on_tick(&mut self, _t: &Tick, _provider_kind: ProviderKind) {}

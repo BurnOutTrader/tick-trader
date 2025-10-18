@@ -12,7 +12,7 @@ This guide shows how to write strategies on top of the engine, what helper APIs 
 Implement the Strategy trait to receive data and lifecycle events. The trait is synchronous: no async/await inside callbacks. The engine is the only task that calls your strategy, in a single-threaded, deterministic loop.
 
 Key callbacks (as implemented today):
-- Lifecycle: on_start(&mut self, EngineHandle), on_stop(&mut self)
+- Lifecycle: on_start(&mut self), on_stop(&mut self)
 - Market data: on_tick(&mut self, &Tick, ProviderKind), on_quote(&mut self, &Bbo, ProviderKind), on_bar(&mut self, &Candle, ProviderKind), on_mbp10(&mut self, &Mbp10, ProviderKind)
 - Portfolio: on_orders_batch(&mut self, &OrdersBatch), on_positions_batch(&mut self, &PositionsBatch), on_account_delta(&mut self, &[AccountDelta])
 - Trades: on_trades_closed(&mut self, Vec<Trade>)
@@ -54,7 +54,7 @@ impl Strategy for MyStrategy {
 ---
 ## Engine runtime and helpers (current)
 
-The runtime and handle expose synchronous helper methods. Use EngineHandle inside callbacks for low-latency fire-and-forget actions; use EngineRuntime outside callbacks (setup, tools, discovery, batch operations).
+The runtime and statics expose synchronous helper methods. Use statics::* inside callbacks for low-latency fire-and-forget actions (e.g., subscriptions::subscribe, order_placement::place_order); use EngineRuntime outside callbacks (setup, tools, discovery, batch operations).
 
 EngineRuntime (synchronous; returns Results)
 - Subscriptions
@@ -84,10 +84,10 @@ EngineRuntime (synchronous; returns Results)
   - `request_with_corr(|corr_id| -> Request) -> tokio::sync::oneshot::Receiver<Response>`: correlated single-response helper.
   - Historical latest refresh for a key: `update_historical_latest_by_key(provider: ProviderKind, topic: Topic, instrument: Instrument) -> anyhow::Result<()>`
 - Lifecycle
-  - `start(strategy: S) -> anyhow::Result<EngineHandle>` where `S: Strategy` — invokes on_start synchronously, runs engine loop.
+  - `start(strategy: S, backtest_mode: bool) -> anyhow::Result<()>` — invokes on_start synchronously, runs engine loop.
   - `stop() -> anyhow::Result<()>` — stops engine, detaches tasks.
 
-EngineHandle (low-latency from callbacks)
+Statics helpers (low-latency from callbacks)
 - Consolidators
   - `add_consolidator(from: DataTopic, for_key: SymbolKey, cons: Box<dyn Consolidator + Send>)`
   - `remove_consolidator(from: DataTopic, for_key: SymbolKey)`
