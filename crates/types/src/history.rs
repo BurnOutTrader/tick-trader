@@ -5,6 +5,8 @@ use crate::securities::symbols::Instrument;
 use chrono::{DateTime, Utc};
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use uuid::Uuid;
+use crate::data::mbp10::Mbp10;
+use crate::data::mbp1::Mbp1;
 
 /// What a backtest wants to pull.
 #[derive(Archive, RkyvDeserialize, RkyvSerialize, PartialEq, Clone, Debug)]
@@ -24,6 +26,8 @@ pub enum HistoryEvent {
     Candle(Candle),
     // Optional future:
     Bbo(Bbo),
+    Mbp10(Mbp10),
+    Mbp1(Mbp1),
     EndOfStream,          // provider finished successfully
     Error(anyhow::Error), // provider aborted
 }

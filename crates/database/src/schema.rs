@@ -173,6 +173,35 @@ pub async fn ensure_schema(pool: &Pool<Postgres>) -> Result<()> {
     CREATE INDEX IF NOT EXISTS ix_mbp10_ts ON mbp10 (provider, symbol_id, ts_event_ns);
     "#;
 
+    // MBP1 events: top-of-book updates mirroring tt-types::data::mbp1::Mbp1
+    let create_mbp1 = r#"
+    CREATE TABLE IF NOT EXISTS mbp1 (
+        provider      TEXT         NOT NULL,
+        symbol_id     BIGINT       NOT NULL REFERENCES instrument(id),
+        ts_recv_ns    BIGINT       NOT NULL,
+        ts_event_ns   BIGINT       NOT NULL,
+        rtype         SMALLINT     NOT NULL,
+        publisher_id  INTEGER      NOT NULL,
+        instrument_ref INTEGER     NOT NULL,
+        action        SMALLINT     NOT NULL,
+        side          SMALLINT     NOT NULL,
+        depth         SMALLINT     NOT NULL,
+        price         NUMERIC(18,9) NOT NULL,
+        size          NUMERIC(18,9) NOT NULL,
+        flags         SMALLINT     NOT NULL,
+        ts_in_delta   INTEGER      NOT NULL,
+        sequence      BIGINT       NOT NULL,
+        bid_px_00     NUMERIC(18,9) NOT NULL,
+        ask_px_00     NUMERIC(18,9) NOT NULL,
+        bid_sz_00     NUMERIC(18,9) NOT NULL,
+        ask_sz_00     NUMERIC(18,9) NOT NULL,
+        bid_ct_00     INTEGER      NOT NULL,
+        ask_ct_00     INTEGER      NOT NULL,
+        PRIMARY KEY (provider, symbol_id, ts_event_ns, sequence)
+    );
+    CREATE INDEX IF NOT EXISTS ix_mbp1_ts ON mbp1 (provider, symbol_id, ts_event_ns);
+    "#;
+
     // Series extents cache for fast earliest/latest queries.
     let create_series_extent = r#"
     CREATE TABLE IF NOT EXISTS series_extent (
@@ -207,6 +236,7 @@ pub async fn ensure_schema(pool: &Pool<Postgres>) -> Result<()> {
     pool.execute(create_ticks).await?;
     pool.execute(create_bbo).await?;
     pool.execute(create_mbp10).await?;
+    pool.execute(create_mbp1).await?;
     pool.execute(create_series_extent).await?;
     pool.execute(create_kvp).await?;
 

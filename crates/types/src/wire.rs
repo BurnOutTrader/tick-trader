@@ -560,6 +560,7 @@ pub enum Response {
     // Backtest orchestrator -> engine signal that logical time has advanced to `now`
     BacktestTimeUpdated {
         now: DateTime<Utc>,
+        latest_time: Option<DateTime<Utc>>,
     },
     // Signal that a backtest session has reached its configured end; consumers should stop gracefully.
     BacktestCompleted {
@@ -573,6 +574,7 @@ pub enum Response {
         corr_id: u64,
         success: bool,
         error_msg: Option<String>,
+        latest_time: Option<DateTime<Utc>>,
     },
     // Single items (for completeness; bus generally batches)
     Tick {

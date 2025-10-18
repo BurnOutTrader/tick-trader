@@ -32,6 +32,7 @@ pub enum Topic {
     Quotes = 2,
     MBP10 = 3,
     Candles1s = 4,
+    MBP1 = 14,
     Candles1m = 5,
     Candles1h = 6,
     Candles1d = 7,
@@ -60,6 +61,7 @@ impl Display for Topic {
             Self::Fills => write!(f, "Fills"),
             Self::MarketData => write!(f, "MarketData"),
             Self::Other => write!(f, "Other"),
+            Self::MBP1 => write!(f, "MBP1"),
         }
     }
 }
@@ -68,7 +70,7 @@ impl Topic {
     pub fn id(self) -> TopicId {
         use crate::keys::Topic::{
             AccountEvt, Candles1d, Candles1h, Candles1m, Candles1s, Fills, MBP10, MarketData,
-            Orders, Other, Positions, Quotes, Ticks,
+            Orders, Other, Positions, Quotes, Ticks, MBP1
         };
         let id = match self {
             Ticks => 1,
@@ -84,6 +86,7 @@ impl Topic {
             Fills => 11,
             MarketData => 12,
             Other => 13,
+            MBP1 => 14,
         };
         TopicId(id)
     }

@@ -140,7 +140,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Backtest for a recent 30-day period
     let end_date = Utc::now().date_naive();
-    let start_date = end_date - chrono::Duration::days(30);
+    let start_date = end_date - chrono::Duration::days(20);
 
     let account_name = AccountName::new("TST-1234".to_string());
     let inst = Instrument::from_str("MNQ.Z25")?;

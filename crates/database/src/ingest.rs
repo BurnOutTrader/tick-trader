@@ -11,6 +11,7 @@ use crate::init::Connection;
 use crate::schema::{get_or_create_instrument_id, upsert_latest_bar_1m, upsert_series_extent};
 use tt_types::data::core::{Bbo, Candle, Tick};
 use tt_types::data::mbp10::Mbp10;
+use tt_types::data::mbp1::Mbp1;
 use tt_types::keys::Topic;
 use tt_types::securities::security::FuturesContract;
 
@@ -509,4 +510,81 @@ pub async fn ingest_contracts_map(
 
     tx.commit().await?;
     Ok(())
+}
+
+
+/// Insert a batch of MBP-1 top-of-book events with de-duplication by (provider, symbol_id, ts_event_ns, sequence).
+pub async fn ingest_mbp1(
+    conn: &Connection,
+    provider: ProviderKind,
+    instrument: &Instrument,
+    rows: Vec<Mbp1>,
+) -> Result<u64> {
+    if rows.is_empty() {
+        return Ok(0);
+    }
+    let sym = instrument.to_string();
+    let inst_id = get_or_create_instrument_id(conn, &sym).await?;
+    let provider_code = crate::paths::provider_kind_to_db_string(provider);
+
+    // Batch to avoid Postgres 65535 bind parameter limit: mbp1 has 21 binds/row
+    const MAX_BIND_PARAMS: usize = 65_000;
+    const COLS_PER_MBP1: usize = 21;
+    let max_rows_per_batch = (MAX_BIND_PARAMS / COLS_PER_MBP1).max(1);
+
+    let mut total_rows: u64 = 0;
+    for chunk in rows.chunks(max_rows_per_batch) {
+        let mut qb = QueryBuilder::new(
+            "INSERT INTO mbp1 (provider, symbol_id, ts_recv_ns, ts_event_ns, rtype, publisher_id, instrument_ref, action, side, depth, price, size, flags, ts_in_delta, sequence, bid_px_00, ask_px_00, bid_sz_00, ask_sz_00, bid_ct_00, ask_ct_00) ",
+        );
+        qb.push_values(chunk.iter(), |mut b, r| {
+            let ts_recv_ns = r.ts_recv.timestamp_nanos_opt().unwrap_or(0);
+            let ts_event_ns = r.ts_event.timestamp_nanos_opt().unwrap_or(0);
+            let action_i16: i16 = u8::from(r.action.clone()) as i16;
+            let side_i16: i16 = u8::from(r.side) as i16;
+            let flags_i16: i16 = u8::from(r.flags) as i16;
+            b.push_bind(&provider_code)
+                .push_bind(inst_id)
+                .push_bind(ts_recv_ns)
+                .push_bind(ts_event_ns)
+                .push_bind(r.rtype as i16)
+                .push_bind(r.publisher_id as i32)
+                .push_bind(r.instrument_id as i32)
+                .push_bind(action_i16)
+                .push_bind(side_i16)
+                .push_bind(r.depth as i16)
+                .push_bind(r.price)
+                .push_bind(r.size)
+                .push_bind(flags_i16)
+                .push_bind(r.ts_in_delta)
+                .push_bind(r.sequence as i64)
+                .push_bind(r.bid_px_00)
+                .push_bind(r.ask_px_00)
+                .push_bind(r.bid_sz_00)
+                .push_bind(r.ask_sz_00)
+                .push_bind(r.bid_ct_00 as i32)
+                .push_bind(r.ask_ct_00 as i32);
+        });
+        qb.push(" ON CONFLICT (provider, symbol_id, ts_event_ns, sequence) DO NOTHING ");
+        let res = qb.build().execute(conn).await?;
+        total_rows += res.rows_affected();
+    }
+
+    // Update extent cache with min/max ts_event
+    if let (Some(min_ts), Some(max_ts)) = (
+        rows.iter().map(|r| r.ts_event).min(),
+        rows.iter().map(|r| r.ts_event).max(),
+    ) {
+        upsert_series_extent(
+            conn,
+            &provider_code,
+            inst_id,
+            Topic::MBP1 as i16,
+            min_ts,
+            max_ts,
+        )
+        .await?;
+    }
+
+    Ok(total_rows)
 }

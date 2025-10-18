@@ -16,6 +16,7 @@ use tokio_util::codec::length_delimited::LengthDelimitedCodec;
 use tokio_util::codec::{FramedRead, FramedWrite};
 use tracing::{error, info, trace, warn};
 use tt_database::init::{Connection, init_db};
+use tt_types::data::core::{DateTime, Utc};
 use tt_types::keys::{AccountKey, SymbolKey, Topic};
 use tt_types::providers::ProviderKind;
 use tt_types::securities::security::FuturesContract;
@@ -147,7 +148,7 @@ pub trait UpstreamManager: Send + Sync {
         provider: tt_types::providers::ProviderKind,
         topic: Topic,
         instrument: tt_types::securities::symbols::Instrument,
-    ) -> anyhow::Result<()>;
+    ) -> anyhow::Result<Option<DateTime<Utc>>>;
 }
 
 impl Router {
@@ -574,9 +575,9 @@ impl Router {
                         let res = mgr
                             .update_historical_latest_by_key(prov, topic, instr.clone())
                             .await;
-                        let (success, error_msg) = match res {
-                            Ok(_) => (true, None),
-                            Err(e) => (false, Some(e.to_string())),
+                        let (success, error_msg,latest_time) = match res {
+                            Ok(t) => (true, None, t),
+                            Err(e) => (false, Some(e.to_string()), None),
                         };
                         let _ = router
                             .send_to(
@@ -588,6 +589,7 @@ impl Router {
                                     corr_id: corr,
                                     success,
                                     error_msg,
+                                    latest_time
                                 },
                             )
                             .await;
@@ -604,6 +606,7 @@ impl Router {
                                 corr_id: req.corr_id,
                                 success: false,
                                 error_msg: Some("no backend manager".into()),
+                                latest_time: None
                             },
                         )
                         .await;

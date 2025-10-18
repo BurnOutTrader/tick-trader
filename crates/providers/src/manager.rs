@@ -1,7 +1,7 @@
 use crate::download_manager::DownloadManager;
 use crate::worker::ProviderWorker;
 use anyhow::Result;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use std::sync::Arc;
 use tracing::error;
@@ -218,7 +218,7 @@ impl UpstreamManager for ProviderManager {
         provider: ProviderKind,
         topic: tt_types::keys::Topic,
         instrument: tt_types::securities::symbols::Instrument,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Option<DateTime<Utc>>> {
         // Ensure clients for this provider exist
         self.ensure_clients(provider).await?;
         // Find historical client
@@ -281,7 +281,7 @@ impl UpstreamManager for ProviderManager {
         // Diagnostics: capture latest after
         let after_latest = latest_data_time(&db, provider, &instrument, topic).await?;
         tracing::info!(provider=?provider, instrument=%instrument, topic=?topic, before_latest=?before_latest, after_latest=?after_latest, advanced=?after_latest.as_ref().zip(before_latest).map(|(a,b)| *a > b).unwrap_or(after_latest.is_some() && before_latest.is_none()), "historical latest update finished");
-        Ok(())
+        Ok(after_latest)
     }
 }
 

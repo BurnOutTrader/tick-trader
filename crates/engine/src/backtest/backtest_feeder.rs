@@ -1696,7 +1696,7 @@ impl BacktestFeeder {
                                 }
                             }
                             // After draining up to watermark (and emitting due orders), notify runtime of logical time
-                            let _ = bus.broadcast(Response::BacktestTimeUpdated { now });
+                            let _ = bus.broadcast(Response::BacktestTimeUpdated { now, latest_time: Some(now) });
 
                             // If we have an end range and reached/passed it, emit BacktestCompleted once
                             if !completed_emitted

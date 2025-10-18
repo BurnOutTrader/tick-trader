@@ -7,9 +7,11 @@ use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 use tokio::time::{Duration as TokioDuration, timeout};
 use tracing::info;
-use tt_database::ingest::{ingest_bbo, ingest_candles, ingest_ticks};
+use tt_database::ingest::{ingest_bbo, ingest_candles, ingest_mbp1, ingest_mbp10, ingest_ticks};
 use tt_database::init::{Connection, init_db};
 use tt_database::queries::latest_data_time;
+use tt_types::data::mbp10::Mbp10;
+use tt_types::data::mbp1::Mbp1;
 use tt_types::data::models::Resolution;
 use tt_types::engine_id::EngineUuid;
 use tt_types::history::{HistoricalRangeRequest, HistoryEvent};
@@ -295,6 +297,8 @@ async fn run_download(
         let mut ticks: Vec<tt_types::data::core::Tick> = Vec::new();
         let mut candles: Vec<tt_types::data::core::Candle> = Vec::new();
         let mut quotes: Vec<tt_types::data::core::Bbo> = Vec::new();
+        let mut mdp10:  Vec<Mbp10> = Vec::new();
+        let mut mdp1:  Vec<Mbp1> = Vec::new();
         let mut saw_candle_events: bool = false;
         // Diagnostics counters for candles
         let total_events: usize = events.len();
@@ -327,23 +331,29 @@ async fn run_download(
                     candles.push(c);
                 }
                 HistoryEvent::Tick(t) => {
-                    if matches!(req.topic, Topic::Ticks) {
-                        let ts = t.time;
-                        max_ts = Some(max_ts.map_or(ts, |m| m.max(ts)));
-                        ticks.push(t);
-                    }
+                    let ts = t.time;
+                    max_ts = Some(max_ts.map_or(ts, |m| m.max(ts)));
+                    ticks.push(t);
                 }
                 HistoryEvent::Bbo(q) => {
-                    if matches!(req.topic, Topic::Quotes) {
-                        let ts = q.time;
-                        max_ts = Some(max_ts.map_or(ts, |m| m.max(ts)));
-                        quotes.push(q);
-                    }
+                    let ts = q.time;
+                    max_ts = Some(max_ts.map_or(ts, |m| m.max(ts)));
+                    quotes.push(q);
                 }
                 HistoryEvent::EndOfStream => break,
                 HistoryEvent::Error(e) => {
                     tracing::error!(error=%e, %cursor, "history fetch error");
                     continue;
+                }
+                HistoryEvent::Mbp10(m) => {
+                    let ts = m.ts_event;
+                    max_ts = Some(max_ts.map_or(ts, |m| m.max(ts)));
+                    mdp10.push(m);
+                }
+                HistoryEvent::Mbp1(m) => {
+                    let ts = m.ts_event;
+                    max_ts = Some(max_ts.map_or(ts, |m| m.max(ts)));
+                    mdp1.push(m);
                 }
             }
         }
@@ -409,7 +419,30 @@ async fn run_download(
                     last_rows_affected = Some(0);
                 }
             }
-            Topic::MBP10 => {}
+            Topic::MBP10 => {
+                if !mdp10.is_empty() {
+                    let rows =
+                        ingest_mbp10(&connection, req.provider_kind, &req.instrument, mdp10)
+                            .await?;
+                    tracing::debug!(topic=?req.topic, rows_affected=rows, start=%cursor, end=%end, "persisted mdp10");
+                    last_rows_affected = Some(rows);
+                } else {
+                    tracing::debug!(start=%cursor, end=%end, "no mdp10 returned");
+                    last_rows_affected = Some(0);
+                }
+            }
+            Topic::MBP1 => {
+                if !mdp1.is_empty() {
+                    let rows =
+                        ingest_mbp1(&connection, req.provider_kind, &req.instrument, mdp1)
+                            .await?;
+                    tracing::debug!(topic=?req.topic, rows_affected=rows, start=%cursor, end=%end, "persisted mdp1");
+                    last_rows_affected = Some(rows);
+                } else {
+                    tracing::debug!(start=%cursor, end=%end, "no mdp1 returned");
+                    last_rows_affected = Some(0);
+                }
+            }
             _ => {}
         }
 
