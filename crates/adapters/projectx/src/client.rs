@@ -4,6 +4,7 @@ use crate::http::error::PxError;
 use crate::http::models::{ContractSearchResponse, RetrieveBarsReq, RetrieveBarsResponse};
 use crate::websocket::client::{PxWebSocketClient, px_format_from_instrument};
 use ahash::AHashMap;
+use anyhow::anyhow;
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, Utc};
 use dashmap::DashMap;
@@ -12,7 +13,6 @@ use rust_decimal::Decimal;
 use rust_decimal::prelude::FromPrimitive;
 use std::str::FromStr;
 use std::sync::Arc;
-use anyhow::anyhow;
 use tokio::sync::RwLock;
 use tracing::error;
 use tt_bus::Router;
@@ -368,14 +368,18 @@ impl PXClient {
                 max_s
             );
 
+            // Compute max END in this batch before moving it into out
+            let max_end_in_batch = batch.iter().map(|c| c.time_end).max().unwrap();
+
             out.extend(batch);
+            // Update anchors: keep start-based watermark for filtering/logging
             prev_max_start = Some(match prev_max_start {
                 Some(prev) => prev.max(max_s),
                 None => max_s,
             });
 
-            // **Critical**: advance by last bar start + 1s (provider accuracy is seconds)
-            cur_start = prev_max_start.unwrap() + chrono::Duration::seconds(1);
+            // Advance by last bar END + 1s to avoid start-boundary stalls on 1s bars
+            cur_start = (max_end_in_batch + chrono::Duration::seconds(1)).min(end);
         }
 
         // Finalize: sort, dedup by start, clip
@@ -480,8 +484,8 @@ impl MarketDataProvider for PXClient {
             }
             Topic::Candles1s | Topic::Candles1m | Topic::Candles1h | Topic::Candles1d => {
                 self.websocket
-                .unsubscribe_contract_candles(instrument.as_str())
-                .await
+                    .unsubscribe_contract_candles(instrument.as_str())
+                    .await
             }
             _ => anyhow::bail!("Unsupported topic: {:?}", topic),
         }
@@ -853,7 +857,7 @@ impl HistoricalDataProvider for PXClient {
                 Topic::Candles1m => Utc::now() - Duration::weeks(12),
                 Topic::Candles1h => Utc::now() - Duration::days(365),
                 Topic::Candles1d => Utc::now() - Duration::days(365),
-                _ => return Err(anyhow!("Unsupported topic for historical data".to_string()))
+                _ => return Err(anyhow!("Unsupported topic for historical data".to_string())),
             };
             return Ok(Some(dt));
         }
