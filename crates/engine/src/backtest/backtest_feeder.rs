@@ -660,7 +660,8 @@ impl BacktestFeeder {
                                                 let no_notify: Option<Arc<Notify>> = None;
                                                 for (_t, vec) in map.iter() {
                                                     for item in vec {
-                                                        emit_one(bus, item, provider, &no_notify).await;
+                                                        emit_one(bus, item, provider, &no_notify)
+                                                            .await;
                                                     }
                                                 }
                                             }
@@ -674,10 +675,8 @@ impl BacktestFeeder {
                                     instrument: instr.clone(),
                                 });
                                 // Avoid startup race: only await runtime acknowledgment if watermark is already established
-                                if watermark.is_some() {
-                                    if let Some(n) = &notify {
-                                        n.notified().await;
-                                    }
+                                if watermark.is_some() && let Some(n) = &notify {
+                                    n.notified().await;
                                 }
 
                                 // Prime first window after start
