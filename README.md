@@ -58,7 +58,7 @@ Just implement the strategy trait
 ```rust
 
 pub trait Strategy: Send + 'static {
-    fn on_start(&mut self, _h: EngineHandle) {}
+    fn on_start(&mut self) {}
     fn on_stop(&mut self) {}
 
     fn on_tick(&mut self, _t: &Tick, _provider_kind: ProviderKind) {}
@@ -131,26 +131,18 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-There are strategy helpers for queries, like portfolio, orders, positions etc, you access these via the engine handle
-```rust
-fn on_start(&mut self, _h: EngineHandle) {}
-```
 
-Your strategy should store this handle after starting 
 ```rust
 pub struct TotalLiveTestStrategy {
-    engine: Option<EngineHandle>,
 }
 impl Strategy for TotalLiveTestStrategy {
-    fn on_start(&mut self, h: EngineHandle) {
-        // store handle
-        self.engine = Some(h.clone());
+    fn on_start(&mut self) {
     }
 
   fn on_tick(&mut self, t: &Tick, provider_kind: ProviderKind) {
       println!("{:?}", t);
-    // then use the handle helper to place orders etc
-    let _ = h.unwrap().place_order(
+    // the engine crate will export helpers for strategies
+    let order_id = place_order(
       account.clone(),
       exec_key.clone(),
       tt_types::accounts::events::Side::Buy,
