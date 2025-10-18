@@ -494,6 +494,8 @@ Configuration (.env)
   - Optional substring filter to limit the instrument set (useful for testing).
 - AUTO_UPDATE_PX_FIRM=topstep
   - Preferred firm for ProjectX. Also ensure you have PX_<TENANT>_FIRM set (e.g., PX_TOPSTEP_FIRM=topstep) so the provider itself is scoped to the firm.
+- AUTO_UPDATE_PER_PROVIDER_CONCURRENCY=10
+  - Max number of instruments to update concurrently per provider during the daily auto-update.
 
 How provider/instrument discovery works
 - Providers are derived from ProviderSessionSpec::from_env() by scanning PX_* (and future RITHMIC_*) variables. Today, ProjectX tenants are supported.
@@ -525,6 +527,7 @@ AUTO_UPDATE_ENABLED=true
 AUTO_UPDATE_TOPICS=Candles1s,Candles1m,Candles1h,Candles1d
 AUTO_UPDATE_INSTRUMENT_FILTER=
 AUTO_UPDATE_PX_FIRM=topstep
+AUTO_UPDATE_PER_PROVIDER_CONCURRENCY=10
 
 Notes
 - The DownloadManager computes fetch windows from the latest data in your DB, so first runs may take longer as they backfill from the provider’s earliest available time.

@@ -361,8 +361,9 @@ impl PXClient {
                 batch.iter().map(|c| c.time_start).min().unwrap(),
                 batch.iter().map(|c| c.time_start).max().unwrap(),
             );
-            log::info!(
-                "candles: {} from start={} to start={}",
+            log::debug!(
+                "candles: {}: {} from start={} to start={}",
+                req.instrument,
                 batch.len(),
                 min_s,
                 max_s
