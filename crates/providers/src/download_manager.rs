@@ -236,7 +236,7 @@ async fn run_download(
     // Simplified cursoring: start from latest persisted time if available; otherwise from provider's earliest.
     let last_opt =
         latest_data_time(&connection, req.provider_kind, &req.instrument, req.topic).await?;
-    info!("Latest data time: {:?}", last_opt);
+    info!("updating from latest data time: {:?}", last_opt);
     let mut cursor: DateTime<Utc> = if let Some(ts) = last_opt {
         ts
     } else {
@@ -252,6 +252,7 @@ async fn run_download(
     }
 
     while cursor < now {
+        let now = Utc::now();
         // Pick a batch window that fits the kind/resolution.
         let span = choose_span(resolution);
         let end = (cursor + span).min(now);
@@ -378,7 +379,7 @@ async fn run_download(
                 if !ticks.is_empty() {
                     let rows = ingest_ticks(&connection, req.provider_kind, &req.instrument, ticks)
                         .await?;
-                    tracing::info!(topic=?req.topic, rows_affected=rows, start=%cursor, end=%end, "persisted ticks");
+                    tracing::debug!(topic=?req.topic, rows_affected=rows, start=%cursor, end=%end, "persisted ticks");
                     last_rows_affected = Some(rows);
                 } else {
                     tracing::debug!(start=%cursor, end=%end, "no ticks returned");
@@ -389,7 +390,7 @@ async fn run_download(
                 if !quotes.is_empty() {
                     let rows =
                         ingest_bbo(&connection, req.provider_kind, &req.instrument, quotes).await?;
-                    tracing::info!(topic=?req.topic, rows_affected=rows, start=%cursor, end=%end, "persisted bbo");
+                    tracing::debug!(topic=?req.topic, rows_affected=rows, start=%cursor, end=%end, "persisted bbo");
                     last_rows_affected = Some(rows);
                 } else {
                     tracing::debug!(start=%cursor, end=%end, "no bbo returned");
@@ -401,7 +402,7 @@ async fn run_download(
                     let rows =
                         ingest_candles(&connection, req.provider_kind, &req.instrument, candles)
                             .await?;
-                    tracing::info!(topic=?req.topic, rows_affected=rows, start=%cursor, end=%end, "persisted candles");
+                    tracing::debug!(topic=?req.topic, rows_affected=rows, start=%cursor, end=%end, "persisted candles");
                     last_rows_affected = Some(rows);
                 } else {
                     tracing::debug!(start=%cursor, end=%end, "no candles returned");
@@ -430,9 +431,9 @@ async fn run_download(
             }
             cursor = end;
         }
-        tracing::info!(topic=?req.topic, rows_affected=?last_rows_affected, cursor_old=%old_cursor, cursor_new=%cursor, max_ts=?max_ts, "cursor advance");
+        tracing::debug!(topic=?req.topic, rows_affected=?last_rows_affected, cursor_old=%old_cursor, cursor_new=%cursor, max_ts=?max_ts, "cursor advance");
     }
-    info!("Historical database update completed");
+    info!("Historical database update completed to {}", now);
     Ok(())
 }
 
