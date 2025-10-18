@@ -1017,3 +1017,39 @@ pub async fn get_contract(
         Ok(None)
     }
 }
+
+/// Daily provider auto-update stamps helpers
+pub async fn get_provider_daily_stamp(
+    conn: &Connection,
+    provider: ProviderKind,
+    utc_date: chrono::NaiveDate,
+) -> Result<Option<DateTime<Utc>>> {
+    let prov = crate::paths::provider_kind_to_db_string(provider);
+    let row = sqlx::query(
+        "SELECT completed_at FROM provider_daily_updates WHERE provider_kind=$1 AND utc_date=$2",
+    )
+    .bind(prov)
+    .bind(utc_date)
+    .fetch_optional(conn)
+    .await?;
+    Ok(row.map(|r| r.get::<DateTime<Utc>, _>("completed_at")))
+}
+
+pub async fn set_provider_daily_stamp(
+    conn: &Connection,
+    provider: ProviderKind,
+    utc_date: chrono::NaiveDate,
+    completed_at: DateTime<Utc>,
+) -> Result<()> {
+    let prov = crate::paths::provider_kind_to_db_string(provider);
+    sqlx::query(
+        "INSERT INTO provider_daily_updates (provider_kind, utc_date, completed_at) VALUES ($1, $2, $3)
+         ON CONFLICT (provider_kind, utc_date) DO UPDATE SET completed_at=EXCLUDED.completed_at",
+    )
+    .bind(prov)
+    .bind(utc_date)
+    .bind(completed_at)
+    .execute(conn)
+    .await?;
+    Ok(())
+}

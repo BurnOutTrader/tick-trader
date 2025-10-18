@@ -18,7 +18,6 @@ use tt_types::server_side::traits::{
 };
 use tt_types::wire::OrdersBatch;
 // Added for unified wait semantics and diagnostics
-use tokio::time::{Duration as TokioDuration, timeout};
 use tt_database::init::init_db;
 use tt_database::queries::latest_data_time;
 
@@ -254,28 +253,13 @@ impl UpstreamManager for ProviderManager {
         };
         let dm = &self.download_manager;
         // Use a unified wait-for-completion with timeout to prevent hangs
-        const TIMEOUT_SECS: u64 = 300;
         if let Some(handle) = dm.request_update(client.clone(), req.clone()).await? {
             tracing::info!(task_id=%handle.id(), provider=?provider, instrument=%req.instrument, topic=?req.topic, "historical latest update already inflight; waiting for completion");
-            let wait_res = timeout(TokioDuration::from_secs(TIMEOUT_SECS), handle.wait()).await;
-            match wait_res {
-                Ok(res) => res?,
-                Err(_) => {
-                    tracing::warn!(provider=?provider, instrument=%req.instrument, topic=?req.topic, timeout_secs=TIMEOUT_SECS, "historical latest update wait timed out");
-                    return Err(anyhow::anyhow!("historical update wait timed out"));
-                }
-            }
+            handle.wait().await?;
         } else {
             let handle = dm.start_update(client.clone(), req.clone()).await?;
             tracing::info!(task_id=%handle.id(), provider=?provider, instrument=%req.instrument, topic=?req.topic, "historical latest update started; waiting for completion");
-            let wait_res = timeout(TokioDuration::from_secs(TIMEOUT_SECS), handle.wait()).await;
-            match wait_res {
-                Ok(res) => res?,
-                Err(_) => {
-                    tracing::warn!(provider=?provider, instrument=%req.instrument, topic=?req.topic, timeout_secs=TIMEOUT_SECS, "historical latest update wait timed out");
-                    return Err(anyhow::anyhow!("historical update wait timed out"));
-                }
-            }
+            handle.wait().await?;
         }
 
         // Diagnostics: capture latest after
@@ -302,7 +286,7 @@ impl ProviderManager {
     pub async fn new_async(router: Arc<Router>) -> anyhow::Result<ProviderManager> {
         let session = ProviderSessionSpec::from_env();
         let download_manager = DownloadManager::new_async().await?;
-        Ok(Self {
+        let pm = Self {
             md: DashMap::new(),
             ex: DashMap::new(),
             hist: DashMap::new(),
@@ -311,7 +295,30 @@ impl ProviderManager {
             shards: 8,
             bus: router,
             session,
-        })
+        };
+        // Kick off auto-update on server launch by eagerly ensuring providers
+        if std::env::var("AUTO_UPDATE_ENABLED")
+            .map(|v| {
+                let v = v.to_ascii_lowercase();
+                v == "1" || v == "true" || v == "yes"
+            })
+            .unwrap_or(true)
+        {
+            // Iterate providers discovered from env/session; only ProjectX supported for now
+            let providers: Vec<ProviderKind> = pm
+                .session
+                .user_names
+                .keys()
+                .cloned()
+                .filter(|k| matches!(k, ProviderKind::ProjectX(_)))
+                .collect();
+            for provider in providers {
+                if let Err(e) = pm.ensure_clients(provider).await {
+                    tracing::warn!(provider=?provider, error=%e, "auto-update on launch: ensure_clients failed");
+                }
+            }
+        }
+        Ok(pm)
     }
     pub async fn with_shards_async(
         router: Arc<Router>,
@@ -319,7 +326,7 @@ impl ProviderManager {
     ) -> anyhow::Result<ProviderManager> {
         let session = ProviderSessionSpec::from_env();
         let download_manager = DownloadManager::new_async().await?;
-        Ok(Self {
+        let pm = Self {
             md: DashMap::new(),
             ex: DashMap::new(),
             hist: DashMap::new(),
@@ -328,7 +335,29 @@ impl ProviderManager {
             shards,
             bus: router,
             session,
-        })
+        };
+        // Kick off auto-update on server launch by eagerly ensuring providers
+        if std::env::var("AUTO_UPDATE_ENABLED")
+            .map(|v| {
+                let v = v.to_ascii_lowercase();
+                v == "1" || v == "true" || v == "yes"
+            })
+            .unwrap_or(true)
+        {
+            let providers: Vec<ProviderKind> = pm
+                .session
+                .user_names
+                .keys()
+                .cloned()
+                .filter(|k| matches!(k, ProviderKind::ProjectX(_)))
+                .collect();
+            for provider in providers {
+                if let Err(e) = pm.ensure_clients(provider).await {
+                    tracing::warn!(provider=?provider, error=%e, "auto-update on launch: ensure_clients failed");
+                }
+            }
+        }
+        Ok(pm)
     }
 
     pub async fn ensure_clients(&self, kind: ProviderKind) -> anyhow::Result<()> {
@@ -366,6 +395,139 @@ impl ProviderManager {
                 self.md.insert(kind, md.clone());
                 self.ex.insert(kind, ex.clone());
                 self.hist.insert(kind, hist.clone());
+
+                // Auto-update daily history on first provider initialization
+                if std::env::var("AUTO_UPDATE_ENABLED")
+                    .map(|v| {
+                        let v = v.to_ascii_lowercase();
+                        v == "1" || v == "true" || v == "yes"
+                    })
+                    .unwrap_or(true)
+                {
+                    let md_for_update = md.clone();
+                    let hist_for_update = hist.clone();
+                    let dm_for_update = self.download_manager.clone();
+                    let provider_kind = kind;
+                    let instrument_filter = std::env::var("AUTO_UPDATE_INSTRUMENT_FILTER")
+                        .ok()
+                        .filter(|s| !s.is_empty());
+                    // Parse topics env or default
+                    let topics: Vec<Topic> = std::env::var("AUTO_UPDATE_TOPICS")
+                        .unwrap_or_else(|_| "Candles1s,Candles1m,Candles1h,Candles1d".to_string())
+                        .split(',')
+                        .filter_map(|s| match s.trim() {
+                            "Candles1s" => Some(Topic::Candles1s),
+                            "Candles1m" => Some(Topic::Candles1m),
+                            "Candles1h" => Some(Topic::Candles1h),
+                            "Candles1d" => Some(Topic::Candles1d),
+                            "Ticks" => Some(Topic::Ticks),
+                            "Quotes" => Some(Topic::Quotes),
+                            "MBP10" => Some(Topic::MBP10),
+                            "MBP1" => Some(Topic::MBP1),
+                            _ => None,
+                        })
+                        .collect();
+
+                    tokio::spawn(async move {
+                        // Ensure schema and check stamp
+                        let db = match init_db() {
+                            Ok(db) => db,
+                            Err(e) => {
+                                tracing::error!(provider=?provider_kind, error=%e, "auto-update: init_db failed");
+                                return;
+                            }
+                        };
+                        if let Err(e) = tt_database::schema::ensure_schema(&db).await {
+                            tracing::error!(provider=?provider_kind, error=%e, "auto-update: ensure_schema failed");
+                            return;
+                        }
+                        let today = chrono::Utc::now().date_naive();
+                        match tt_database::queries::get_provider_daily_stamp(
+                            &db,
+                            provider_kind,
+                            today,
+                        )
+                        .await
+                        {
+                            Ok(Some(_)) => {
+                                tracing::info!(provider=?provider_kind, %today, "auto-update: already completed today");
+                                return;
+                            }
+                            Ok(None) => {}
+                            Err(e) => {
+                                tracing::error!(provider=?provider_kind, error=%e, "auto-update: get stamp failed");
+                                return;
+                            }
+                        }
+
+                        // Discover instruments
+                        let mut instruments = md_for_update
+                            .list_instruments(None)
+                            .await
+                            .unwrap_or_default();
+                        if let Some(substr) = instrument_filter.as_ref() {
+                            instruments.retain(|i| i.to_string().contains(substr));
+                        }
+
+                        // Sequentially process instruments and topics
+                        for instrument in instruments {
+                            for topic in &topics {
+                                if !hist_for_update.supports(*topic) {
+                                    continue;
+                                }
+                                let now = chrono::Utc::now();
+                                let req = HistoricalRangeRequest {
+                                    provider_kind,
+                                    topic: *topic,
+                                    instrument: instrument.clone(),
+                                    start: now - chrono::Duration::days(1),
+                                    end: now,
+                                };
+                                // reuse inflight if any
+                                if let Ok(Some(handle)) = dm_for_update
+                                    .request_update(hist_for_update.clone(), req.clone())
+                                    .await
+                                {
+                                    tracing::info!(task_id=%handle.id(), provider=?provider_kind, instrument=%req.instrument, topic=?req.topic, "auto-update: task already inflight; waiting");
+                                    if let Err(e) = handle.wait().await {
+                                        tracing::warn!(provider=?provider_kind, instrument=%req.instrument, topic=?req.topic, error=%e, "auto-update: inflight task errored");
+                                        // continue to next instrument/topic
+                                    }
+                                } else {
+                                    match dm_for_update
+                                        .start_update(hist_for_update.clone(), req.clone())
+                                        .await
+                                    {
+                                        Ok(handle) => {
+                                            tracing::info!(task_id=%handle.id(), provider=?provider_kind, instrument=%req.instrument, topic=?req.topic, "auto-update: started; waiting");
+                                            if let Err(e) = handle.wait().await {
+                                                tracing::warn!(provider=?provider_kind, instrument=%req.instrument, topic=?req.topic, error=%e, "auto-update: task failed");
+                                            }
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!(provider=?provider_kind, instrument=%req.instrument, topic=?req.topic, error=%e, "auto-update: failed to start task");
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Set daily stamp
+                        if let Err(e) = tt_database::queries::set_provider_daily_stamp(
+                            &db,
+                            provider_kind,
+                            today,
+                            chrono::Utc::now(),
+                        )
+                        .await
+                        {
+                            tracing::warn!(provider=?provider_kind, error=%e, "auto-update: failed to set daily stamp");
+                        } else {
+                            tracing::info!(provider=?provider_kind, %today, "auto-update: completed and stamped");
+                        }
+                    });
+                }
+
                 Ok(())
             }
             ProviderKind::Rithmic(_) => anyhow::bail!("Rithmic not implemented"),

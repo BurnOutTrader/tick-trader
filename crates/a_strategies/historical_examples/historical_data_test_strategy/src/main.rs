@@ -53,7 +53,7 @@ impl Strategy for HistoricalDataTestStrategy {
             self.data_topic,
             self.symbol_key.clone(),
             Resolution::Minutes(15),
-            None
+            None,
         );
     }
 

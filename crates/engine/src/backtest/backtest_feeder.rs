@@ -675,7 +675,9 @@ impl BacktestFeeder {
                                     instrument: instr.clone(),
                                 });
                                 // Avoid startup race: only await runtime acknowledgment if watermark is already established
-                                if watermark.is_some() && let Some(n) = &notify {
+                                if watermark.is_some()
+                                    && let Some(n) = &notify
+                                {
                                     n.notified().await;
                                 }
 

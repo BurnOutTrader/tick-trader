@@ -240,6 +240,17 @@ pub async fn ensure_schema(pool: &Pool<Postgres>) -> Result<()> {
     pool.execute(create_series_extent).await?;
     pool.execute(create_kvp).await?;
 
+    // Daily provider update stamp table
+    let create_provider_daily_updates = r#"
+    CREATE TABLE IF NOT EXISTS provider_daily_updates (
+        provider_kind TEXT NOT NULL,
+        utc_date DATE NOT NULL,
+        completed_at TIMESTAMPTZ NOT NULL,
+        PRIMARY KEY (provider_kind, utc_date)
+    );
+    "#;
+    pool.execute(create_provider_daily_updates).await?;
+
     // Futures contracts table storing serialized contract per (provider, symbol)
     let create_contracts = r#"
     CREATE TABLE IF NOT EXISTS futures_contracts (

@@ -5,7 +5,6 @@ use std::sync::Arc;
 use tokio::sync::Notify;
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
-use tokio::time::{Duration as TokioDuration, timeout};
 use tracing::info;
 use tt_database::ingest::{ingest_bbo, ingest_candles, ingest_mbp1, ingest_mbp10, ingest_ticks};
 use tt_database::init::{Connection, init_db};
@@ -272,23 +271,14 @@ async fn run_download(
             tracing::error!(error=%e, "ensure_connected failed; aborting task");
             return Err(e);
         }
-        let fetch_res = timeout(
-            TokioDuration::from_secs(1000),
-            client.clone().fetch(req.clone()),
-        )
-        .await;
-        let events = match fetch_res {
-            Ok(Ok(ev)) => {
+        let events = match client.clone().fetch(req.clone()).await {
+            Ok(ev) => {
                 tracing::info!("received {} events", ev.len());
                 ev
             }
-            Ok(Err(e)) => {
+            Err(e) => {
                 tracing::error!(error=%e, start=%cursor, end=%end, "history fetch error; aborting task");
                 return Err(e);
-            }
-            Err(_) => {
-                tracing::warn!(start=%cursor, end=%end, "history fetch timed out; aborting task");
-                return Err(anyhow::anyhow!("history fetch timed out"));
             }
         };
 
