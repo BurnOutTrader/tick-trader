@@ -4,7 +4,7 @@ use crate::runtime::EngineRuntime;
 use crate::statics::bus::bus;
 use crate::traits::Strategy;
 use anyhow::Result;
-use chrono::{NaiveDate, TimeZone, Utc};
+use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use rust_decimal::{Decimal, dec};
 use std::sync::Arc;
 use tokio::sync::Notify;
@@ -139,6 +139,31 @@ pub async fn start_backtest<S: Strategy>(
         .range_start
         .unwrap_or_else(|| Utc.timestamp_opt(0, 0).unwrap());
     let end_opt = cfg.feeder.range_end;
+
+    // Shared hint for the next available event time from the feeder
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+    let next_hint: Arc<Mutex<Option<DateTime<Utc>>>> = Arc::new(Mutex::new(None));
+    // Spawn a listener to capture BacktestTimeUpdated.latest_time as a fast-forward hint
+    {
+        let bus_for_listener = bus;
+        let hint_for_task = next_hint.clone();
+        tokio::spawn(async move {
+            let mut rx = bus_for_listener.add_client();
+            while let Ok(resp) = rx.recv().await {
+                if let tt_types::wire::Response::BacktestTimeUpdated {
+                    now: _,
+                    latest_time,
+                } = resp
+                    && let Some(t) = latest_time
+                {
+                    let mut h = hint_for_task.lock().await;
+                    *h = Some(t);
+                }
+            }
+        });
+    }
+
     tokio::spawn(async move {
         let mut now = start;
         loop {
@@ -147,7 +172,14 @@ pub async fn start_backtest<S: Strategy>(
             {
                 break;
             }
-            now += step;
+            let mut target = now + step;
+            // If we have a hint for a next event time beyond current now, jump to it
+            if let Some(hint) = *next_hint.lock().await
+                && hint > target
+            {
+                target = hint;
+            }
+            now = target;
             // Request feeder to emit up to `now`
             let _ = bus
                 .handle_request(tt_types::wire::Request::BacktestAdvanceTo(

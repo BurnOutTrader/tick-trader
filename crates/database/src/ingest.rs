@@ -10,8 +10,8 @@ use tt_types::securities::symbols::Instrument;
 use crate::init::Connection;
 use crate::schema::{get_or_create_instrument_id, upsert_latest_bar_1m, upsert_series_extent};
 use tt_types::data::core::{Bbo, Candle, Tick};
-use tt_types::data::mbp10::Mbp10;
 use tt_types::data::mbp1::Mbp1;
+use tt_types::data::mbp10::Mbp10;
 use tt_types::keys::Topic;
 use tt_types::securities::security::FuturesContract;
 
@@ -511,7 +511,6 @@ pub async fn ingest_contracts_map(
     tx.commit().await?;
     Ok(())
 }
-
 
 /// Insert a batch of MBP-1 top-of-book events with de-duplication by (provider, symbol_id, ts_event_ns, sequence).
 pub async fn ingest_mbp1(

@@ -10,8 +10,8 @@ use tracing::info;
 use tt_database::ingest::{ingest_bbo, ingest_candles, ingest_mbp1, ingest_mbp10, ingest_ticks};
 use tt_database::init::{Connection, init_db};
 use tt_database::queries::latest_data_time;
-use tt_types::data::mbp10::Mbp10;
 use tt_types::data::mbp1::Mbp1;
+use tt_types::data::mbp10::Mbp10;
 use tt_types::data::models::Resolution;
 use tt_types::engine_id::EngineUuid;
 use tt_types::history::{HistoricalRangeRequest, HistoryEvent};
@@ -297,8 +297,8 @@ async fn run_download(
         let mut ticks: Vec<tt_types::data::core::Tick> = Vec::new();
         let mut candles: Vec<tt_types::data::core::Candle> = Vec::new();
         let mut quotes: Vec<tt_types::data::core::Bbo> = Vec::new();
-        let mut mdp10:  Vec<Mbp10> = Vec::new();
-        let mut mdp1:  Vec<Mbp1> = Vec::new();
+        let mut mdp10: Vec<Mbp10> = Vec::new();
+        let mut mdp1: Vec<Mbp1> = Vec::new();
         let mut saw_candle_events: bool = false;
         // Diagnostics counters for candles
         let total_events: usize = events.len();
@@ -421,9 +421,8 @@ async fn run_download(
             }
             Topic::MBP10 => {
                 if !mdp10.is_empty() {
-                    let rows =
-                        ingest_mbp10(&connection, req.provider_kind, &req.instrument, mdp10)
-                            .await?;
+                    let rows = ingest_mbp10(&connection, req.provider_kind, &req.instrument, mdp10)
+                        .await?;
                     tracing::debug!(topic=?req.topic, rows_affected=rows, start=%cursor, end=%end, "persisted mdp10");
                     last_rows_affected = Some(rows);
                 } else {
@@ -434,8 +433,7 @@ async fn run_download(
             Topic::MBP1 => {
                 if !mdp1.is_empty() {
                     let rows =
-                        ingest_mbp1(&connection, req.provider_kind, &req.instrument, mdp1)
-                            .await?;
+                        ingest_mbp1(&connection, req.provider_kind, &req.instrument, mdp1).await?;
                     tracing::debug!(topic=?req.topic, rows_affected=rows, start=%cursor, end=%end, "persisted mdp1");
                     last_rows_affected = Some(rows);
                 } else {

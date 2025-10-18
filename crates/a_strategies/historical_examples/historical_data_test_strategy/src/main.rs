@@ -64,7 +64,7 @@ impl Strategy for HistoricalDataTestStrategy {
 
     fn on_warmup_complete(&mut self) {
         self.is_warmed_up = true;
-        println!("warmup complete");
+        println!("strategy: warmup complete");
     }
 
     fn on_stop(&mut self) {
@@ -138,10 +138,6 @@ async fn main() -> anyhow::Result<()> {
     let db = tt_database::init::init_db()?;
     ensure_schema(&db).await?;
 
-    // Backtest for a recent 30-day period
-    let end_date = Utc::now().date_naive();
-    let start_date = end_date - chrono::Duration::days(20);
-
     let account_name = AccountName::new("TST-1234".to_string());
     let inst = Instrument::from_str("MNQ.Z25")?;
     let key = SymbolKey::new(
@@ -151,7 +147,11 @@ async fn main() -> anyhow::Result<()> {
     let data_topic = DataTopic::Candles1m;
     let account_key = AccountKey::new(ProjectX(ProjectXTenant::Topstep), account_name);
     // Configure and start backtest
-    let cfg = BacktestConfig::from_to(chrono::Duration::milliseconds(250), start_date, end_date);
+    // Backtest for a recent 30-day period
+    let end_date = Utc::now().date_naive();
+    let start_date = end_date - chrono::Duration::days(5);
+    // Use a larger orchestrator step so simulated time advances fast enough to see candles stream
+    let cfg = BacktestConfig::from_to(chrono::Duration::milliseconds(10), start_date, end_date);
     let strategy = HistoricalDataTestStrategy::new(account_key, key, data_topic);
     start_backtest(db, cfg, strategy, dec!(150_000)).await?;
 

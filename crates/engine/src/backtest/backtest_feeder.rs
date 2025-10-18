@@ -249,7 +249,6 @@ struct SimOrder {
     resting: bool,
 }
 
-
 fn to_chrono(d: std::time::Duration) -> ChronoDuration {
     ChronoDuration::from_std(d)
         .unwrap_or_else(|_| ChronoDuration::milliseconds(d.as_millis() as i64))
@@ -259,13 +258,26 @@ async fn ensure_window(
     ks: &mut KeyState,
     conn: &tt_database::init::Connection,
     cfg: &BacktestFeederConfig,
+    watermark: Option<DateTime<Utc>>,
 ) {
-    let want_end = ks.cursor + cfg.window;
+    // Drive extension by the furthest of cursor or watermark to avoid stalls when buffer is empty
+    let driver = watermark
+        .map(|wm| if wm > ks.cursor { wm } else { ks.cursor })
+        .unwrap_or(ks.cursor);
+    // Target end should jump ahead sufficiently to avoid tiny incremental refills.
+    // Advance by at least one full window from current window_end, and also beyond the driver.
+    let candidate_a = ks.window_end + cfg.window;
+    let candidate_b = driver + cfg.window + cfg.lookahead;
+    let want_end = if candidate_a > candidate_b {
+        candidate_a
+    } else {
+        candidate_b
+    };
     if want_end <= ks.window_end {
         return;
     }
     let start = ks.window_end;
-    let mut end = want_end + cfg.lookahead;
+    let mut end = want_end;
     // Respect hard stop if configured
     if let Some(hs) = ks.hard_stop
         && end > hs
@@ -446,9 +458,6 @@ impl BacktestFeeder {
                 Instrument,
                 chrono::NaiveDate,
             )> = HashSet::new();
-
-
-
 
             // Main loop: interleave handling of requests with emitting events in time order
             loop {
@@ -649,7 +658,7 @@ impl BacktestFeeder {
 
                             // Prime first window after start
                             ks.cursor = start;
-                            ensure_window(&mut ks, &conn, &cfg).await;
+                            ensure_window(&mut ks, &conn, &cfg, None).await;
                             push_next_for_key(&mut heap, topic, &skreq.key, &ks);
                             keys.insert((topic, skreq.key.clone()), ks);
                         }
@@ -1010,17 +1019,43 @@ impl BacktestFeeder {
                                         let can_refill =
                                             ks.hard_stop.map(|hs| ks.cursor < hs).unwrap_or(true);
                                         if can_refill
-                                            && ks.cursor + ChronoDuration::seconds(1)
+                                            && (ks.cursor + ChronoDuration::seconds(1)
                                                 >= ks.window_end
+                                                || ks.buf.is_empty())
                                         {
-                                            ensure_window(ks, &conn, &cfg).await;
+                                            ensure_window(ks, &conn, &cfg, watermark).await;
                                         }
                                     }
                                     // Push next
                                     push_next_for_key(&mut heap, topic, &sk, ks);
                                 }
                             }
+                            // After draining, if buffer ran dry ahead of watermark, proactively extend windows and seed heap
+                            if let Some(wm) = watermark {
+                                for ((topic, sk), ks) in keys.iter_mut() {
+                                    if !ks.done && ks.buf.is_empty() {
+                                        ensure_window(ks, &conn, &cfg, Some(wm)).await;
+                                        push_next_for_key(&mut heap, *topic, sk, ks);
+                                    }
+                                }
+                            }
                             // After draining market data up to watermark, process simulated orders
+                            // Also, after refills, mark keys as done if they have reached hard_stop with no data buffered
+                            let mut to_remove: Vec<(Topic, SymbolKey)> = Vec::new();
+                            for ((topic, sk), ks) in keys.iter_mut() {
+                                if ks.hard_stop.map(|hs| ks.window_end >= hs).unwrap_or(false)
+                                    && ks.buf.is_empty()
+                                {
+                                    ks.done = true;
+                                    to_remove.push((*topic, sk.clone()));
+                                }
+                            }
+                            if !to_remove.is_empty() {
+                                for (topic, sk) in to_remove.drain(..) {
+                                    keys.remove(&(topic, sk));
+                                }
+                            }
+
                             let now = bta.to;
                             let mut due: Vec<OrderUpdate> = Vec::new();
                             let mut closed_trades: Vec<tt_types::wire::Trade> = Vec::new();
@@ -1697,7 +1732,20 @@ impl BacktestFeeder {
                                 }
                             }
                             // After draining up to watermark (and emitting due orders), notify runtime of logical time
-                            let _ = bus.broadcast(Response::BacktestTimeUpdated { now, latest_time: Some(now) });
+                            // Provide a next-event hint so the orchestrator can fast-forward when using very small steps
+                            let next_hint = if let Some(peek) = heap.peek() {
+                                Some(peek.t)
+                            } else if keys.is_empty() {
+                                cfg.range_end
+                            } else {
+                                None
+                            };
+                            let _ = bus.broadcast(Response::BacktestTimeUpdated {
+                                now,
+                                latest_time: next_hint,
+                            });
+                            // Yield to allow orchestrator/runtime to process time update immediately, avoiding scheduling stalls that were previously masked by logging
+                            tokio::task::yield_now().await;
 
                             // If we have an end range and reached/passed it, emit BacktestCompleted once
                             if !completed_emitted
@@ -2036,7 +2084,7 @@ impl BacktestFeeder {
                             let can_refill = ks.hard_stop.map(|hs| ks.cursor < hs).unwrap_or(true);
                             if can_refill && ks.cursor + ChronoDuration::seconds(1) >= ks.window_end
                             {
-                                ensure_window(ks, &conn, &cfg).await;
+                                ensure_window(ks, &conn, &cfg, watermark).await;
                             }
                         }
                         // Push next time for this key, if any
@@ -2045,6 +2093,39 @@ impl BacktestFeeder {
                     }
                 }
                 if !did_work {
+                    // Proactively extend windows when idle and watermark has advanced beyond current window
+                    if let Some(wm) = watermark {
+                        let mut refilled = false;
+                        for ((topic, sk), ks) in keys.iter_mut() {
+                            if !ks.done && ks.buf.is_empty() {
+                                ensure_window(ks, &conn, &cfg, Some(wm)).await;
+                                // If this key has reached its hard stop with no data, mark it done and remove it
+                                if ks.hard_stop.map(|hs| ks.window_end >= hs).unwrap_or(false)
+                                    && ks.buf.is_empty()
+                                {
+                                    ks.done = true;
+                                    // defer removal until after loop to avoid borrow issues; mark by pushing a sentinel next time
+                                } else {
+                                    push_next_for_key(&mut heap, *topic, sk, ks);
+                                    refilled = true;
+                                }
+                            }
+                        }
+                        if refilled {
+                            // We seeded more work; skip yielding so next loop can pop immediately
+                            continue;
+                        }
+                        // Clean up any keys that are done and have no buffered data
+                        let mut to_remove: Vec<(Topic, SymbolKey)> = Vec::new();
+                        for ((topic, sk), ks) in keys.iter_mut() {
+                            if ks.done && ks.buf.is_empty() {
+                                to_remove.push((*topic, sk.clone()));
+                            }
+                        }
+                        for (topic, sk) in to_remove.drain(..) {
+                            keys.remove(&(topic, sk));
+                        }
+                    }
                     // idle yield
                     tokio::task::yield_now().await;
                 }

@@ -575,7 +575,7 @@ impl Router {
                         let res = mgr
                             .update_historical_latest_by_key(prov, topic, instr.clone())
                             .await;
-                        let (success, error_msg,latest_time) = match res {
+                        let (success, error_msg, latest_time) = match res {
                             Ok(t) => (true, None, t),
                             Err(e) => (false, Some(e.to_string()), None),
                         };
@@ -589,7 +589,7 @@ impl Router {
                                     corr_id: corr,
                                     success,
                                     error_msg,
-                                    latest_time
+                                    latest_time,
                                 },
                             )
                             .await;
@@ -606,7 +606,7 @@ impl Router {
                                 corr_id: req.corr_id,
                                 success: false,
                                 error_msg: Some("no backend manager".into()),
-                                latest_time: None
+                                latest_time: None,
                             },
                         )
                         .await;
