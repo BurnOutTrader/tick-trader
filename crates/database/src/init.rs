@@ -1,6 +1,5 @@
 use anyhow::{Context, anyhow};
 use sqlx::{Pool, Postgres};
-use crate::schema::ensure_schema;
 
 /// Shared database connection type for the project.
 pub type Connection = Pool<Postgres>;

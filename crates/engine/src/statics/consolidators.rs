@@ -119,7 +119,8 @@ pub fn drive_time(now: DateTime<Utc>) -> Vec<(ProviderKind, Candle)> {
 pub fn drive_tick(t: &Tick, provider: ProviderKind) -> Option<(ProviderKind, Candle)> {
     let key = ConsolidatorKey::new(t.instrument.clone(), provider, Topic::Ticks);
     if let Some(mut cons) = CONSOLIDATORS.get_mut(&key)
-    && let Some(ConsolidatedOut::Candle(c)) = cons.on_tick(t) {
+        && let Some(ConsolidatedOut::Candle(c)) = cons.on_tick(t)
+    {
         return Some((provider, c));
     }
     None
@@ -130,7 +131,8 @@ pub fn drive_tick(t: &Tick, provider: ProviderKind) -> Option<(ProviderKind, Can
 pub fn drive_bbo(b: &Bbo, provider: ProviderKind) -> Option<(ProviderKind, Candle)> {
     let key = ConsolidatorKey::new(b.instrument.clone(), provider, Topic::Quotes);
     if let Some(mut cons) = CONSOLIDATORS.get_mut(&key)
-    && let Some(ConsolidatedOut::Candle(c)) = cons.on_bbo(b) {
+        && let Some(ConsolidatedOut::Candle(c)) = cons.on_bbo(b)
+    {
         return Some((provider, c));
     }
     None
@@ -145,7 +147,8 @@ pub fn drive_candle(
 ) -> Option<(ProviderKind, Candle)> {
     let key = ConsolidatorKey::new(b.instrument.clone(), provider, topic);
     if let Some(mut cons) = CONSOLIDATORS.get_mut(&key)
-    && let Some(ConsolidatedOut::Candle(c)) = cons.on_candle(b) {
+        && let Some(ConsolidatedOut::Candle(c)) = cons.on_candle(b)
+    {
         return Some((provider, c));
     }
     None

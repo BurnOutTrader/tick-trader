@@ -14,27 +14,6 @@ use tt_types::securities::symbols::Instrument;
 use crate::init::Connection;
 use crate::schema::get_or_create_instrument_id;
 
-/// Canonical DB key for resolution, must match ingest.
-fn resolution_key(res: &Resolution) -> &'static str {
-    match res {
-        Resolution::Seconds(1) => "sec1",
-        Resolution::Minutes(1) => "min1",
-        Resolution::Hours(1) => "hr1",
-        Resolution::Daily => "day1",
-        _ => "custom",
-    }
-}
-
-fn resolution_from_topic(topic: Topic) -> Option<Resolution> {
-    match topic {
-        Topic::Candles1s => Some(Resolution::Seconds(1)),
-        Topic::Candles1m => Some(Resolution::Minutes(1)),
-        Topic::Candles1h => Some(Resolution::Hours(1)),
-        Topic::Candles1d => Some(Resolution::Daily),
-        _ => None
-    }
-}
-
 /// Return the latest timestamp available for a (provider, instrument, topic) tuple.
 /// - Candles1m → latest_bar_1m hot table
 /// - Ticks → max ts from tick

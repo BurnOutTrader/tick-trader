@@ -616,7 +616,15 @@ impl EngineRuntime {
                         topic, key.instrument, key.provider
                     );
                     // Live warmup orchestration for candle subscriptions (1s/1m):
-                    if !backtest_mode && matches!(topic, Topic::Candles1s | Topic::Candles1m | Topic::Candles1h | Topic::Candles1d) {
+                    if !backtest_mode
+                        && matches!(
+                            topic,
+                            Topic::Candles1s
+                                | Topic::Candles1m
+                                | Topic::Candles1h
+                                | Topic::Candles1d
+                        )
+                    {
                         // Track warmup state for this (topic,key)
                         warmups.insert(
                             (topic, key.clone()),
@@ -769,5 +777,3 @@ mod engine_shm_tests {
         );
     }
 }*/
-
-

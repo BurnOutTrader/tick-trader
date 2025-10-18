@@ -930,7 +930,7 @@ pub mod mh_tests {
         hours_for_exchange, next_session_after, next_session_open_after, session_bounds,
         week_session_bounds,
     };
-    use chrono::{Duration, NaiveDate, TimeZone, Utc};
+    use chrono::{NaiveDate, TimeZone, Utc};
     use chrono_tz::Tz;
     use chrono_tz::US::Central;
 

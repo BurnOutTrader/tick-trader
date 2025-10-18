@@ -1,16 +1,15 @@
+use anyhow::Context;
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::sync::Arc;
-use anyhow::Context;
 use tokio::sync::Notify;
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 use tokio::time::{Duration as TokioDuration, timeout};
-use tracing::{info, warn};
+use tracing::info;
 use tt_database::ingest::{ingest_bbo, ingest_candles, ingest_ticks};
 use tt_database::init::{Connection, init_db};
 use tt_database::queries::latest_data_time;
-use tt_database::schema::ensure_schema;
 use tt_types::data::models::Resolution;
 use tt_types::engine_id::EngineUuid;
 use tt_types::history::{HistoricalRangeRequest, HistoryEvent};
@@ -103,7 +102,9 @@ impl DownloadManager {
     // Async ctor for the current-thread case (and generally the idiomatic choice)
     pub async fn new_async() -> anyhow::Result<DownloadManager> {
         let db = init_db().context("init_db failed")?;
-        tt_database::schema::ensure_schema(&db).await.context("ensure_schema failed")?;
+        tt_database::schema::ensure_schema(&db)
+            .await
+            .context("ensure_schema failed")?;
         Ok(Self {
             inner: std::sync::Arc::new(DownloadManagerInner {
                 inflight: Arc::new(RwLock::new(HashMap::new())),
@@ -137,7 +138,7 @@ impl DownloadManager {
     pub async fn start_update(
         &self,
         client: std::sync::Arc<dyn HistoricalDataProvider>,
-        mut req: HistoricalRangeRequest,
+        req: HistoricalRangeRequest,
     ) -> anyhow::Result<DownloadTaskHandle> {
         let key = DownloadKey::new(req.provider_kind, req.instrument.clone(), req.topic);
         // fast path: existing
@@ -233,14 +234,16 @@ async fn run_download(
     let now = Utc::now();
 
     // Simplified cursoring: start from latest persisted time if available; otherwise from provider's earliest.
-    let last_opt = latest_data_time(&connection, req.provider_kind, &req.instrument, req.topic).await?;
+    let last_opt =
+        latest_data_time(&connection, req.provider_kind, &req.instrument, req.topic).await?;
     info!("Latest data time: {:?}", last_opt);
     let mut cursor: DateTime<Utc> = if let Some(ts) = last_opt {
         ts
     } else {
         client
             .earliest_available(req.instrument.clone(), req.topic)
-            .await?.ok_or_else(|| anyhow::anyhow!("no data available"))?
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("no data available"))?
     };
     let symbol = req.instrument.to_string();
     if cursor >= now {
@@ -303,11 +306,11 @@ async fn run_download(
                 HistoryEvent::Candle(c) => {
                     saw_candle_events = true;
                     // Ensure resolution matches the topic (prevents 1s resume issues)
-                    if let Some(expected) = resolution {
-                        if c.resolution != expected {
-                            filtered_wrong_res += 1;
-                            continue;
-                        }
+                    if let Some(expected) = resolution
+                        && c.resolution != expected
+                    {
+                        filtered_wrong_res += 1;
+                        continue;
                     }
                     // Skip duplicates at or before the cursor to avoid infinite loops
                     if c.time_end <= cursor {
@@ -345,14 +348,25 @@ async fn run_download(
         }
 
         // Diagnostics summary for candles and prep rows_affected capture
-        if matches!(req.topic, Topic::Candles1s | Topic::Candles1m | Topic::Candles1h | Topic::Candles1d) {
+        if matches!(
+            req.topic,
+            Topic::Candles1s | Topic::Candles1m | Topic::Candles1h | Topic::Candles1d
+        ) {
             let kept_candles = candles.len();
             let (first_end, last_end) = if kept_candles > 0 {
                 let min = candles.iter().map(|c| c.time_end).min().unwrap();
                 let max = candles.iter().map(|c| c.time_end).max().unwrap();
                 (Some(min), Some(max))
-            } else { (None, None) };
-            let table = match req.topic { Topic::Candles1s => "bars_1s", Topic::Candles1m => "bars_1m", Topic::Candles1h => "bars_1h", Topic::Candles1d => "bars_1d", _ => "" };
+            } else {
+                (None, None)
+            };
+            let table = match req.topic {
+                Topic::Candles1s => "bars_1s",
+                Topic::Candles1m => "bars_1m",
+                Topic::Candles1h => "bars_1h",
+                Topic::Candles1d => "bars_1d",
+                _ => "",
+            };
             tracing::info!(total_events, kept_candles, filtered_wrong_res, filtered_not_closed, filtered_le_cursor, %table, first_end=?first_end, last_end=?last_end, start=%cursor, end=%end, "fetch filter summary");
         }
 
@@ -362,9 +376,8 @@ async fn run_download(
         match req.topic {
             Topic::Ticks => {
                 if !ticks.is_empty() {
-                    let rows =
-                        ingest_ticks(&connection, req.provider_kind, &req.instrument, ticks)
-                            .await?;
+                    let rows = ingest_ticks(&connection, req.provider_kind, &req.instrument, ticks)
+                        .await?;
                     tracing::info!(topic=?req.topic, rows_affected=rows, start=%cursor, end=%end, "persisted ticks");
                     last_rows_affected = Some(rows);
                 } else {
@@ -408,7 +421,11 @@ async fn run_download(
                 cursor = ts;
             }
         } else {
-            if matches!(req.topic, Topic::Candles1s | Topic::Candles1m | Topic::Candles1h | Topic::Candles1d) && saw_candle_events {
+            if matches!(
+                req.topic,
+                Topic::Candles1s | Topic::Candles1m | Topic::Candles1h | Topic::Candles1d
+            ) && saw_candle_events
+            {
                 tracing::warn!(start=%cursor, end=%end, "no progress from candle batch (likely all <= cursor); advancing by full window");
             }
             cursor = end;
@@ -428,9 +445,8 @@ fn choose_span(res: Option<Resolution>) -> chrono::Duration {
     match res {
         Some(Resolution::Seconds(_)) => chrono::Duration::days(1),
         Some(Resolution::Minutes(_)) => chrono::Duration::days(1),
-        Some(Resolution::Hours(h)) => chrono::Duration::days(100),
+        Some(Resolution::Hours(_)) => chrono::Duration::days(100),
         Some(Resolution::Daily) | Some(Resolution::Weekly) => chrono::Duration::days(365),
         None => chrono::Duration::days(1), // ticks/quotes/depth: be conservative
     }
 }
-

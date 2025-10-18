@@ -1,6 +1,6 @@
 use ahash::AHashMap;
 use anyhow::Result;
-use log::{error, warn};
+use log::warn;
 use rust_decimal::prelude::ToPrimitive;
 use sqlx::{QueryBuilder, Row};
 use tt_types::data::models::{Resolution, TradeSide};

@@ -23,7 +23,7 @@ struct DataTestStrategy {
     symbol_key: SymbolKey,
     data_topic: DataTopic,
     is_warmed_up: bool,
-    resolution: Resolution
+    resolution: Resolution,
 }
 
 impl DataTestStrategy {
@@ -38,7 +38,7 @@ impl DataTestStrategy {
             symbol_key,
             data_topic,
             is_warmed_up: false,
-            resolution
+            resolution,
         }
     }
 }

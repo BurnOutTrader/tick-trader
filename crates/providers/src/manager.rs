@@ -9,7 +9,7 @@ use tt_bus::Router;
 use tt_bus::UpstreamManager;
 use tt_types::accounts::events::OrderUpdate;
 use tt_types::accounts::order::OrderState;
-use tt_types::history::{HistoricalRangeRequest, HistoryEvent};
+use tt_types::history::HistoricalRangeRequest;
 use tt_types::keys::Topic;
 use tt_types::providers::ProviderKind;
 use tt_types::securities::security::FuturesContract;
@@ -18,7 +18,7 @@ use tt_types::server_side::traits::{
 };
 use tt_types::wire::OrdersBatch;
 // Added for unified wait semantics and diagnostics
-use tokio::time::{timeout, Duration as TokioDuration};
+use tokio::time::{Duration as TokioDuration, timeout};
 use tt_database::init::init_db;
 use tt_database::queries::latest_data_time;
 
@@ -313,7 +313,10 @@ impl ProviderManager {
             session,
         })
     }
-    pub async fn with_shards_async(router: Arc<Router>, shards: usize) -> anyhow::Result<ProviderManager> {
+    pub async fn with_shards_async(
+        router: Arc<Router>,
+        shards: usize,
+    ) -> anyhow::Result<ProviderManager> {
         let session = ProviderSessionSpec::from_env();
         let download_manager = DownloadManager::new_async().await?;
         Ok(Self {

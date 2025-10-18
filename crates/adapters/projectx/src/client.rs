@@ -846,7 +846,7 @@ impl HistoricalDataProvider for PXClient {
     ) -> anyhow::Result<Option<DateTime<Utc>>> {
         self.manual_update_instruments(false).await?;
         // Look for the matching instrument in the DashMap without taking async locks.
-        if let Some(c) = self
+        if let Some(_c) = self
             .instruments
             .iter()
             .find(|r| r.value().instrument == instrument)
