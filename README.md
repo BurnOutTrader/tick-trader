@@ -47,6 +47,9 @@ The engine can place live orders and is intended strictly for testing and evalua
 - ⏪ Backtesting: Configurable with dynamic realism models, fill models are configurable. the default fill model can book walk etc. Implementation v1.0, not tested, will likely have some bugs and inaccuracy.
 - 🔽 Automatic data downloading and databasing + functions to retrieve historical data from the database for run time analysis.
 - 🗜️ Automated consolidator handling, for multiple time frame feeds without duplicating streams.
+- 🪏 The server will automatically pull all historical data for all available symbols and resolutions once per day.
+  - After the initial daily update, it will only update data for live symbols, prior to warming up strategies.
+  - The auto update can be configured in the .env file
 
 ### Strategies are straight forward
 [Example Strategy](crates/a_strategies/live_accounts_examples/data_test_strategy/src/main.rs)
