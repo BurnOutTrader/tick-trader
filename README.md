@@ -21,17 +21,18 @@
 
 The engine can place live orders and is intended strictly for testing and evaluation. Do not use in production.
 
-- Data feeds currently out of sync.
-- Strategy Engine switched to a static layout, both live and backtest require testing, possibly features are now broken.
-- After some small updates, the next objective is to refactor down the backtest feeder.
 - Surface EngineHandle helpers via top‑level exports
 - Move non-strategy functions and objects into features
-- Warm up consolidators from live data plus the historical catalog
+- Live consolidator warm up and cache
+- Automatic switching of consolidator types to live feed types post warm up
+- cross provider Symbol mapping, to allow warming up data feed from alternative provider history (eg: warm up MBP10 from databento, then switch to live data from ProjectX)
 - Expand automated tests and CI coverage
 - Adding rithmic + data bento at a later stage.
 - Support for publishing strategy signals on the bus will be implemented last
 - refactor down engine code into more manageable functions.
 - complete the automatic historical data update functions.
+- capture server, to capture live tick, mbp10, or quote data for specified provider instruments
+- Considering mapping projectX to be 'front month only' i.e continuous contract "MNQ.C.1"
 
 
 ## ✨ Brief overview
@@ -45,6 +46,7 @@ The engine can place live orders and is intended strictly for testing and evalua
 - 🛅 PostgreSQL + Docker Database for storage and query of historical data by strategies and the server. 
 - ⏪ Backtesting: Configurable with dynamic realism models, fill models are configurable. the default fill model can book walk etc. Implementation v1.0, not tested, will likely have some bugs and inaccuracy.
 - 🔽 Automatic data downloading and databasing + functions to retrieve historical data from the database for run time analysis.
+- 🗜️ Automated consolidator handling, for multiple time frame feeds without duplicating streams.
 
 ### Strategies are straight forward
 [Example Strategy](crates/a_strategies/live_accounts_examples/data_test_strategy/src/main.rs)

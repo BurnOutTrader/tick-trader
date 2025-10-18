@@ -8,11 +8,10 @@ use tracing::level_filters::LevelFilter;
 use tt_database::schema::ensure_schema;
 use tt_engine::backtest::orchestrator::{BacktestConfig, start_backtest};
 use tt_engine::models::DataTopic;
-use tt_engine::statics::consolidators::add_consolidator;
+use tt_engine::statics::consolidators::add_hybrid_tick_or_candle;
 use tt_engine::statics::subscriptions::subscribe;
 use tt_engine::traits::Strategy;
 use tt_types::accounts::account::AccountName;
-use tt_types::consolidators::CandlesToCandlesConsolidator;
 use tt_types::data::core::Utc;
 use tt_types::data::mbp10::Mbp10;
 use tt_types::data::models::Resolution;
@@ -50,15 +49,11 @@ impl Strategy for HistoricalDataTestStrategy {
 
         // Non-blocking subscribe via handle command queue, you can do this at run time from anywhere to subscribe or unsubscribe a custom universe
         subscribe(self.data_topic, self.symbol_key.clone());
-        let consolidator = CandlesToCandlesConsolidator::new(
-            Resolution::Minutes(15),
-            None,
-            self.symbol_key.instrument.clone(),
-        );
-        add_consolidator(
+        add_hybrid_tick_or_candle(
             self.data_topic,
             self.symbol_key.clone(),
-            Box::new(consolidator),
+            Resolution::Minutes(15),
+            None
         );
     }
 
@@ -151,7 +146,7 @@ async fn main() -> anyhow::Result<()> {
     let end_date = Utc::now().date_naive();
     let start_date = end_date - chrono::Duration::days(5);
     // Use a larger orchestrator step so simulated time advances fast enough to see candles stream
-    let cfg = BacktestConfig::from_to(chrono::Duration::milliseconds(1), start_date, end_date);
+    let cfg = BacktestConfig::from_to(chrono::Duration::seconds(1), start_date, end_date);
     let strategy = HistoricalDataTestStrategy::new(account_key, key, data_topic);
     start_backtest(db, cfg, strategy, dec!(150_000)).await?;
 
