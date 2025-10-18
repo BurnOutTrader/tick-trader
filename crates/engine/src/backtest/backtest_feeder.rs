@@ -376,6 +376,10 @@ async fn emit_one(
             let _ = bus.broadcast(Response::BarBatch(batch));
         }
     }
+    // After emitting, await runtime notify (if provided) to preserve deterministic ordering across tasks
+    if let Some(n) = _notify.as_ref() {
+        n.notified().await;
+    }
 }
 
 pub struct BacktestFeeder;
@@ -652,10 +656,11 @@ impl BacktestFeeder {
                                         .await
                                         {
                                             Ok(map) => {
+                                                // During warmup (pre-watermark), don't await runtime notify on each emit to avoid startup races.
+                                                let no_notify: Option<Arc<Notify>> = None;
                                                 for (_t, vec) in map.iter() {
                                                     for item in vec {
-                                                        emit_one(bus, item, provider, &notify)
-                                                            .await;
+                                                        emit_one(bus, item, provider, &no_notify).await;
                                                     }
                                                 }
                                             }
@@ -668,6 +673,12 @@ impl BacktestFeeder {
                                     topic,
                                     instrument: instr.clone(),
                                 });
+                                // Avoid startup race: only await runtime acknowledgment if watermark is already established
+                                if watermark.is_some() {
+                                    if let Some(n) = &notify {
+                                        n.notified().await;
+                                    }
+                                }
 
                                 // Prime first window after start
                                 ks.cursor = start;
@@ -790,6 +801,9 @@ impl BacktestFeeder {
                                                     };
                                                     let _ =
                                                         bus.broadcast(Response::OrdersBatch(ob));
+                                                    if let Some(n) = &notify {
+                                                        n.notified().await;
+                                                    }
                                                     continue;
                                                 }
 
@@ -842,6 +856,9 @@ impl BacktestFeeder {
                                                     };
                                                     let _ =
                                                         bus.broadcast(Response::OrdersBatch(ob));
+                                                    if let Some(n) = &notify {
+                                                        n.notified().await;
+                                                    }
                                                     continue;
                                                 }
                                                 let ack_base = if is_closed_or_halt
@@ -1587,6 +1604,9 @@ impl BacktestFeeder {
                                         orders: due,
                                     };
                                     let _ = bus.broadcast(Response::OrdersBatch(ob));
+                                    if let Some(n) = &notify {
+                                        n.notified().await;
+                                    }
                                 }
 
                                 // Risk: auto-liquidate positions within X minutes before session close (ProjectX policy)
@@ -1777,11 +1797,17 @@ impl BacktestFeeder {
                                             accounts: accounts_vec,
                                         };
                                         let _ = bus.broadcast(Response::AccountDeltaBatch(ab));
+                                        if let Some(n) = &notify {
+                                            n.notified().await;
+                                        }
                                     }
                                 }
                                 // Emit closed trades for realized PnL this tick
                                 if !closed_trades.is_empty() {
                                     let _ = bus.broadcast(Response::ClosedTrades(closed_trades));
+                                    if let Some(n) = &notify {
+                                        n.notified().await;
+                                    }
                                 }
                                 // Emit positions snapshots for touched positions this tick
                                 if !touched_positions.is_empty() {
@@ -1810,6 +1836,9 @@ impl BacktestFeeder {
                                             positions: positions_vec,
                                         };
                                         let _ = bus.broadcast(Response::PositionsBatch(pb));
+                                        if let Some(n) = &notify {
+                                            n.notified().await;
+                                        }
                                     }
                                 }
                                 if !finished.is_empty() {
@@ -1830,6 +1859,9 @@ impl BacktestFeeder {
                                     now,
                                     latest_time: next_hint,
                                 });
+                                if let Some(n) = &notify {
+                                    n.notified().await;
+                                }
 
                                 // If we have an end range and reached/passed it, emit BacktestCompleted once
                                 if !completed_emitted
@@ -1929,6 +1961,9 @@ impl BacktestFeeder {
                                         orders: vec![upd],
                                     };
                                     let _ = bus.broadcast(Response::OrdersBatch(ob));
+                                    if let Some(n) = &notify {
+                                        n.notified().await;
+                                    }
 
                                     continue;
                                 }
@@ -1973,6 +2008,9 @@ impl BacktestFeeder {
                                         orders: vec![upd],
                                     };
                                     let _ = bus.broadcast(Response::OrdersBatch(ob));
+                                    if let Some(n) = &notify {
+                                        n.notified().await;
+                                    }
 
                                     continue;
                                 }

@@ -102,7 +102,7 @@ impl EngineRuntime {
         let warmups_for_task = warmups.clone();
         let handle_task = tokio::spawn(async move {
             let mut warmup_complete = false;
-            while let Ok(resp) = receiver.recv().await {
+            'main_loop: while let Ok(resp) = receiver.recv().await {
                 match resp {
                     Response::BacktestTimeUpdated { now, .. } => {
                         if !backtest_mode {
@@ -115,15 +115,21 @@ impl EngineRuntime {
                         for (prov, c) in outs {
                             strategy.on_bar(&c, prov);
                         }
+                        if let Some(notify) = &notify {
+                            notify.notify_one();
+                        }
                     }
                     Response::BacktestCompleted { end: _ } => {
                         // Graceful shutdown: stop strategy and terminate engine task
                         strategy.on_stop();
-                        return;
+                        break 'main_loop;
                     }
                     Response::WarmupComplete { .. } => {
                         warmup_complete = true;
                         strategy.on_warmup_complete();
+                        if let Some(notify) = &notify {
+                            notify.notify_one();
+                        }
                     }
                     Response::TickBatch(TickBatch {
                         ticks,
@@ -159,6 +165,9 @@ impl EngineRuntime {
                                 strategy.on_bar(&c, provider_kind);
                             }
                         }
+                        if let Some(notify) = &notify {
+                            notify.notify_one();
+                        }
                     }
                     Response::QuoteBatch(QuoteBatch {
                         quotes,
@@ -186,6 +195,9 @@ impl EngineRuntime {
                                 );
                                 strategy.on_bar(&c, provider_kind);
                             }
+                        }
+                        if let Some(notify) = &notify {
+                            notify.notify_one();
                         }
                     }
                     Response::BarBatch(BarsBatch {
@@ -215,9 +227,15 @@ impl EngineRuntime {
                                 strategy.on_bar(&c, provider_kind);
                             }
                         }
+                        if let Some(notify) = &notify {
+                            notify.notify_one();
+                        }
                     }
                     Response::MBP10Batch(ob) => {
                         strategy.on_mbp10(&ob.event, ob.provider_kind);
+                        if let Some(notify) = &notify {
+                            notify.notify_one();
+                        }
                     }
                     Response::OrdersBatch(ob) => {
                         // Update portfolios in backtest using order updates; live updates flow via provider events
@@ -242,6 +260,9 @@ impl EngineRuntime {
                         }
                         // Forward order updates to the strategy
                         strategy.on_orders_batch(&ob);
+                        if let Some(notify) = &notify {
+                            notify.notify_one();
+                        }
                     }
                     Response::PositionsBatch(pb) => {
                         // Update per-account portfolios from positions snapshot; not forwarded to strategies
@@ -265,12 +286,22 @@ impl EngineRuntime {
                             };
                             crate::statics::portfolio::apply_positions_batch(key, batch, now);
                         }
+                        if let Some(notify) = &notify {
+                            notify.notify_one();
+                        }
                     }
                     Response::AccountDeltaBatch(ab) => {
                         // Record account deltas into portfolios
                         crate::statics::portfolio::apply_account_delta_batch(ab.clone());
+                        if let Some(notify) = &notify {
+                            notify.notify_one();
+                        }
                     }
-                    Response::ClosedTrades(_t) => {}
+                    Response::ClosedTrades(_t) => {
+                        if let Some(notify) = &notify {
+                            notify.notify_one();
+                        }
+                    }
                     Response::Tick {
                         tick,
                         provider_kind,
