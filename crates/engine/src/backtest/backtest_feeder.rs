@@ -208,6 +208,164 @@ impl Ord for HeapEntry {
     }
 }
 
+// Helper types and functions extracted from start_with_db for readability
+#[derive(Clone, Debug)]
+struct Lot {
+    side: tt_types::accounts::events::Side,
+    qty: i64, // unsigned logical quantity per exchange conventions (positive)
+    price: Decimal,
+    _time: DateTime<Utc>,
+}
+
+struct SimOrder {
+    spec: tt_types::wire::PlaceOrder,
+    provider: ProviderKind,
+    #[allow(dead_code)]
+    engine_order_id: EngineUuid,
+    provider_order_id: ProviderOrderId,
+    ack_at: DateTime<Utc>,
+    fill_at: DateTime<Utc>,
+    ack_emitted: bool,
+    user_tag: Option<String>,
+    done: bool,
+    // Order lifecycle tracking
+    orig_qty: i64,
+    cum_qty: i64,
+    cum_vwap_num: Decimal,
+    // Cancel state
+    cancel_at: Option<DateTime<Utc>>,
+    cancel_pending: bool,
+    // Replace state
+    replace_at: Option<DateTime<Utc>>,
+    replace_pending: bool,
+    replace_req: Option<tt_types::wire::ReplaceOrder>,
+    // Per-order models
+    fill_model: Box<dyn FillModel>,
+    slip_model: Box<dyn SlippageModel>,
+    fee_model: Box<dyn FeeModel>,
+    latency_model: Box<dyn LatencyModel>,
+    fees: Decimal,
+    // Resting state for maker attribution
+    resting: bool,
+}
+
+
+fn to_chrono(d: std::time::Duration) -> ChronoDuration {
+    ChronoDuration::from_std(d)
+        .unwrap_or_else(|_| ChronoDuration::milliseconds(d.as_millis() as i64))
+}
+
+async fn ensure_window(
+    ks: &mut KeyState,
+    conn: &tt_database::init::Connection,
+    cfg: &BacktestFeederConfig,
+) {
+    let want_end = ks.cursor + cfg.window;
+    if want_end <= ks.window_end {
+        return;
+    }
+    let start = ks.window_end;
+    let mut end = want_end + cfg.lookahead;
+    // Respect hard stop if configured
+    if let Some(hs) = ks.hard_stop
+        && end > hs
+    {
+        end = hs;
+    }
+    if start >= end {
+        // Nothing to fetch
+        return;
+    }
+    match tt_database::queries::get_time_indexed(
+        conn,
+        ks.provider,
+        &ks.instrument,
+        ks.topic,
+        start,
+        end,
+    )
+    .await
+    {
+        Ok(map) => {
+            let mut rows = 0usize;
+            for (t, v) in map.into_iter() {
+                rows += v.len();
+                ks.buf.entry(t).or_default().extend(v);
+            }
+            info!(topic=?ks.topic, inst=%ks.instrument, start=%start, end=%end, rows, "backtest_feeder: fetched window");
+            ks.window_end = end;
+        }
+        Err(e) => {
+            warn!("feeder: db get_time_indexed error: {:?}", e);
+            ks.window_end = end; // avoid refetch loop
+        }
+    }
+}
+
+fn push_next_for_key(
+    heap: &mut BinaryHeap<HeapEntry>,
+    topic: Topic,
+    sk: &SymbolKey,
+    ks: &KeyState,
+) {
+    if ks.done {
+        return;
+    }
+    if let Some((&t, _)) = ks.buf.iter().next() {
+        heap.push(HeapEntry {
+            t,
+            key: (topic, sk.clone()),
+        });
+    }
+}
+
+fn topic_for_candle(c: &tt_types::data::core::Candle) -> Topic {
+    if let Some(t) = crate::models::DataTopic::topic_for_resolution(&c.resolution) {
+        t
+    } else {
+        // Fallback to a safe default; diagnostics elsewhere will log mismatches
+        Topic::Candles1d
+    }
+}
+
+async fn emit_one(
+    bus: &ClientMessageBus,
+    tde: &tt_database::queries::TopicDataEnum,
+    provider: ProviderKind,
+    _notify: &Option<Arc<Notify>>,
+) {
+    match tde {
+        tt_database::queries::TopicDataEnum::Tick(t) => {
+            let _ = bus.broadcast(Response::Tick {
+                tick: t.clone(),
+                provider_kind: provider,
+            });
+        }
+        tt_database::queries::TopicDataEnum::Bbo(b) => {
+            let _ = bus.broadcast(Response::Quote {
+                bbo: b.clone(),
+                provider_kind: provider,
+            });
+        }
+        tt_database::queries::TopicDataEnum::Mbp10(m) => {
+            let _ = bus.broadcast(Response::Mbp10 {
+                mbp10: m.clone(),
+                provider_kind: provider,
+            });
+        }
+        tt_database::queries::TopicDataEnum::Candle(c) => {
+            // Emit as a BarBatch (even for a single candle) to carry a topic for routing
+            let batch = BarsBatch {
+                topic: topic_for_candle(c),
+                seq: 0,
+                bars: vec![c.clone()],
+                provider_kind: provider,
+            };
+            let _ = bus.broadcast(Response::BarBatch(batch));
+        }
+    }
+}
+
 pub struct BacktestFeeder;
 
 impl BacktestFeeder {
@@ -229,54 +387,7 @@ impl BacktestFeeder {
 
         std::mem::drop(tokio::spawn(async move {
             let notify = backtest_notify;
-            async fn await_ack(notify: &Option<Arc<Notify>>) {
-                if let Some(n) = notify {
-                    n.notified().await;
-                }
-            }
             // --- Simple fill engine state (model-driven order lifecycle) ---
-            #[derive(Clone, Debug)]
-            struct Lot {
-                side: tt_types::accounts::events::Side,
-                qty: i64, // unsigned logical quantity per exchange conventions (positive)
-                price: Decimal,
-                _time: DateTime<Utc>,
-            }
-            struct SimOrder {
-                spec: tt_types::wire::PlaceOrder,
-                provider: ProviderKind,
-                #[allow(dead_code)]
-                engine_order_id: EngineUuid,
-                provider_order_id: ProviderOrderId,
-                ack_at: DateTime<Utc>,
-                fill_at: DateTime<Utc>,
-                ack_emitted: bool,
-                user_tag: Option<String>,
-                done: bool,
-                // Order lifecycle tracking
-                orig_qty: i64,
-                cum_qty: i64,
-                cum_vwap_num: Decimal,
-                // Cancel state
-                cancel_at: Option<DateTime<Utc>>,
-                cancel_pending: bool,
-                // Replace state
-                replace_at: Option<DateTime<Utc>>,
-                replace_pending: bool,
-                replace_req: Option<tt_types::wire::ReplaceOrder>,
-                // Per-order models
-                fill_model: Box<dyn FillModel>,
-                slip_model: Box<dyn SlippageModel>,
-                fee_model: Box<dyn FeeModel>,
-                latency_model: Box<dyn LatencyModel>,
-                fees: Decimal,
-                // Resting state for maker attribution
-                resting: bool,
-            }
-            fn to_chrono(d: std::time::Duration) -> ChronoDuration {
-                ChronoDuration::from_std(d)
-                    .unwrap_or_else(|_| ChronoDuration::milliseconds(d.as_millis() as i64))
-            }
             // Instantiate shared realism models from config
             // Note: Fill and Slippage models are per-order factories; instantiate on order placement
             let cal_model: Arc<dyn SessionCalendar> = cfg.calendar.clone();
@@ -336,120 +447,8 @@ impl BacktestFeeder {
                 chrono::NaiveDate,
             )> = HashSet::new();
 
-            // helper: ensure a key has data loaded up to cursor+window
-            async fn ensure_window(
-                ks: &mut KeyState,
-                conn: &tt_database::init::Connection,
-                cfg: &BacktestFeederConfig,
-            ) {
-                let want_end = ks.cursor + cfg.window;
-                if want_end <= ks.window_end {
-                    return;
-                }
-                let start = ks.window_end;
-                let mut end = want_end + cfg.lookahead;
-                // Respect hard stop if configured
-                if let Some(hs) = ks.hard_stop
-                    && end > hs
-                {
-                    end = hs;
-                }
-                if start >= end {
-                    // Nothing to fetch
-                    return;
-                }
-                match tt_database::queries::get_time_indexed(
-                    conn,
-                    ks.provider,
-                    &ks.instrument,
-                    ks.topic,
-                    start,
-                    end,
-                )
-                .await
-                {
-                    Ok(map) => {
-                        let mut rows = 0usize;
-                        for (t, v) in map.into_iter() {
-                            rows += v.len();
-                            ks.buf.entry(t).or_default().extend(v);
-                        }
-                        info!(topic=?ks.topic, inst=%ks.instrument, start=%start, end=%end, rows, "backtest_feeder: fetched window");
-                        ks.window_end = end;
-                    }
-                    Err(e) => {
-                        warn!("feeder: db get_time_indexed error: {:?}", e);
-                        ks.window_end = end; // avoid refetch loop
-                    }
-                }
-            }
 
-            // helper: push next event time for a key into heap
-            fn push_next_for_key(
-                heap: &mut BinaryHeap<HeapEntry>,
-                topic: Topic,
-                sk: &SymbolKey,
-                ks: &KeyState,
-            ) {
-                if ks.done {
-                    return;
-                }
-                if let Some((&t, _)) = ks.buf.iter().next() {
-                    heap.push(HeapEntry {
-                        t,
-                        key: (topic, sk.clone()),
-                    });
-                }
-            }
 
-            // helper: normalize and emit a single TopicDataEnum as Response
-            // Map candle resolution to a Topic variant for batching
-            fn topic_for_candle(c: &tt_types::data::core::Candle) -> Topic {
-                if let Some(t) = crate::models::DataTopic::topic_for_resolution(&c.resolution) {
-                    t
-                } else {
-                    // Fallback to a safe default; diagnostics elsewhere will log mismatches
-                    Topic::Candles1d
-                }
-            }
-            async fn emit_one(
-                bus: &ClientMessageBus,
-                tde: &tt_database::queries::TopicDataEnum,
-                provider: ProviderKind,
-                notify: &Option<Arc<Notify>>,
-            ) {
-                match tde {
-                    tt_database::queries::TopicDataEnum::Tick(t) => {
-                        let _ = bus.broadcast(Response::Tick {
-                            tick: t.clone(),
-                            provider_kind: provider,
-                        });
-                    }
-                    tt_database::queries::TopicDataEnum::Bbo(b) => {
-                        let _ = bus.broadcast(Response::Quote {
-                            bbo: b.clone(),
-                            provider_kind: provider,
-                        });
-                    }
-                    tt_database::queries::TopicDataEnum::Mbp10(m) => {
-                        let _ = bus.broadcast(Response::Mbp10 {
-                            mbp10: m.clone(),
-                            provider_kind: provider,
-                        });
-                    }
-                    tt_database::queries::TopicDataEnum::Candle(c) => {
-                        // Emit as a BarBatch (even for a single candle) to carry a topic for routing
-                        let batch = BarsBatch {
-                            topic: topic_for_candle(c),
-                            seq: 0,
-                            bars: vec![c.clone()],
-                            provider_kind: provider,
-                        };
-                        let _ = bus.broadcast(Response::BarBatch(batch));
-                    }
-                }
-                await_ack(notify).await; //todo! possibly notify is no longer needed for backtest sync
-            }
 
             // Main loop: interleave handling of requests with emitting events in time order
             loop {
@@ -615,13 +614,15 @@ impl BacktestFeeder {
                                 done: false,
                             };
 
-                            // Warmup prefetch and emit if configured (from start - warmup up to start)
+                            // Warmup prefetch and emit if configured (from regular backtest start minus warmup up to start)
                             if !cfg.warmup.is_zero() {
-                                let lb = start.min(cfg.range_start.unwrap_or(start));
+                                // Determine the earliest time we are allowed to fetch for warmup:
+                                // Use the DB's earliest extent (or epoch) only; do NOT clamp to range_start so warmup can precede it.
+                                let lower_bound = earliest_opt.unwrap_or(epoch);
                                 let mut warm_start =
                                     start.checked_sub_signed(cfg.warmup).unwrap_or(start);
-                                if warm_start < lb {
-                                    warm_start = lb;
+                                if warm_start < lower_bound {
+                                    warm_start = lower_bound;
                                 }
                                 if warm_start < start {
                                     match tt_database::queries::get_time_indexed(
