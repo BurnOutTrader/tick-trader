@@ -23,10 +23,9 @@ pub use crate::models::DataTopic;
 pub use crate::backtest::orchestrator::{start_backtest, start_backtest_with_dates, BacktestConfig};
 
 // Statics helpers as top-level modules
-pub use crate::statics::bus;
-pub use crate::statics::clock;
-pub use crate::statics::consolidators;
-pub use crate::statics::order_modify;
-pub use crate::statics::order_placement;
-pub use crate::statics::portfolio;
-pub use crate::statics::subscriptions;
+pub use crate::statics::clock::{time_now, time_ns};
+pub use crate::statics::consolidators::{add_hybrid_tick_or_candle, add_consolidator, remove_consolidator, remove_hybrid_tick_or_candle};
+pub use crate::statics::order_modify::{replace_order, cancel_order};
+pub use crate::statics::order_placement::{place_order};
+pub use crate::statics::portfolio::{open_positions, position_open_pnl, balance, can_trade, booked_pnl, open_pnl, open_orders, open_orders_for_instrument, open_order_count, is_long, is_short, is_flat, qty, long_qty, short_qty};
+pub use crate::statics::subscriptions::{subscribe, unsubscribe};
