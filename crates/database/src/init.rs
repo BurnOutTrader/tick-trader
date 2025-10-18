@@ -1,5 +1,6 @@
 use anyhow::{Context, anyhow};
 use sqlx::{Pool, Postgres};
+use crate::schema::ensure_schema;
 
 /// Shared database connection type for the project.
 pub type Connection = Pool<Postgres>;
@@ -60,5 +61,6 @@ pub fn init_db() -> anyhow::Result<Connection> {
         )
         .connect_lazy(&url)
         .with_context(|| format!("failed to create Postgres pool (lazy) for URL '{}')", url))?;
+
     Ok(pool)
 }

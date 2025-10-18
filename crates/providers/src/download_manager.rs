@@ -428,7 +428,7 @@ fn choose_span(res: Option<Resolution>) -> chrono::Duration {
     match res {
         Some(Resolution::Seconds(_)) => chrono::Duration::days(1),
         Some(Resolution::Minutes(_)) => chrono::Duration::days(1),
-        Some(Resolution::Hours(h)) =>     chrono::Duration::days(100),
+        Some(Resolution::Hours(h)) => chrono::Duration::days(100),
         Some(Resolution::Daily) | Some(Resolution::Weekly) => chrono::Duration::days(365),
         None => chrono::Duration::days(1), // ticks/quotes/depth: be conservative
     }
