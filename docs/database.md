@@ -20,6 +20,7 @@ Schema overview (see crates/database/src/schema.rs):
 - mbp10(provider TEXT, symbol_id BIGINT, ts_recv_ns BIGINT, ts_event_ns BIGINT, rtype/publisher_id/instrument_ref SMALLINT/INTEGER/INTEGER, action/side/depth SMALLINT, price/size NUMERIC(18,9), flags SMALLINT, ts_in_delta INTEGER, sequence BIGINT, book_* arrays, PRIMARY KEY(provider,symbol_id,ts_event_ns,sequence))
 - series_extent(provider TEXT, symbol_id BIGINT, topic SMALLINT, earliest/latest TIMESTAMPTZ, PRIMARY KEY(provider,symbol_id,topic))
 - kvp(ns TEXT, key TEXT, ts TIMESTAMPTZ, value JSONB, PRIMARY KEY(ns,key))
+- provider_daily_updates(provider_kind TEXT, utc_date DATE, completed_at TIMESTAMPTZ, PRIMARY KEY(provider_kind, utc_date))
 
 Provider mapping:
 - ProviderKind is mapped to a stable short code via tt_database::paths::provider_kind_to_db_string (e.g., "projectx", "rithmic").

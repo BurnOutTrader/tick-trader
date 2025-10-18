@@ -469,46 +469,75 @@ impl ProviderManager {
                             instruments.retain(|i| i.to_string().contains(substr));
                         }
 
-                        // Sequentially process instruments and topics
+                        // Process instruments in parallel with bounded concurrency (default 10)
+                        let per_provider_conc: usize =
+                            std::env::var("AUTO_UPDATE_PER_PROVIDER_CONCURRENCY")
+                                .ok()
+                                .and_then(|s| s.parse().ok())
+                                .unwrap_or(10);
+                        tracing::info!(provider=?provider_kind, concurrency=per_provider_conc, "auto-update: starting per-provider parallel update");
+                        let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(
+                            std::cmp::max(1, per_provider_conc),
+                        ));
+                        let mut join_set = tokio::task::JoinSet::new();
                         for instrument in instruments {
-                            for topic in &topics {
-                                if !hist_for_update.supports(*topic) {
-                                    continue;
-                                }
-                                let now = chrono::Utc::now();
-                                let req = HistoricalRangeRequest {
-                                    provider_kind,
-                                    topic: *topic,
-                                    instrument: instrument.clone(),
-                                    start: now - chrono::Duration::days(1),
-                                    end: now,
-                                };
-                                // reuse inflight if any
-                                if let Ok(Some(handle)) = dm_for_update
-                                    .request_update(hist_for_update.clone(), req.clone())
-                                    .await
-                                {
-                                    tracing::info!(task_id=%handle.id(), provider=?provider_kind, instrument=%req.instrument, topic=?req.topic, "auto-update: task already inflight; waiting");
-                                    if let Err(e) = handle.wait().await {
-                                        tracing::warn!(provider=?provider_kind, instrument=%req.instrument, topic=?req.topic, error=%e, "auto-update: inflight task errored");
-                                        // continue to next instrument/topic
+                            let permit = semaphore.clone().acquire_owned().await;
+                            let hist_for_update = hist_for_update.clone();
+                            let dm_for_update = dm_for_update.clone();
+                            let topics = topics.clone();
+                            let provider_kind = provider_kind;
+                            join_set.spawn(async move {
+                                // Hold the permit for the duration of this instrument's update
+                                let _permit = match permit {
+                                    Ok(p) => p,
+                                    Err(_) => {
+                                        // semaphore closed; abort this task
+                                        return;
                                     }
-                                } else {
-                                    match dm_for_update
-                                        .start_update(hist_for_update.clone(), req.clone())
+                                };
+                                for topic in &topics {
+                                    if !hist_for_update.supports(*topic) {
+                                        continue;
+                                    }
+                                    let now = chrono::Utc::now();
+                                    let req = HistoricalRangeRequest {
+                                        provider_kind,
+                                        topic: *topic,
+                                        instrument: instrument.clone(),
+                                        start: now - chrono::Duration::days(1),
+                                        end: now,
+                                    };
+                                    // reuse inflight if any
+                                    if let Ok(Some(handle)) = dm_for_update
+                                        .request_update(hist_for_update.clone(), req.clone())
                                         .await
                                     {
-                                        Ok(handle) => {
-                                            tracing::info!(task_id=%handle.id(), provider=?provider_kind, instrument=%req.instrument, topic=?req.topic, "auto-update: started; waiting");
-                                            if let Err(e) = handle.wait().await {
-                                                tracing::warn!(provider=?provider_kind, instrument=%req.instrument, topic=?req.topic, error=%e, "auto-update: task failed");
-                                            }
+                                        tracing::info!(task_id=%handle.id(), provider=?provider_kind, instrument=%req.instrument, topic=?req.topic, "auto-update: task already inflight; waiting");
+                                        if let Err(e) = handle.wait().await {
+                                            tracing::warn!(provider=?provider_kind, instrument=%req.instrument, topic=?req.topic, error=%e, "auto-update: inflight task errored");
                                         }
-                                        Err(e) => {
-                                            tracing::warn!(provider=?provider_kind, instrument=%req.instrument, topic=?req.topic, error=%e, "auto-update: failed to start task");
+                                    } else {
+                                        match dm_for_update
+                                            .start_update(hist_for_update.clone(), req.clone())
+                                            .await
+                                        {
+                                            Ok(handle) => {
+                                                tracing::info!(task_id=%handle.id(), provider=?provider_kind, instrument=%req.instrument, topic=?req.topic, "auto-update: started; waiting");
+                                                if let Err(e) = handle.wait().await {
+                                                    tracing::warn!(provider=?provider_kind, instrument=%req.instrument, topic=?req.topic, error=%e, "auto-update: task failed");
+                                                }
+                                            }
+                                            Err(e) => {
+                                                tracing::warn!(provider=?provider_kind, instrument=%req.instrument, topic=?req.topic, error=%e, "auto-update: failed to start task");
+                                            }
                                         }
                                     }
                                 }
+                            });
+                        }
+                        while let Some(join_res) = join_set.join_next().await {
+                            if let Err(e) = join_res {
+                                tracing::warn!(provider=?provider_kind, error=%e, "auto-update: instrument task panicked or was cancelled");
                             }
                         }
 

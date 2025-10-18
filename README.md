@@ -282,6 +282,7 @@ Troubleshooting
 - Wire protocol (rkyv frames): [docs/WIRE-v1.md](docs/WIRE-v1.md)
 - Shared memory layout (SHM): [docs/SHM-layout.md](docs/SHM-layout.md)
 - Database and persistence: [docs/database.md](docs/database.md)
+- Daily auto-update: [docs/auto-update.md](docs/auto-update.md)
 - Strategies guide: [docs/strategies.md](docs/strategies.md)
 - Advanced topics and notes: [docs/advanced.md](docs/advanced.md)
 
@@ -468,3 +469,64 @@ More details: see docs/strategies.md and docs/advanced.md.
 
 
 
+
+
+## 🔁 Daily auto-update of historical data
+
+Overview
+- On server launch, providers discovered from environment (via ProviderSessionSpec) are eagerly initialized.
+- For each initialized provider, the server performs a once-per-UTC-day history refresh that downloads all missing data for all available instruments and configured topics.
+- The work is delegated to the DownloadManager, which deduplicates tasks per (provider, instrument, topic) and persists into PostgreSQL.
+
+Key behavior
+- Up to 10 instruments per provider run in parallel (configurable via AUTO_UPDATE_PER_PROVIDER_CONCURRENCY); topics are processed sequentially per instrument.
+- Multiple providers may run in parallel on startup (each in its own background task).
+- No timeouts at the auto-update layer: tasks wait for completion or error.
+- Success for a provider/day is recorded in the database table provider_daily_updates; subsequent launches on the same UTC date skip work for that provider.
+
+Configuration (.env)
+- AUTO_UPDATE_ENABLED=true
+  - Master switch. If false, auto-update is skipped entirely.
+- AUTO_UPDATE_TOPICS=Candles1s,Candles1m,Candles1h,Candles1d
+  - Comma-separated list of topics to cycle for each instrument in this order.
+  - Supported: Ticks, Quotes, MBP10, MBP1, Candles1s, Candles1m, Candles1h, Candles1d
+- AUTO_UPDATE_INSTRUMENT_FILTER=
+  - Optional substring filter to limit the instrument set (useful for testing).
+- AUTO_UPDATE_PX_FIRM=topstep
+  - Preferred firm for ProjectX. Also ensure you have PX_<TENANT>_FIRM set (e.g., PX_TOPSTEP_FIRM=topstep) so the provider itself is scoped to the firm.
+
+How provider/instrument discovery works
+- Providers are derived from ProviderSessionSpec::from_env() by scanning PX_* (and future RITHMIC_*) variables. Today, ProjectX tenants are supported.
+- Instruments are listed via the market data provider (md.list_instruments(None)). If AUTO_UPDATE_INSTRUMENT_FILTER is set, the list is filtered client-side by substring.
+
+Database stamp (once-per-day guard)
+- Table: provider_daily_updates(provider_kind TEXT, utc_date DATE, completed_at TIMESTAMPTZ, PRIMARY KEY(provider_kind, utc_date)).
+- A successful run writes a row for (provider_kind, today_utc). On next startup the same provider is skipped for that day.
+- To force a re-run the same day: delete the row for that provider from provider_daily_updates and restart the server.
+
+Monitoring and verification
+- Logs: look for messages containing "auto-update:" such as:
+  - auto-update: already completed today
+  - auto-update: started; waiting
+  - auto-update: completed and stamped
+- Database: SELECT * FROM provider_daily_updates ORDER BY utc_date DESC, provider_kind;
+
+Example .env snippet
+
+PX_TOPSTEP_FIRM=topstep
+PX_TOPSTEP_APIKEY=your_api_key
+PX_TOPSTEP_USERNAME=you@example.com
+
+# Postgres (short form accepted; see docs/database.md)
+DATABASE_URL=127.0.0.1:5432:5432
+
+# Auto-update
+AUTO_UPDATE_ENABLED=true
+AUTO_UPDATE_TOPICS=Candles1s,Candles1m,Candles1h,Candles1d
+AUTO_UPDATE_INSTRUMENT_FILTER=
+AUTO_UPDATE_PX_FIRM=topstep
+
+Notes
+- The DownloadManager computes fetch windows from the latest data in your DB, so first runs may take longer as they backfill from the provider’s earliest available time.
+- Within each instrument/topic pass, candles are filtered to ensure resolution correctness and to avoid half-open boundary duplication.
+- If a subset of tasks fails, the system logs warnings and continues to the next instrument/topic. The daily stamp is only set after the full pass completes.
