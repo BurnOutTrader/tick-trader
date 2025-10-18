@@ -138,7 +138,7 @@ async fn main() -> anyhow::Result<()> {
         ProviderKind::ProjectX(ProjectXTenant::Topstep),
         AccountName::from_str("PRAC-V2-64413-98419885").unwrap(),
     );
-    let data_topic = DataTopic::Candles1s;
+    let data_topic = DataTopic::Candles1m;
 
     let mut engine = EngineRuntime::new(Some(100_000));
     let strategy = DataTestStrategy::new(account, sk, data_topic, Resolution::Minutes(15));
