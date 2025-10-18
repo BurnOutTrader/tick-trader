@@ -24,19 +24,19 @@ fn dt_to_ns(dt: DateTime<Utc>) -> u64 {
 
 /// Set global clock to Live mode (system time).
 #[inline]
-pub fn set_live_clock() {
+pub(crate) fn set_live_clock() {
     *CLOCK_MODE.write().expect("poisoned clock mode") = ClockMode::Live;
 }
 
 /// Set global clock to Backtest mode using the provided BacktestClock.
 #[inline]
-pub fn set_backtest_clock(clock: Arc<BacktestClock>) {
+pub(crate) fn set_backtest_clock(clock: Arc<BacktestClock>) {
     *CLOCK_MODE.write().expect("poisoned clock mode") = ClockMode::Backtest(clock);
 }
 
 /// Advance the backtest clock to at least the provided DateTime. No-op in Live mode.
 #[inline]
-pub fn backtest_advance_to(now: DateTime<Utc>) {
+pub(crate) fn backtest_advance_to(now: DateTime<Utc>) {
     if let ClockMode::Backtest(clk) = &*CLOCK_MODE.read().expect("poisoned clock mode") {
         clk.advance_to_at_least(dt_to_ns(now));
     }
@@ -61,7 +61,7 @@ pub fn time_ns() -> u64 {
 }
 
 #[inline]
-pub fn is_backtest() -> bool {
+pub(crate) fn is_backtest() -> bool {
     matches!(
         &*CLOCK_MODE.read().expect("poisoned clock mode"),
         ClockMode::Backtest(_)
