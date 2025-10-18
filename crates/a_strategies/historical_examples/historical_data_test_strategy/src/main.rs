@@ -151,7 +151,7 @@ async fn main() -> anyhow::Result<()> {
     let end_date = Utc::now().date_naive();
     let start_date = end_date - chrono::Duration::days(5);
     // Use a larger orchestrator step so simulated time advances fast enough to see candles stream
-    let cfg = BacktestConfig::from_to(chrono::Duration::milliseconds(10), start_date, end_date);
+    let cfg = BacktestConfig::from_to(chrono::Duration::milliseconds(1), start_date, end_date);
     let strategy = HistoricalDataTestStrategy::new(account_key, key, data_topic);
     start_backtest(db, cfg, strategy, dec!(150_000)).await?;
 
