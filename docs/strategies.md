@@ -28,12 +28,11 @@ use tt_types::{keys::SymbolKey, providers::{ProviderKind, ProjectXTenant}};
 use std::str::FromStr;
 
 #[derive(Default)]
-struct MyStrategy { engine: Option<EngineHandle> }
+struct MyStrategy {  }
 
 impl Strategy for MyStrategy {
-    fn on_start(&mut self, h: EngineHandle) {
-        self.engine = Some(h.clone());
-        h.subscribe_now(
+    fn on_start(&mut self) {
+        subscribe(
             DataTopic::Ticks,
             SymbolKey::new(
                 tt_types::securities::symbols::Instrument::from_str("MNQ.Z25").unwrap(),
@@ -44,7 +43,7 @@ impl Strategy for MyStrategy {
 
     fn on_mbp10(&mut self, d: &tt_types::data::mbp10::Mbp10, pk: ProviderKind) {
         if let Some(h) = &self.engine {
-            if h.is_flat_delta(&d.instrument) {
+            if is_flat_delta(&d.instrument) {
                 // decide → h.place_now(order_spec)
             }
         }
@@ -123,13 +122,11 @@ use tt_types::keys::SymbolKey;
 use tt_types::providers::{ProviderKind, ProjectXTenant};
 
 #[derive(Default)]
-struct MyStrategy { engine: Option<EngineHandle> }
+struct MyStrategy { }
 
 impl Strategy for MyStrategy {
-    fn on_start(&mut self, h: EngineHandle) {
-        // Keep the handle for later and subscribe immediately (non-blocking)
-        self.engine = Some(h.clone());
-        h.subscribe_now(
+    fn on_start(&mut self) {
+        subscribe(
             DataTopic::Ticks,
             SymbolKey::new(
                 tt_types::securities::symbols::Instrument::from_str("MNQ.Z25").unwrap(),
@@ -223,12 +220,12 @@ use tt_types::{keys::SymbolKey, providers::{ProviderKind, ProjectXTenant}};
 use std::str::FromStr;
 
 #[derive(Default)]
-struct MyStrat { engine: Option<EngineHandle> }
+struct MyStrat { }
 
 impl Strategy for MyStrat {
     fn on_start(&mut self, h: EngineHandle) {
         self.engine = Some(h.clone());
-        h.subscribe_now(
+        subscribe(
             DataTopic::Ticks,
             SymbolKey::new(
                 tt_types::securities::symbols::Instrument::from_str("MNQ.Z25").unwrap(),
@@ -239,7 +236,7 @@ impl Strategy for MyStrat {
 
     fn on_mbp10(&mut self, d: &tt_types::data::mbp10::Mbp10, _pk: ProviderKind) {
         if let Some(h) = &self.engine {
-            if h.is_flat_delta(&d.instrument) {
+            if is_flat_delta(&d.instrument) {
                 // decide: h.place_now(order)
             }
         }
